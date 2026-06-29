@@ -74,10 +74,6 @@ draft --version    # 0.2.0
 
 Draft stores everything locally in `.draft/` (atomic writes; rebuildable indexes). Nothing is uploaded by default. `.draft/` is excluded from provider history by default. A pre-finalization checkpoint enables `draft undo`. See [docs/storage-layout.md](docs/storage-layout.md) and [docs/security.md](docs/security.md).
 
-## Migrating from v0.1.0
-
-Existing Git-backed v0.1.0 workspaces migrate automatically on first use. See [docs/migration/v0.1-to-v0.2.md](docs/migration/v0.1-to-v0.2.md).
-
 ## License
 
 MIT or Apache 2.0

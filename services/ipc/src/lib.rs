@@ -6,9 +6,13 @@ pub mod protocol;
 
 pub use protocol::{ErrorObject, Request, Response};
 
-use std::io::{self, BufRead, BufReader, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// A request handler: maps a [`Request`] to a [`Response`].

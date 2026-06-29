@@ -115,6 +115,7 @@ fn daemon_start_ipc_roundtrip_and_shutdown() {
     let _ = child.wait();
 }
 
+#[cfg(unix)]
 fn draft_core_version() -> &'static str {
     // Keep in sync with the crate version embedded by draftd.
     "0.2.0"
