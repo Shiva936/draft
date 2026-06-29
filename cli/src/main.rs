@@ -1,23 +1,15 @@
-//! Draft CLI — a provider-neutral, service-aware client over `core::App`.
-//!
-//! v0.2.0 runs in **embedded mode** (talking directly to `core` + the provider
-//! registry). When `draftd` is available it is preferred for coordination;
-//! safe read-only commands always have an embedded fallback (FR-CLI-003).
-
 mod output;
 mod service;
 
-use std::io::IsTerminal;
 use std::path::Path;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-
-use draft_core::app::{App, FinalizeOptions};
+use clap::{Args, Parser, Subcommand};
 use draft_core::error::{DraftError, DraftErrorKind};
+use draft_core::{App, DecisionKind};
 
 #[derive(Parser)]
-#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft — a provider-neutral collaboration workspace before finalization")]
+#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft v0.3.0 - Verified Changepacks + Review Cockpit")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -25,127 +17,260 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Initialize a Draft workspace here (alias for `workspace init`).
-    Start {
+    /// Initialize a Draft workspace.
+    Init {
         #[arg(long)]
         json: bool,
     },
-    /// Show provider-neutral workspace status.
+    /// Manage workspace config.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Manage .draft/.ignore.
+    Ignore {
+        #[command(subcommand)]
+        action: IgnoreAction,
+    },
+    /// Show Draft-native workspace status.
     Status {
         #[arg(long)]
         json: bool,
     },
-    /// Review grouped changes (launches the TUI when interactive).
-    Review {
-        /// Do not launch the interactive UI; print a text summary.
+    /// Show append-only events.
+    Events {
         #[arg(long)]
-        no_ui: bool,
-        /// Approve all change groups non-interactively.
+        json: bool,
         #[arg(long)]
-        yes: bool,
+        verify_chain: bool,
+    },
+    /// Alias for events.
+    Log {
         #[arg(long)]
         json: bool,
     },
-    /// Run configured verification commands.
-    Verify {
-        /// Override the verification command.
-        command: Option<String>,
-        #[arg(long)]
-        json: bool,
+    /// Manage rebuildable indexes.
+    Index {
+        #[command(subcommand)]
+        action: IndexAction,
     },
-    /// Finalize reviewed changes into a provider-native object (e.g. a commit).
-    Commit {
-        #[arg(short, long)]
-        message: String,
-        /// Skip the confirmation prompt.
-        #[arg(long)]
-        yes: bool,
-        /// Do not require/attach verification.
-        #[arg(long)]
-        no_verify: bool,
-        /// Proceed even if risk is high/critical.
-        #[arg(long)]
-        allow_high_risk: bool,
-        #[arg(long)]
-        json: bool,
+    /// Manage tasks.
+    Task {
+        #[command(subcommand)]
+        action: TaskAction,
     },
-    /// Undo the most recent finalization (safe where the provider supports it).
-    Undo {
-        #[arg(long)]
-        yes: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Create a checkpoint of the current working state.
+    /// Create a Draft-native checkpoint.
     Checkpoint {
-        #[arg(short, long)]
-        message: Option<String>,
+        message: String,
         #[arg(long)]
         json: bool,
     },
-    /// Manage the local Draft service (`draftd`).
-    Service {
+    /// Manage changepacks.
+    Pack {
         #[command(subcommand)]
-        action: ServiceAction,
+        action: PackAction,
     },
-    /// Inspect available providers.
-    Provider {
+    /// Run an opaque shell/agent command and capture evidence.
+    Spawn(SpawnArgs),
+    /// Inspect runs.
+    Runs {
         #[command(subcommand)]
-        action: ProviderAction,
+        action: Option<RunsAction>,
+        #[arg(long)]
+        json: bool,
     },
-    /// Workspace lifecycle.
-    Workspace {
-        #[command(subcommand)]
-        action: WorkspaceAction,
+    /// Run configured verification checks.
+    Verify {
+        pack: String,
+        #[arg(long)]
+        json: bool,
     },
-    /// Inspect durable receipts.
+    /// Assess risk.
+    Risk {
+        pack: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Review a changepack or launch the TUI.
+    Review {
+        pack: Option<String>,
+        #[arg(long)]
+        tui: bool,
+        #[arg(long)]
+        comment: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Approve a changepack.
+    Approve {
+        pack: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reject a changepack.
+    Reject {
+        pack: String,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare changepacks.
+    Compare {
+        left: Option<String>,
+        right: Option<String>,
+        #[arg(long)]
+        tui: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compose non-overlapping changepacks.
+    Compose {
+        left: String,
+        right: String,
+        #[arg(long)]
+        output: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save an approved changepack into .draft/ and optionally target.local.
+    Save {
+        pack: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Roll back to a checkpoint, pack base snapshot, or receipt.
+    Rollback {
+        target: String,
+        #[arg(long)]
+        plan: bool,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect receipts.
     Receipt {
         #[command(subcommand)]
         action: ReceiptAction,
     },
-}
-
-#[derive(Subcommand)]
-enum ServiceAction {
-    Start,
-    Stop,
-    Status {
-        #[arg(long)]
-        json: bool,
+    /// Manage the optional local service.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
     },
 }
 
 #[derive(Subcommand)]
-enum ProviderAction {
-    /// List all registered providers and their capabilities.
+enum ConfigAction {
+    Set {
+        key: String,
+        value: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Get {
+        key: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Unset {
+        key: String,
+        #[arg(long)]
+        json: bool,
+    },
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Show the bound provider's status for this workspace.
-    Status {
+}
+
+#[derive(Subcommand)]
+enum IgnoreAction {
+    Add {
+        pattern: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Remove {
+        pattern: String,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
         #[arg(long)]
         json: bool,
     },
 }
 
 #[derive(Subcommand)]
-enum WorkspaceAction {
-    /// Create `.draft/` and bind a provider.
-    Init {
+enum TaskAction {
+    Create {
+        title: String,
         #[arg(long)]
-        provider: Option<String>,
-        /// Acknowledge using an experimental provider.
-        #[arg(long)]
-        experimental: bool,
+        description: Option<String>,
         #[arg(long)]
         json: bool,
     },
-    /// Detect which provider owns this path.
-    Detect {
+    List {
         #[arg(long)]
         json: bool,
     },
+    Show {
+        task_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum IndexAction {
+    Rebuild {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PackAction {
+    Create {
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        from_working_tree: bool,
+        #[arg(long)]
+        task: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        pack: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args)]
+struct SpawnArgs {
+    #[arg(long)]
+    task: String,
+    #[arg(long)]
+    name: String,
+    #[arg(last = true, required = true)]
+    command: Vec<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Subcommand)]
+enum RunsAction {
+    Show { run_id: String },
 }
 
 #[derive(Subcommand)]
@@ -161,9 +286,18 @@ enum ReceiptAction {
     },
 }
 
+#[derive(Subcommand)]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match run(cli) {
+    match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{}", output::format_error(&e));
@@ -171,7 +305,8 @@ fn main() -> ExitCode {
                 DraftErrorKind::VerificationFailed
                 | DraftErrorKind::RiskPolicyBlocked
                 | DraftErrorKind::ReviewRequired
-                | DraftErrorKind::ConflictDetected => ExitCode::from(2),
+                | DraftErrorKind::ConflictDetected
+                | DraftErrorKind::SaveFailed => ExitCode::from(2),
                 _ => ExitCode::FAILURE,
             }
         }
@@ -180,346 +315,252 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), DraftError> {
     let cwd = std::env::current_dir().map_err(DraftError::from)?;
-    let app = App::new(draft_providers::default_registry());
-
+    let app = App::new();
     match cli.command {
-        Command::Start { json } => cmd_init(&app, &cwd, None, false, json, true),
-        Command::Status { json } => cmd_status(&app, &cwd, json),
-        Command::Review { no_ui, yes, json } => cmd_review(&app, &cwd, no_ui, yes, json),
-        Command::Verify { command, json } => cmd_verify(&app, &cwd, command, json),
-        Command::Commit {
-            message,
-            yes,
-            no_verify,
-            allow_high_risk,
-            json,
-        } => cmd_commit(&app, &cwd, message, yes, no_verify, allow_high_risk, json),
-        Command::Undo { yes, json } => cmd_undo(&app, &cwd, yes, json),
-        Command::Checkpoint { message, json } => cmd_checkpoint(&app, &cwd, message, json),
-        Command::Service { action } => service::handle(action, &cwd),
-        Command::Provider { action } => cmd_provider(&app, &cwd, action),
-        Command::Workspace { action } => match action {
-            WorkspaceAction::Init {
-                provider,
-                experimental,
-                json,
-            } => cmd_init(
-                &app,
-                &cwd,
-                provider.map(draft_core::vcs::types::ProviderId::new),
-                experimental,
-                json,
-                false,
-            ),
-            WorkspaceAction::Detect { json } => cmd_detect(&app, &cwd, json),
+        Command::Init { json } => render_init(app.init(&cwd)?, json),
+        Command::Config { action } => match action {
+            ConfigAction::Set { key, value, json } => {
+                render_config(app.config_set(&cwd, &key, &value)?, json)
+            }
+            ConfigAction::Get { key, json } => render_config(app.config_get(&cwd, &key)?, json),
+            ConfigAction::Unset { key, json } => render_config(app.config_unset(&cwd, &key)?, json),
+            ConfigAction::List { json } => render_config(app.config_list(&cwd)?, json),
         },
-        Command::Receipt { action } => cmd_receipt(&app, &cwd, action),
+        Command::Ignore { action } => match action {
+            IgnoreAction::Add { pattern, json } => {
+                render_ignore(app.ignore_add(&cwd, &pattern)?, json)
+            }
+            IgnoreAction::Remove { pattern, json } => {
+                render_ignore(app.ignore_remove(&cwd, &pattern)?, json)
+            }
+            IgnoreAction::List { json } => render_ignore(app.ignore_list(&cwd)?, json),
+        },
+        Command::Status { json } => render_status(app.status(&cwd)?, json),
+        Command::Events { json, verify_chain } => {
+            if verify_chain {
+                render_json_or_text(app.verify_events(&cwd)?, json, "Event chain verified")
+            } else {
+                render_events(app.events(&cwd)?, json)
+            }
+        }
+        Command::Log { json } => render_events(app.events(&cwd)?, json),
+        Command::Index { action } => match action {
+            IndexAction::Rebuild { json } => {
+                render_json_or_text(app.index_rebuild(&cwd)?, json, "Index rebuilt")
+            }
+        },
+        Command::Task { action } => match action {
+            TaskAction::Create {
+                title,
+                description,
+                json,
+            } => render_json_or_text(
+                app.task_create(&cwd, &title, description)?,
+                json,
+                "Task created",
+            ),
+            TaskAction::List { json } => render_json_or_text(app.task_list(&cwd)?, json, "Tasks"),
+            TaskAction::Show { task_id, json } => {
+                render_json_or_text(app.task_show(&cwd, &task_id)?, json, "Task")
+            }
+        },
+        Command::Checkpoint { message, json } => {
+            render_json_or_text(app.checkpoint(&cwd, &message)?, json, "Checkpoint created")
+        }
+        Command::Pack { action } => match action {
+            PackAction::Create {
+                name,
+                from_working_tree,
+                task,
+                json,
+            } => render_json_or_text(
+                app.pack_create(&cwd, name, task, from_working_tree)?,
+                json,
+                "Changepack created",
+            ),
+            PackAction::List { json } => {
+                render_json_or_text(app.pack_list(&cwd)?, json, "Changepacks")
+            }
+            PackAction::Show { pack, json } => {
+                render_json_or_text(app.pack_show(&cwd, &pack)?, json, "Changepack")
+            }
+        },
+        Command::Spawn(args) => render_json_or_text(
+            app.spawn_run(&cwd, &args.task, &args.name, args.command)?,
+            args.json,
+            "Run completed",
+        ),
+        Command::Runs { action, json } => match action {
+            Some(RunsAction::Show { run_id }) => {
+                render_json_or_text(app.run_show(&cwd, &run_id)?, json, "Run")
+            }
+            None => render_json_or_text(app.runs(&cwd)?, json, "Runs"),
+        },
+        Command::Verify { pack, json } => {
+            render_json_or_text(app.verify(&cwd, &pack)?, json, "Verification complete")
+        }
+        Command::Risk { pack, json } => {
+            render_json_or_text(app.risk(&cwd, &pack)?, json, "Risk assessed")
+        }
+        Command::Review {
+            pack,
+            tui,
+            comment,
+            json,
+        } => {
+            if tui {
+                return draft_tui::run_review_cockpit(&cwd)
+                    .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
+            }
+            let pack = pack.ok_or_else(|| {
+                DraftError::invalid_config("review requires <pack> unless --tui is used")
+            })?;
+            render_json_or_text(app.review(&cwd, &pack, comment)?, json, "Review recorded")
+        }
+        Command::Approve { pack, reason, json } => render_json_or_text(
+            app.decide(&cwd, &pack, DecisionKind::Approve, reason)?,
+            json,
+            "Changepack approved",
+        ),
+        Command::Reject { pack, reason, json } => render_json_or_text(
+            app.decide(&cwd, &pack, DecisionKind::Reject, reason)?,
+            json,
+            "Changepack rejected",
+        ),
+        Command::Compare {
+            left,
+            right,
+            tui,
+            json,
+        } => {
+            if tui.is_some() {
+                return draft_tui::run_review_cockpit(&cwd)
+                    .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
+            }
+            render_json_or_text(
+                app.compare(&cwd, &left.unwrap_or_default(), &right.unwrap_or_default())?,
+                json,
+                "Compare complete",
+            )
+        }
+        Command::Compose {
+            left,
+            right,
+            output: out,
+            json,
+        } => render_json_or_text(
+            app.compose(&cwd, &left, &right, &out)?,
+            json,
+            "Compose complete",
+        ),
+        Command::Save { pack, json } => {
+            render_json_or_text(app.save(&cwd, &pack)?, json, "Changepack saved")
+        }
+        Command::Rollback {
+            target,
+            plan,
+            yes,
+            json,
+        } => {
+            if plan {
+                render_json_or_text(app.rollback_plan(&cwd, &target)?, json, "Rollback plan")
+            } else {
+                render_json_or_text(app.rollback(&cwd, &target, yes)?, json, "Rollback complete")
+            }
+        }
+        Command::Receipt { action } => match action {
+            ReceiptAction::List { json } => {
+                render_json_or_text(app.receipts(&cwd)?, json, "Receipts")
+            }
+            ReceiptAction::Show { receipt_id, json } => {
+                render_json_or_text(app.receipt_show(&cwd, &receipt_id)?, json, "Receipt")
+            }
+        },
+        Command::Service { action } => service::handle(action, &cwd),
     }
 }
 
-fn cmd_init(
-    app: &App,
-    cwd: &Path,
-    provider: Option<draft_core::vcs::types::ProviderId>,
-    experimental: bool,
-    json: bool,
-    started: bool,
-) -> Result<(), DraftError> {
-    let report = app.init(cwd, provider, experimental)?;
+fn render_init(report: draft_core::InitReport, json: bool) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
     }
     if report.created {
-        output::success(&format!(
-            "Initialized Draft workspace ({}) with provider '{}'.",
-            report.workspace_id, report.provider_id
-        ));
+        output::success("Initialized Draft workspace.");
     } else {
         output::warn("Draft workspace already initialized here.");
     }
+    output::field("Workspace", &report.workspace_id);
     output::field("Root", &report.root);
-    output::field(
-        ".draft excluded",
-        if report.draft_excluded { "yes" } else { "no" },
-    );
-    if started {
-        println!("\nRun `draft status` to see changes.");
+    output::field(".draft", &report.draft_dir);
+    Ok(())
+}
+
+fn render_config(report: draft_core::ConfigReport, json: bool) -> Result<(), DraftError> {
+    if json {
+        output::print_json(&report);
+        return Ok(());
+    }
+    for (k, v) in report.entries {
+        output::field(&k, &v);
     }
     Ok(())
 }
 
-fn cmd_status(app: &App, cwd: &Path, json: bool) -> Result<(), DraftError> {
-    // Prefer the service when it is running; fall back to embedded core.
-    if let Some(result) = service::try_ipc(
-        "workspace.status",
-        serde_json::json!({ "path": cwd.display().to_string() }),
-    ) {
-        if let Ok(r) = serde_json::from_value::<draft_core::app::StatusReport>(result) {
-            return render_status(&r, json);
-        }
-    }
-    let r = app.status(cwd)?;
-    render_status(&r, json)
-}
-
-fn render_status(r: &draft_core::app::StatusReport, json: bool) -> Result<(), DraftError> {
+fn render_ignore(report: draft_core::IgnoreReport, json: bool) -> Result<(), DraftError> {
     if json {
-        output::print_json(&r);
+        output::print_json(&report);
         return Ok(());
     }
-    output::header("Workspace status");
-    output::field("Workspace", &r.workspace_id);
-    output::field(
-        "Provider",
-        &format!("{} ({})", r.provider_id, r.provider_view),
-    );
-    output::field(
-        "Changes",
-        &format!(
-            "{} file(s), +{} -{}",
-            r.changed_files, r.additions, r.deletions
-        ),
-    );
-    for g in &r.change_groups {
+    for p in report.patterns {
+        println!("{p}");
+    }
+    Ok(())
+}
+
+fn render_status(report: draft_core::WorkspaceStatus, json: bool) -> Result<(), DraftError> {
+    if json {
+        output::print_json(&report);
+        return Ok(());
+    }
+    output::header("Workspace Status");
+    output::field("Workspace", &report.workspace_id.to_string());
+    output::field("Changes", &report.changes.len().to_string());
+    for c in report.changes {
+        println!("  {:<12} {}", format!("{:?}", c.change_kind), c.path);
+    }
+    Ok(())
+}
+
+fn render_events(events: Vec<draft_core::EventEnvelope>, json: bool) -> Result<(), DraftError> {
+    if json {
+        output::print_json(&events);
+        return Ok(());
+    }
+    for e in events {
         println!(
-            "    - {} [{}] ({} files, {})",
-            g.title, g.id, g.files, g.review_state
+            "{} {} {}",
+            e.time.to_rfc3339(),
+            e.event_type,
+            e.subject_id.unwrap_or_default()
         );
     }
-    output::field(
-        "Risk",
-        &format!("{} ({} finding(s))", r.risk_level, r.risk_findings),
-    );
-    output::field(
-        "Verification",
-        r.verification_status.as_deref().unwrap_or("not run"),
-    );
-    if r.conflicts > 0 {
-        output::warn(&format!("{} conflict(s) detected", r.conflicts));
-    }
-    if let Some(rc) = &r.last_receipt {
-        output::field("Last receipt", rc);
-    }
     Ok(())
 }
 
-fn cmd_review(app: &App, cwd: &Path, no_ui: bool, yes: bool, json: bool) -> Result<(), DraftError> {
-    if !no_ui && !yes && !json && std::io::stdout().is_terminal() {
-        return draft_tui::run(app, cwd);
-    }
-    let r = app.review(cwd, yes)?;
-    if json {
-        output::print_json(&r);
-        return Ok(());
-    }
-    output::header("Review");
-    output::field("Session", &r.session_id);
-    for g in &r.change_groups {
-        println!(
-            "  - {} [{}] {} file(s) — {}",
-            g.title, g.id, g.files, g.review_state
-        );
-    }
-    if yes {
-        output::success(&format!(
-            "Approved {} change group(s).",
-            r.change_groups.len()
-        ));
-    } else {
-        println!("\nApprove with `draft review --yes`, then `draft commit -m \"...\"`.");
-    }
-    Ok(())
-}
-
-fn cmd_verify(
-    app: &App,
-    cwd: &Path,
-    command: Option<String>,
+fn render_json_or_text<T: serde::Serialize>(
+    value: T,
     json: bool,
+    label: &str,
 ) -> Result<(), DraftError> {
-    let r = app.verify(cwd, command)?;
     if json {
-        output::print_json(&r);
+        output::print_json(&value);
     } else {
-        output::header("Verification");
-        for c in &r.commands {
-            println!("  $ {}  → {}", c.command, c.status);
-        }
-        output::field("Result", &r.status);
-    }
-    if r.status != "passed" && r.status != "skipped" {
-        return Err(DraftError::new(
-            DraftErrorKind::VerificationFailed,
-            format!("verification {}", r.status),
-        ));
+        output::success(label);
+        output::print_json(&value);
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn cmd_commit(
-    app: &App,
-    cwd: &Path,
-    message: String,
-    _yes: bool,
-    no_verify: bool,
-    allow_high_risk: bool,
-    json: bool,
-) -> Result<(), DraftError> {
-    let r = app.finalize(
-        cwd,
-        FinalizeOptions {
-            message,
-            trailers: vec![],
-            no_verify,
-            confirm_high_risk: allow_high_risk,
-        },
-    )?;
-    if json {
-        output::print_json(&r);
-        return Ok(());
-    }
-    for w in &r.warnings {
-        output::warn(w);
-    }
-    let label = r
-        .provider_object_label
-        .as_deref()
-        .unwrap_or(&r.provider_object);
-    output::success(&format!(
-        "Finalized {} Draft change(s) into {} {}.",
-        r.change_count, r.provider_object_kind, label
-    ));
-    output::field("Receipt", &r.receipt_id);
-    Ok(())
-}
-
-fn cmd_undo(app: &App, cwd: &Path, _yes: bool, json: bool) -> Result<(), DraftError> {
-    let r = app.undo(cwd)?;
-    if json {
-        output::print_json(&r);
-        return Ok(());
-    }
-    if r.undone {
-        output::success(&r.message);
-        output::field("Receipt", &r.receipt_id);
-    } else {
-        output::warn(&r.message);
-    }
-    Ok(())
-}
-
-fn cmd_checkpoint(
-    app: &App,
-    cwd: &Path,
-    message: Option<String>,
-    json: bool,
-) -> Result<(), DraftError> {
-    let r = app.checkpoint(cwd, message)?;
-    if json {
-        output::print_json(&r);
-    } else {
-        output::success(&format!("Created checkpoint {}.", r.checkpoint_id));
-    }
-    Ok(())
-}
-
-fn cmd_provider(app: &App, cwd: &Path, action: ProviderAction) -> Result<(), DraftError> {
-    match action {
-        ProviderAction::List { json } => {
-            let providers = app.providers();
-            if json {
-                output::print_json(&providers);
-                return Ok(());
-            }
-            output::header("Providers");
-            for p in providers {
-                let tag = if p.experimental {
-                    " (experimental)"
-                } else {
-                    ""
-                };
-                println!("  {:<10} {}{}", p.id, p.name, tag);
-                println!("    {}", p.description);
-                if !p.capabilities.is_empty() {
-                    println!("    capabilities: {}", p.capabilities.join(", "));
-                }
-            }
-            Ok(())
-        }
-        ProviderAction::Status { json } => {
-            let r = app.provider_status(cwd)?;
-            if json {
-                output::print_json(&r);
-            } else {
-                output::header("Provider status");
-                output::field(
-                    "Provider",
-                    &format!("{} ({})", r.provider_id, r.provider_name),
-                );
-                output::field("Root", &r.root);
-                output::field("State", &r.reason);
-                output::field("Capabilities", &r.capabilities.join(", "));
-                if r.experimental {
-                    output::warn("This provider is experimental.");
-                }
-            }
-            Ok(())
-        }
-    }
-}
-
-fn cmd_detect(app: &App, cwd: &Path, json: bool) -> Result<(), DraftError> {
-    let r = app.detect(cwd)?;
-    if json {
-        output::print_json(&r);
-    } else {
-        output::header("Provider detection");
-        output::field(
-            "Provider",
-            &format!("{} ({})", r.provider_id, r.provider_name),
-        );
-        output::field("Root", &r.root);
-        output::field("Confidence", &r.confidence);
-        output::field("Reason", &r.reason);
-        if r.experimental {
-            output::warn("Detected provider is experimental.");
-        }
-    }
-    Ok(())
-}
-
-fn cmd_receipt(app: &App, cwd: &Path, action: ReceiptAction) -> Result<(), DraftError> {
-    match action {
-        ReceiptAction::List { json } => {
-            let receipts = app.receipt_list(cwd)?;
-            if json {
-                output::print_json(&receipts);
-            } else {
-                output::header("Receipts");
-                if receipts.is_empty() {
-                    println!("  (none yet)");
-                }
-                for r in receipts {
-                    println!(
-                        "  {}  {}  {} object(s)",
-                        r.id,
-                        r.created_at.to_rfc3339(),
-                        r.provider_objects.len()
-                    );
-                }
-            }
-            Ok(())
-        }
-        ReceiptAction::Show { receipt_id, json } => {
-            let r = app.receipt_show(cwd, &receipt_id)?;
-            if json {
-                output::print_json(&r);
-            } else {
-                print!("{}", r.render());
-            }
-            Ok(())
-        }
-    }
-}
+#[allow(dead_code)]
+fn _assert_path(_: &Path) {}

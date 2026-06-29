@@ -1,116 +1,81 @@
-# Getting started
+# Getting Started
 
-## Setup
-### Build
-Build from source (Rust 1.75+):
-```
-git clone https://github.com/Shiva936/draft.git
-cd <project-directory>/draft
-cargo build --release
-# binaries: target/release/draft and target/release/draftd
-```
+This guide walks through a complete Draft v0.3.0 workflow using only local files and the CLI.
 
-### Install
-Install the CLI and optional daemon into ~/.cargo/bin :
-```
-cargo install --path cli --locked
-cargo install --path services/draftd --locked
+## Create A Workspace
+
+```bash
+draft init
+draft config set identity.username "Ada"
+draft config set identity.email "ada@example.com"
 ```
 
-### Verify
-Confirm your shell can find both binaries:
-```
-draft --version
-draft service status
-# expected CLI version is draft x.x.x(release version).
+`draft init` creates `.draft/`, writes default configuration, creates the event log, prepares the object store, and builds the local index. Running it again is safe; Draft reports the existing workspace.
+
+## Capture A Baseline
+
+```bash
+draft checkpoint "before parser cleanup"
 ```
 
-## First workflow (Git)
-```
-cd my-git-repo
-draft workspace detect          # confirms the Git provider
-draft workspace init            # creates .draft/ and excludes it from history
-# ... edit files ...
-draft status                    # provider-neutral change summary
-draft review --yes              # approve the change groups
-draft verify "cargo test"       # run a verification command (shown before it runs)
-draft commit -m "my change"     # finalize into a Git commit + write a receipt
-draft receipt list              # see the receipt mapping change → commit
-draft undo                      # safely reverse the last finalization
-```
+A checkpoint stores a snapshot of the current workspace content. Draft uses snapshots to determine what changed later. The scanner walks the workspace directly and always excludes `.draft/`.
 
-## Optional daemon
-```
-draft service start    # start draftd and register this workspace if initialized
-draft service status
-draft service stop
-```
+## Make Changes
 
-## Manage per-project policy and verification
+Edit files by hand, through scripts, or through an agent. Draft does not care how files changed. To inspect the current delta:
 
-Optionally edit per-project policy under `.draft/config.toml`.
-
-Recommended stricter defaults for real projects:
-```
-[finalization]
-require_review = true
-require_verification = true
-block_on_high_risk = true
-allow_unverified = false
-allow_high_risk_with_confirmation = true
-```
-
-Add project-specific verification commands under `.draft/config.toml`.
-
-Rust project:
-```
-[[verification.commands]]
-name = "test"
-command = "cargo"
-args = ["test"]
-timeout_ms = 600000
-```
-
-Node project:
-```
-[[verification.commands]]
-name = "test"
-command = "npm"
-args = ["test"]
-timeout_ms = 600000
-```
-
-## Suggestions
-Use Draft during normal work:
-```
+```bash
 draft status
-draft review
-draft verify
-draft commit -m "Your commit message"
-draft receipt list
 ```
 
-Use the daemon only if you want long-running local coordination:
+Status compares the current workspace to the latest snapshot and reports added, modified, deleted, renamed, type-changed, and permission-changed files.
+
+## Create A Changepack
+
+```bash
+draft pack create --name "parser cleanup" --from-working-tree
+draft pack list
+draft pack show <pack-id>
 ```
-draft service start
+
+A changepack is Draft’s reviewable unit. It contains a patch reference, evidence references, task links, review decisions, approvals, risk results, verification results, save receipts, and provenance hashes.
+
+## Verify And Review
+
+```bash
+draft verify <pack-id>
+draft risk <pack-id>
+draft review <pack-id>
+draft approve <pack-id> --reason "verified locally"
+```
+
+Verification runs configured commands and stores stdout, stderr, exit code, and timing as evidence. Risk analysis records findings that policy can use. Approval is required before save when the default policy is active.
+
+## Save
+
+```bash
+draft save <pack-id>
+draft receipt list
+draft receipt show <receipt-id>
+```
+
+Save persists the approved changepack into `.draft/` and writes a receipt. If `target.local` is configured, Draft runs it only after approval and safety checks. If `.draft/` appears in the save candidate, Draft aborts, records a failed receipt, emits `SaveFailed`, and does not execute `target.local`.
+
+## Roll Back
+
+```bash
+draft rollback <snapshot-id> --plan
+draft rollback <snapshot-id> --yes
+```
+
+Rollback first produces a plan. Applying the plan is explicit because it may overwrite workspace files. Rollback never targets `.draft/`.
+
+## Use The Daemon Optionaly
+
+```bash
 draft service status
+draft service start
 draft service stop
 ```
-Draft still works in embedded CLI mode when draftd is not running.
 
-To use an experimental provider, opt in explicitly:
-```
-draft workspace init --provider jj --experimental
-```
-For real projects, prefer Git until those providers are completed beyond detection/capability scaffolding.
-
-## Release smoke environments
-The release-readiness workflow runs format, clippy, tests, doctests, and release builds on Linux, macOS, and Windows. For WSL, run the same smoke locally inside the target WSL distribution:
-
-```
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets
-cargo test --workspace --doc
-cargo build --workspace --release
-```
+The CLI does not need the daemon. `draftd` exists for local live/background flows such as long-running review cockpit sessions and background indexing.

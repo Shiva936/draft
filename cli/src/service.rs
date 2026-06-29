@@ -19,16 +19,6 @@ pub fn daemon_running() -> bool {
 
 /// Try to satisfy a request via the daemon, returning `None` to fall back to
 /// embedded mode. `params` is the JSON params object.
-pub fn try_ipc(method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
-    if !daemon_running() {
-        return None;
-    }
-    match call(&socket_path(), &Request::new("cli", method, params)) {
-        Ok(resp) if resp.ok => resp.result,
-        _ => None,
-    }
-}
-
 pub fn handle(action: ServiceAction, cwd: &Path) -> Result<(), DraftError> {
     match action {
         ServiceAction::Start => {

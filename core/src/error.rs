@@ -1,11 +1,9 @@
-//! Provider-neutral structured error model for `draft-core` (TDD §12, ERR-001).
+//! Structured error model for `draft-core`.
 //!
 //! Every error carries a machine `code`, a human `message`, optional `context`,
 //! and an optional `suggestion` for what to do next.
 
 use serde::{Deserialize, Serialize};
-
-use crate::vcs::errors::{ProviderError, ProviderErrorKind};
 
 pub type DraftResult<T> = Result<T, DraftError>;
 
@@ -20,17 +18,13 @@ pub struct DraftError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DraftErrorKind {
     WorkspaceNotFound,
-    ProviderNotDetected,
-    ProviderAmbiguous,
-    ProviderUnsupportedOperation,
-    ProviderCommandFailed,
     OperationLogCorrupt,
     OperationLogLocked,
     VerificationFailed,
     RiskPolicyBlocked,
     ReviewRequired,
     ConflictDetected,
-    FinalizationFailed,
+    SaveFailed,
     ReceiptWriteFailed,
     ServiceUnavailable,
     IpcError,
@@ -46,17 +40,13 @@ impl DraftErrorKind {
     pub fn code(&self) -> &'static str {
         match self {
             DraftErrorKind::WorkspaceNotFound => "WORKSPACE_NOT_FOUND",
-            DraftErrorKind::ProviderNotDetected => "PROVIDER_NOT_DETECTED",
-            DraftErrorKind::ProviderAmbiguous => "PROVIDER_AMBIGUOUS",
-            DraftErrorKind::ProviderUnsupportedOperation => "PROVIDER_UNSUPPORTED_OPERATION",
-            DraftErrorKind::ProviderCommandFailed => "PROVIDER_COMMAND_FAILED",
             DraftErrorKind::OperationLogCorrupt => "OPERATION_LOG_CORRUPT",
             DraftErrorKind::OperationLogLocked => "OPERATION_LOG_LOCKED",
             DraftErrorKind::VerificationFailed => "VERIFICATION_FAILED",
             DraftErrorKind::RiskPolicyBlocked => "RISK_POLICY_BLOCKED",
             DraftErrorKind::ReviewRequired => "REVIEW_REQUIRED",
             DraftErrorKind::ConflictDetected => "CONFLICT_DETECTED",
-            DraftErrorKind::FinalizationFailed => "FINALIZATION_FAILED",
+            DraftErrorKind::SaveFailed => "SAVE_FAILED",
             DraftErrorKind::ReceiptWriteFailed => "RECEIPT_WRITE_FAILED",
             DraftErrorKind::ServiceUnavailable => "SERVICE_UNAVAILABLE",
             DraftErrorKind::IpcError => "IPC_ERROR",
@@ -124,25 +114,5 @@ impl std::error::Error for DraftError {}
 impl From<std::io::Error> for DraftError {
     fn from(e: std::io::Error) -> Self {
         DraftError::new(DraftErrorKind::Storage, e.to_string())
-    }
-}
-
-impl From<ProviderError> for DraftError {
-    fn from(e: ProviderError) -> Self {
-        let kind = match e.kind {
-            ProviderErrorKind::NotDetected => DraftErrorKind::ProviderNotDetected,
-            ProviderErrorKind::Ambiguous => DraftErrorKind::ProviderAmbiguous,
-            ProviderErrorKind::UnsupportedOperation => DraftErrorKind::ProviderUnsupportedOperation,
-            ProviderErrorKind::CommandFailed => DraftErrorKind::ProviderCommandFailed,
-            ProviderErrorKind::Conflict => DraftErrorKind::ConflictDetected,
-            ProviderErrorKind::InvalidState => DraftErrorKind::FinalizationFailed,
-            ProviderErrorKind::Io => DraftErrorKind::Storage,
-        };
-        DraftError {
-            kind,
-            message: e.message,
-            context: e.context,
-            suggestion: e.suggestion,
-        }
     }
 }

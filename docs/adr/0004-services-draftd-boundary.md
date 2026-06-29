@@ -1,13 +1,19 @@
-# ADR 0004 — `services/draftd` is coordination only
+# ADR 0004: draftd Service Boundary
 
-**Status:** Accepted (v0.2.0)
+## Status
+
+Accepted for v0.3.0.
 
 ## Context
-A daemon helps with watching, locking, and caching, but must not become a second home for product logic.
+
+Draft needs live/background flows for review cockpit sessions, indexing, scanning, and long-running local clients. At the same time, the CLI must stay reliable without a daemon.
 
 ## Decision
-`services/draftd` is a thin shell that dispatches IPC requests to the same `core::App` the CLI uses. Business logic stays in `core`, providers stay in `providers/*`. The daemon is **optional**: every safe command has an embedded fallback (NFR-006). IPC is local-only (Unix socket; user-only permissions).
+
+`draftd` is an optional local control-plane service. It dispatches IPC requests to `draft-core` and provides service-backed live behavior. Core remains authoritative and the CLI can call core directly.
 
 ## Consequences
-- `draftd` depends on core + providers + the small service crates (ipc, store, locks, watcher, sessions, sync).
-- CLI prefers the daemon when running, else runs embedded.
+
+- Users can run Draft in simple shell scripts without starting a service.
+- TUI and long-running tools can use `draftd` when available.
+- Service failure should not corrupt `.draft/` or make the CLI unusable.

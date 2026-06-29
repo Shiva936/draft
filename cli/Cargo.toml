@@ -1,6 +1,6 @@
 [package]
 name = "draft-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 default-run = "draft"
 
@@ -10,7 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 draft-core = { path = "../core" }
-draft-providers = { path = "../providers/registry" }
 draft-ipc = { path = "../services/ipc" }
 draft-tui = { path = "../tui" }
 clap = { version = "4.0", features = ["derive"] }

@@ -1,11 +1,31 @@
-# TUI
+# Review Cockpit TUI
 
-`draft review` launches an interactive terminal UI when attached to a terminal (use `--no-ui` to force text output, or `--yes` to approve non-interactively).
+The TUI is the interactive Review Cockpit for Draft changepacks. It is designed for repeated review work where a user needs to inspect status, evidence, risk, policy, approvals, receipts, and rollback options without leaving Draft.
 
-The TUI consumes the same provider-neutral APIs as the CLI and never calls a provider directly. Status refreshes prefer `draftd` when it is running and fall back to embedded core mode; v0.2.0 review/finalize actions use embedded core because the daemon exposes only safe read endpoints. It shows workspace/provider status, change groups, risk, verification, and review state, and lets you:
+## Current Capabilities
 
-- `a` — approve all change groups
-- `f` — finalize (enter a message, then Enter)
-- `r` — refresh · `q` — quit
+The TUI layer renders changepack-oriented review cockpit sections and can be launched from CLI review flows. It uses the same core state as the CLI and has a testable terminal renderer.
 
-After finalizing it shows the resulting receipt id.
+## Intended Cockpit Panels
+
+The cockpit exposes:
+
+- workspace status and latest scan time;
+- changepack list and selected changepack details;
+- file changes and overlap indicators;
+- verification and save-readiness counts;
+- policy blockers;
+- decisions;
+- approve/reject actions;
+- compare and compose actions;
+- save readiness and receipt summary;
+- rollback-plan action affordance;
+- service connection state.
+
+## Daemon Relationship
+
+The TUI must work without a daemon for static review. When `draftd` is available, the TUI can use it for live refresh, background verification, and service status.
+
+## Safety Requirements
+
+The TUI must not hide policy blockers. Save actions must present verification, approval, risk, and `.draft/` candidate state before execution. Any failed save receipt must be visible.

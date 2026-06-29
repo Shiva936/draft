@@ -126,22 +126,88 @@ mod imp {
 #[cfg(not(unix))]
 mod imp {
     use super::*;
-    // Minimal localhost-loopback fallback marker for non-unix platforms.
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    fn addr() -> String {
+        std::env::var("DRAFT_IPC_ADDR").unwrap_or_else(|_| "127.0.0.1:48357".to_string())
+    }
+
     pub fn serve(
         _path: &std::path::Path,
-        _stop: Arc<AtomicBool>,
-        _handler: Handler,
+        stop: Arc<AtomicBool>,
+        handler: Handler,
     ) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "IPC transport not yet implemented on this platform",
-        ))
+        let listener = TcpListener::bind(addr())?;
+        listener.set_nonblocking(true)?;
+        while !stop.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let h = handler.clone();
+                    let s = stop.clone();
+                    std::thread::spawn(move || handle_conn(stream, h, s));
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(40));
+                }
+                Err(_) => break,
+            }
+        }
+        Ok(())
     }
-    pub fn call(_path: &std::path::Path, _req: &Request) -> io::Result<Response> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "IPC unavailable",
-        ))
+
+    fn handle_conn(stream: TcpStream, handler: Handler, stop: Arc<AtomicBool>) {
+        let mut writer = match stream.try_clone() {
+            Ok(w) => w,
+            Err(_) => return,
+        };
+        let reader = BufReader::new(stream);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let response = match serde_json::from_str::<Request>(&line) {
+                Ok(req) => {
+                    let shutdown = req.method == "service.shutdown";
+                    let resp = handler(req);
+                    if shutdown {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    resp
+                }
+                Err(e) => Response::err(
+                    "",
+                    ErrorObject::new("IPC_ERROR", format!("invalid request: {e}")),
+                ),
+            };
+            let mut buf = serde_json::to_string(&response).unwrap_or_default();
+            buf.push('\n');
+            if writer.write_all(buf.as_bytes()).is_err() {
+                break;
+            }
+            let _ = writer.flush();
+        }
+    }
+
+    pub fn call(_path: &std::path::Path, req: &Request) -> io::Result<Response> {
+        let stream = TcpStream::connect(addr())?;
+        let mut writer = stream.try_clone()?;
+        let mut line = serde_json::to_string(req)?;
+        line.push('\n');
+        writer.write_all(line.as_bytes())?;
+        writer.flush()?;
+        let mut reader = BufReader::new(stream);
+        let mut resp_line = String::new();
+        reader.read_line(&mut resp_line)?;
+        let resp: Response = serde_json::from_str(resp_line.trim())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        Ok(resp)
     }
 }
 

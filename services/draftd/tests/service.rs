@@ -1,124 +1,212 @@
-//! Service tests (TEST-004): daemon start/stop/status, IPC round-trip,
-//! workspace registry, and graceful shutdown.
+use draft_ipc::{socket_path, Request};
+use draft_sessions::SessionManager;
+use draft_store::ServiceStore;
+use serde_json::{json, Value};
 
-#[cfg(unix)]
-use std::path::Path;
-#[cfg(unix)]
-use std::process::{Child, Command};
-#[cfg(unix)]
-use std::time::{Duration, Instant};
-
-use draft_ipc::socket_path;
-#[cfg(unix)]
-use draft_ipc::{call, is_running, Request};
-#[cfg(unix)]
-use serde_json::Value;
-
-#[cfg(unix)]
-use draft_core::vcs::types::ProviderId;
-
-/// Spawn draftd with an isolated runtime dir; returns the child + socket path.
-#[cfg(unix)]
-fn spawn_daemon(runtime: &Path, home: &Path) -> (Child, std::path::PathBuf) {
-    let exe = env!("CARGO_BIN_EXE_draftd");
-    let child = Command::new(exe)
-        .arg("start")
-        .env("XDG_RUNTIME_DIR", runtime)
-        .env("XDG_STATE_HOME", home.join("state"))
-        .env("HOME", home)
-        .spawn()
-        .expect("spawn draftd");
-    // The socket path is derived from XDG_RUNTIME_DIR.
-    let sock = runtime.join("draft").join("draftd.sock");
-    let start = Instant::now();
-    while !sock.exists() && start.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    (child, sock)
+fn call(
+    store: &ServiceStore,
+    sessions: &SessionManager,
+    id: &str,
+    method: &str,
+    params: Value,
+) -> draft_ipc::Response {
+    draftd::dispatch(store, sessions, Request::new(id, method, params))
 }
 
 #[test]
-#[cfg(unix)]
-fn daemon_start_ipc_roundtrip_and_shutdown() {
-    let rt = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    // Avoid colliding with a real user daemon.
-    std::env::set_var("XDG_RUNTIME_DIR", rt.path());
-
-    let (mut child, sock) = spawn_daemon(rt.path(), home.path());
-    assert!(sock.exists(), "daemon did not create its socket");
-
-    // ping
-    assert!(is_running(&sock), "daemon should answer ping");
-
-    // service.status returns structured info
-    let resp = call(&sock, &Request::new("1", "service.status", Value::Null)).unwrap();
-    assert!(resp.ok);
-    let result = resp.result.unwrap();
-    assert_eq!(result["running"], true);
-    assert_eq!(result["version"], draft_core_version());
-
-    // provider.list over IPC
-    let resp = call(&sock, &Request::new("2", "provider.list", Value::Null)).unwrap();
-    assert!(resp.ok);
-    let arr = resp.result.unwrap();
-    assert!(arr.as_array().unwrap().iter().any(|p| p["id"] == "git"));
-
-    // unknown method => structured error
-    let resp = call(&sock, &Request::new("3", "nope.method", Value::Null)).unwrap();
-    assert!(!resp.ok);
-    assert_eq!(resp.error.unwrap().code, "UNKNOWN_METHOD");
-
-    // path traversal rejected
-    let resp = call(
-        &sock,
-        &Request::new(
-            "4",
-            "workspace.status",
-            serde_json::json!({"path": "../etc"}),
-        ),
-    )
-    .unwrap();
-    assert!(!resp.ok);
-
-    // workspace registration updates service status.
+fn daemon_dispatcher_covers_v3_control_plane() {
+    let state = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
-    draft_core::workspace::initialize(
-        workspace.path(),
-        workspace.path(),
-        ProviderId::new("git"),
-        false,
-    )
-    .unwrap();
-    let resp = call(
-        &sock,
-        &Request::new(
-            "5",
-            "workspace.register",
-            serde_json::json!({"path": workspace.path().display().to_string()}),
-        ),
-    )
-    .unwrap();
+    let store = ServiceStore::open(state.path().to_path_buf());
+    let sessions = SessionManager::new();
+    let path = workspace.path().display().to_string();
+
+    let resp = call(&store, &sessions, "1", "service.ping", Value::Null);
     assert!(resp.ok);
-    let resp = call(&sock, &Request::new("6", "service.status", Value::Null)).unwrap();
+    assert_eq!(resp.result.unwrap()["pong"], true);
+
+    let resp = call(
+        &store,
+        &sessions,
+        "2",
+        "workspace.init",
+        json!({ "path": path }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+
+    let resp = call(
+        &store,
+        &sessions,
+        "3",
+        "workspace.register",
+        json!({ "path": workspace.path().display().to_string() }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+
+    let resp = call(&store, &sessions, "4", "service.status", Value::Null);
     assert!(resp.ok);
     assert_eq!(resp.result.unwrap()["workspaces"], 1);
 
-    // shutdown
-    let _ = call(&sock, &Request::new("7", "service.shutdown", Value::Null));
-    let start = Instant::now();
-    while sock.exists() && start.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(!is_running(&sock), "daemon should be stopped");
-    let _ = child.kill();
-    let _ = child.wait();
-}
+    std::fs::write(workspace.path().join("app.txt"), "v1\n").unwrap();
+    let resp = call(
+        &store,
+        &sessions,
+        "5",
+        "workspace.status",
+        json!({ "path": workspace.path().display().to_string() }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
 
-#[cfg(unix)]
-fn draft_core_version() -> &'static str {
-    // Keep in sync with the crate version embedded by draftd.
-    "0.2.0"
+    let resp = call(
+        &store,
+        &sessions,
+        "6",
+        "checkpoint.create",
+        json!({ "path": workspace.path().display().to_string(), "message": "base" }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+    let snapshot_id = resp.result.as_ref().unwrap()["snapshot_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = call(
+        &store,
+        &sessions,
+        "7",
+        "task.create",
+        json!({ "path": workspace.path().display().to_string(), "title": "update app" }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+    let task_id = resp.result.as_ref().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = call(
+        &store,
+        &sessions,
+        "8",
+        "task.list",
+        json!({ "path": workspace.path().display().to_string() }),
+    );
+    assert!(resp.ok);
+    assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+
+    std::fs::write(workspace.path().join("app.txt"), "v2\n").unwrap();
+    let resp = call(
+        &store,
+        &sessions,
+        "9",
+        "pack.create",
+        json!({
+            "path": workspace.path().display().to_string(),
+            "name": "candidate",
+            "task": task_id,
+            "from_working_tree": true
+        }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+    let pack_id = resp.result.as_ref().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for (id, method, extra) in [
+        ("10", "pack.list", json!({})),
+        ("11", "pack.show", json!({ "pack": pack_id })),
+        ("12", "verify.run", json!({ "pack": pack_id })),
+        ("13", "risk.assess", json!({ "pack": pack_id })),
+        ("14", "review.start", json!({ "pack": pack_id })),
+        (
+            "15",
+            "decision.approve",
+            json!({ "pack": pack_id, "reason": "reviewed" }),
+        ),
+        ("16", "save.run", json!({ "pack": pack_id })),
+        ("17", "receipt.list", json!({})),
+        ("18", "events.list", json!({})),
+        ("19", "events.verify", json!({})),
+        ("20", "events.replay", json!({})),
+        ("21", "index.rebuild", json!({})),
+        ("22", "rollback.plan", json!({ "target": snapshot_id })),
+        (
+            "23",
+            "rollback.apply",
+            json!({ "target": snapshot_id, "yes": true }),
+        ),
+        ("24", "run.list", json!({})),
+    ] {
+        let mut params = extra;
+        params["path"] = json!(workspace.path().display().to_string());
+        let resp = call(&store, &sessions, id, method, params);
+        assert!(resp.ok, "{method} failed: {:?}", resp.error);
+    }
+
+    let receipts = call(
+        &store,
+        &sessions,
+        "24",
+        "receipt.list",
+        json!({ "path": workspace.path().display().to_string() }),
+    );
+    let receipt_id = receipts.result.unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let resp = call(
+        &store,
+        &sessions,
+        "25",
+        "receipt.show",
+        json!({ "path": workspace.path().display().to_string(), "receipt_id": receipt_id }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+
+    let resp = call(
+        &store,
+        &sessions,
+        "job-1",
+        "job.submit",
+        json!({
+            "path": workspace.path().display().to_string(),
+            "kind": "scan"
+        }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+    let job_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap();
+    assert_eq!(resp.result.as_ref().unwrap()["status"], "completed");
+
+    let resp = call(
+        &store,
+        &sessions,
+        "job-2",
+        "job.status",
+        json!({ "job_id": job_id }),
+    );
+    assert!(resp.ok, "{:?}", resp.error);
+    assert_eq!(resp.result.unwrap()["kind"], "scan");
+
+    let resp = call(&store, &sessions, "job-3", "job.list", Value::Null);
+    assert!(resp.ok, "{:?}", resp.error);
+    assert_eq!(resp.result.unwrap().as_array().unwrap().len(), 1);
+
+    let resp = call(
+        &store,
+        &sessions,
+        "26",
+        "workspace.status",
+        json!({ "path": "../etc" }),
+    );
+    assert!(!resp.ok);
+    assert_eq!(resp.error.unwrap().code, "IPC_ERROR");
+
+    let resp = call(&store, &sessions, "27", "nope.method", Value::Null);
+    assert!(!resp.ok);
+    assert_eq!(resp.error.unwrap().code, "UNKNOWN_METHOD");
+
+    let resp = call(&store, &sessions, "28", "service.shutdown", Value::Null);
+    assert!(resp.ok);
 }
 
 #[test]

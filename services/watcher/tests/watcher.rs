@@ -1,4 +1,4 @@
-//! Watcher tests (TEST-004): ignore rules and debounced detection.
+//! Watcher tests (TEST-004): Draft write-back filtering and debounced detection.
 
 use std::path::Path;
 use std::time::Duration;
@@ -6,13 +6,10 @@ use std::time::Duration;
 use draft_watcher::{should_ignore, Watcher};
 
 #[test]
-fn ignores_provider_internals_and_draft_writeback() {
-    assert!(should_ignore(Path::new("repo/.git/index")));
+fn ignores_draft_writeback_paths() {
     assert!(should_ignore(Path::new(
         "repo/.draft/operations/0001.operation.json"
     )));
-    assert!(should_ignore(Path::new("repo/target/debug/foo")));
-    assert!(should_ignore(Path::new("repo/node_modules/x/y.js")));
     assert!(!should_ignore(Path::new("repo/src/main.rs")));
     assert!(!should_ignore(Path::new("repo/.draft/config.toml")));
 }

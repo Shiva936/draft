@@ -1,5 +1,5 @@
-//! Workspace file watcher (FR-SVC-005). Debounces filesystem events and ignores
-//! provider internals and `.draft/` write-back paths to avoid rescan loops.
+//! Workspace file watcher. Debounces filesystem events and ignores Draft
+//! write-back paths to avoid rescan loops.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
@@ -9,15 +9,11 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 
 /// Paths whose presence anywhere in a changed path means we ignore the event.
 pub const IGNORED_SEGMENTS: &[&str] = &[
-    "/.git/",
-    "/.hg/",
-    "/.jj/",
-    "/.pijul/",
     "/.draft/operations/",
     "/.draft/receipts/",
     "/.draft/locks/",
-    "/target/",
-    "/node_modules/",
+    "/.draft/events/",
+    "/.draft/objects/",
 ];
 
 /// Returns true if `path` should be ignored by the watcher.

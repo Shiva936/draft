@@ -1,6 +1,6 @@
 [package]
 name = "draftd"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [[bin]]
@@ -9,7 +9,6 @@ path = "src/main.rs"
 
 [dependencies]
 draft-core = { path = "../../core" }
-draft-providers = { path = "../../providers/registry" }
 draft-ipc = { path = "../ipc" }
 draft-store = { path = "../store" }
 draft-sessions = { path = "../sessions" }

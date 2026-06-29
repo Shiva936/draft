@@ -1,13 +1,13 @@
-//! Sync placeholder.
+//! Reserved service boundary.
 //!
-//! Remote/cloud sync is explicitly **out of scope** for v0.2.0 (Known
-//! Limitations). This crate exists as the reserved extension point so the
-//! `services/` layout and future roadmap are stable. It performs no network I/O.
+//! Draft v0.3.0 is local-only. This crate intentionally performs no network I/O
+//! and exists only to keep the service workspace layout stable for later
+//! design work.
 
-/// Sync is disabled in v0.2.0.
+/// External synchronization is disabled in v0.3.0.
 pub const SYNC_ENABLED: bool = false;
 
 /// Returns a human description of sync availability.
 pub fn status() -> &'static str {
-    "sync is not available in v0.2.0 (local-first only)"
+    "external synchronization is not available in v0.3.0"
 }

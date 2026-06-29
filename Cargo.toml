@@ -1,12 +1,6 @@
 [workspace]
 members = [
     "core",
-    "providers/git",
-    "providers/fs",
-    "providers/jj",
-    "providers/mercurial",
-    "providers/pijul",
-    "providers/registry",
     "services/ipc",
     "services/store",
     "services/locks",

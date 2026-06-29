@@ -1,30 +1,29 @@
-# Draft v0.2.0 — Release Notes
+# Release Notes
 
-Draft v0.2.0 is a major architectural release that turns Draft from Git-coupled pre-commit tooling into a **provider-neutral, local-first collaboration workspace before finalization**.
+## v0.3.0
 
-## Highlights
-- **Provider-neutral architecture** — `core/` no longer depends on Git; it depends only on the `core::vcs` provider abstraction.
-- **Git provider extraction** — all Git logic now lives in `providers/git`, the complete reference provider. Core/CLI/TUI/services never call Git directly.
-- **Draft operation log** — append-only, integrity-checked history under `.draft/operations/`, independent of provider-native logs.
-- **Finalization model** — internal "commit" is replaced by finalization; `draft commit` remains as a compatibility command.
-- **Receipts** — durable records mapping Draft changes → provider objects.
-- **`services/draftd`** — an optional local daemon (IPC, watcher, locks, sessions, store). Every safe command has an embedded fallback.
-- **Experimental providers** — `fs`, `jj`, `mercurial`, `pijul` scaffolds with declared capabilities and structured unsupported-operation errors. Not production-ready.
-- **Migration from v0.1.0** — existing Git workspaces migrate automatically.
-- **Public docs** — a full `docs/` set plus ADRs and spec copies.
+Draft v0.3.0 introduces the local Verified Changepacks + Review Cockpit model.
 
-## Known limitations
-- jj / Mercurial / Pijul providers are experimental (detection + capabilities).
-- Filesystem provider is limited (status scan only; no finalization).
-- No cloud sync, hosted review, or real-time/CRDT collaboration.
-- No Draft-native VCS; no cryptographic operation signing by default; no
-  enterprise policy server.
+### Added
 
-## Compatibility
-- v0.1.0 Git workflows (`status`, `review`, `verify`, `commit`, `undo`) are preserved. Existing `.draft/` metadata is migrated on first use; old metadata is backed up under `.draft/backup/`.
+- Native `.draft/` workspace store.
+- Draft config, `.draft/.ignore`, verification, and policy files.
+- Native workspace scanner with direct file walking.
+- Snapshots, checkpoints, tasks, runs, changepacks, evidence, review decisions, approvals, receipts, and rollback records.
+- Append-only hash-chained events with verification.
+- Content-addressed object storage.
+- Rebuildable SQLite index.
+- Verification, risk, policy, review, compare, compose, save, and rollback commands.
+- Optional `target.local` execution after Draft save approval and safety checks.
+- Local daemon IPC dispatch for service-backed flows.
+- Public documentation for users, operators, contributors, and maintainers.
 
-## Artifacts
-- `draft` CLI binary and `draftd` daemon binary.
-- `docs/`, this file, and `examples/config.toml`.
+### Safety
 
-Version `0.2.0` is reported by `draft --version`, `draftd --version`, and the workspace `config.toml`.
+- `.draft/` is hard-excluded from status, snapshots, changepacks, save candidates, rollback plans, and external command candidate checks.
+- If `.draft/` appears in a save candidate, Draft aborts save, emits `SaveFailed`, records a failed receipt, and skips `target.local`.
+- `target.local` is opaque. Draft captures stdout, stderr, exit code, command hash, and receipt linkage without interpreting the command.
+
+### Reserved
+
+- `target.remote` is reserved for later design work and is rejected in v0.3.0.

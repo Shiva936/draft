@@ -1,29 +1,18 @@
-# Example .draft/config.toml (workspace policy). Written by `draft workspace init`
-# and safe to edit by hand.
+# Example .draft/config.toml for Draft v0.3.0.
 
-version = "0.2.0"
+[identity]
+username = "Ada"
+email = "ada@example.com"
 
-[provider]
-provider_id = "git"
-experimental_ack = false
-
-[finalization]
-require_review = false
-require_verification = false
-block_on_high_risk = true
-allow_unverified = true
-allow_high_risk_with_confirmation = true
-
-[risk]
-detect_secrets = true
-large_diff_threshold_lines = 1000
-deletion_threshold_files = 10
-many_files_threshold = 25
+[target]
+local = ""
+message_template = "{title}\n\n{description}\n\nDraft-Task: {task_id}\nDraft-Run: {run_id}\nDraft-Changepack: {changepack_id}\nDraft-Verified: {verified}\nDraft-Risk: {risk_level}\nDraft-Receipt: {receipt_id}\nDraft-Author: {author_name} <{author_email}>"
 
 [verification]
-# Each command is shown before it runs. Structured execution (no shell).
-# [[verification.commands]]
-# name = "test"
-# command = "cargo"
-# args = ["test"]
-# timeout_ms = 600000
+default_profile = "standard"
+
+[policy]
+require_verification = true
+require_approval = true
+require_human_approval_for_high_risk = true
+block_if_tests_fail = true

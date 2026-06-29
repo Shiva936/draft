@@ -1,11 +1,9 @@
 [package]
 name = "draft-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [features]
-# Exposes the in-memory fake provider and test helpers to downstream crates
-# (used by provider-contract tests).
 testing = []
 
 [dependencies]
@@ -19,4 +17,5 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 walkdir = "2.4"
 ignore = "0.4"
+rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = "3.8" # also needed for some core testing/ops if required, keeping it here

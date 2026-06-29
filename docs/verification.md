@@ -1,8 +1,44 @@
 # Verification
 
-`draft verify` runs configured commands and persists results under `.draft/verification/` (plus logs/). Commands are **always shown** before/while they run — Draft never runs verification silently (NFR §8.3).
+Verification runs local commands and records results as Draft evidence.
 
-- Configure in `.draft/config.toml`: `[[verification.commands]] name = "test" command = "cargo" args = ["test"]`.
-- If none are configured, Draft infers one from the project (Cargo/go/npm/ pytest/make). You can override with `draft verify "<command>"`.
-- Structured execution (no shell), per-command timeout, captured (truncated) output, and statuses: passed / failed / skipped / timed-out / cancelled.
-- The latest result feeds the finalization verification gate.
+## Running Verification
+
+```bash
+draft verify <pack-id>
+```
+
+Draft loads verification configuration, runs the selected checks from the workspace root, captures stdout, stderr, exit code, timing, and stores a verification receipt.
+
+## Result States
+
+Verification can be:
+
+- passed;
+- failed;
+- skipped;
+- errored.
+
+Policy can block save when verification is missing or failed.
+
+## Configuration
+
+Verification profile selection is configured through Draft config and verification files. Commands are local shell commands. Draft does not infer semantics from the command name; it only records the result.
+
+## Evidence Links
+
+Verification results attach to the changepack. Save receipts include enough references to reconstruct why a changepack was allowed or blocked.
+
+## Good Checks
+
+Good verification commands are deterministic, local, and scoped to the change. They should return non-zero on failure and keep output concise enough for review.
+
+## Failure Handling
+
+When verification fails:
+
+1. inspect the verification receipt;
+2. inspect stdout and stderr objects if needed;
+3. fix the workspace;
+4. create or update the changepack;
+5. run verification again.

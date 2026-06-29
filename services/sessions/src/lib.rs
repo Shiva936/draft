@@ -1,6 +1,7 @@
-//! Session manager (FR-SVC, Blueprint §18.3). Tracks in-memory client sessions
-//! connected to `draftd`. Minimal in v0.2.0 — sessions are lightweight handles
-//! used for accounting and future cancellation support.
+//! Session manager for clients connected to `draftd`.
+//!
+//! Sessions are lightweight in-memory handles used for accounting and request
+//! ownership in the local control plane.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

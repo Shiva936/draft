@@ -1,6 +1,4 @@
-//! Shared provider-neutral primitives used across all of `draft-core`.
-//!
-//! These types deliberately contain no provider-specific (e.g. Git) concepts.
+//! Shared Draft-native primitives used across all of `draft-core`.
 
 use serde::{Deserialize, Serialize};
 
@@ -89,12 +87,12 @@ macro_rules! id_newtype {
     };
 }
 
-// Draft-owned stable IDs (DR-001). Provider-native IDs live in `vcs::types`.
+// Draft-owned stable IDs (DR-001).
 id_newtype!(
     /// Identifies a Draft workspace.
     WorkspaceId, "ws_");
 id_newtype!(
-    /// Identifies a Draft change (a reviewable unit before finalization).
+    /// Identifies a Draft change.
     DraftChangeId, "chg_");
 id_newtype!(
     /// Identifies a Draft operation-log entry by ULID-like opaque id (the
@@ -112,12 +110,6 @@ id_newtype!(
 id_newtype!(
     /// Identifies a verification result.
     VerificationResultId, "vres_");
-id_newtype!(
-    /// Identifies a finalization plan.
-    FinalizationPlanId, "fplan_");
-id_newtype!(
-    /// Identifies a finalization result.
-    FinalizationResultId, "fres_");
 id_newtype!(
     /// Identifies a durable receipt.
     ReceiptId, "rcpt_");

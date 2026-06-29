@@ -1,4 +1,4 @@
-//! Terminal output helpers. Provider-neutral language throughout (FR-CLI-004).
+//! Terminal output helpers for Draft-native CLI responses.
 
 use draft_core::error::DraftError;
 
