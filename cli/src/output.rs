@@ -1,34 +1,37 @@
-use draft_core::errors::DraftError;
-use draft_core::models::RiskLevel;
+//! Terminal output helpers. Provider-neutral language throughout (FR-CLI-004).
 
-/// Format a DraftError into a user-friendly error string
+use draft_core::error::DraftError;
+
+pub fn header(title: &str) {
+    println!("\n\x1b[1m{title}\x1b[0m");
+}
+
+pub fn field(label: &str, value: &str) {
+    println!("  {label:<14} {value}");
+}
+
+pub fn success(msg: &str) {
+    println!("\x1b[32m✓\x1b[0m {msg}");
+}
+
+pub fn warn(msg: &str) {
+    println!("\x1b[33m!\x1b[0m {msg}");
+}
+
 pub fn format_error(err: &DraftError) -> String {
-    let msg = err.to_string();
-    format!("✗ Error: {}\n\nRun 'draft --help' for usage.", msg)
-}
-
-/// Format a risk level into a colored string indicator
-pub fn risk_label(level: RiskLevel) -> &'static str {
-    match level {
-        RiskLevel::Low => "low",
-        RiskLevel::Medium => "medium",
-        RiskLevel::High => "high",
-        RiskLevel::Blocked => "BLOCKED",
+    let mut s = format!("\x1b[31merror[{}]\x1b[0m: {}", err.code(), err.message);
+    if let Some(ctx) = &err.context {
+        s.push_str(&format!("\n  context: {ctx}"));
     }
+    if let Some(sg) = &err.suggestion {
+        s.push_str(&format!("\n  try: {sg}"));
+    }
+    s
 }
 
-/// Print a styled header line
-pub fn print_header(title: &str) {
-    println!("\n{}", title);
-    println!("{}", "─".repeat(title.len().min(60)));
-}
-
-/// Print a success message
-pub fn print_success(msg: &str) {
-    println!("✓ {}", msg);
-}
-
-/// Print a warning message
-pub fn print_warning(msg: &str) {
-    eprintln!("⚠ Warning: {}", msg);
+pub fn print_json<T: serde::Serialize>(value: &T) {
+    match serde_json::to_string_pretty(value) {
+        Ok(s) => println!("{s}"),
+        Err(e) => eprintln!("failed to serialize JSON: {e}"),
+    }
 }

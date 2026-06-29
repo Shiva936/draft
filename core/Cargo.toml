@@ -1,7 +1,12 @@
 [package]
 name = "draft-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+
+[features]
+# Exposes the in-memory fake provider and test helpers to downstream crates
+# (used by provider-contract tests).
+testing = []
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

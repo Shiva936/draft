@@ -1,34 +1,32 @@
 # Draft
 
-> Trust your code before you commit.
+> Review, verify, and finalize your work — before it becomes a commit.
 
-Draft is a CLI-first, TUI-assisted pre-commit trust layer for Git repositories. It helps developers review, verify, compose, and safely commit human + AI-assisted code changes before they enter Git history.
+Draft is a **local-first, provider-neutral collaboration workspace**. It helps developers and AI agents group, review, risk-score, verify, checkpoint, and **finalize** changes before they become native version-control objects.
 
----
-
-## The problem
-
-You used an AI coding tool for an hour. Many files changed. Some changes are good. Some are risky. Some are unrelated. You don't fully know what should be committed.
-
-Git shows you the final diff. It doesn't explain intent, risk, grouping, or verification. Draft fills that gap.
+Draft is not a Git replacement and not only a Git client: it owns pre-finalization state, while a pluggable **provider** owns native VCS state. Git is the complete reference provider; jj, Mercurial, Pijul, and a filesystem provider ship as experimental scaffolds.
 
 ---
 
 ## Quickstart
 
 ```bash
-# In any Git repository
-draft start
+cd my-git-repo
+draft workspace detect      # confirm the provider (Git)
+draft workspace init        # create .draft/ (excluded from history)
 
-# Code normally with your tools (Cursor, Claude Code, Vim, etc.)
+# ... edit code with your tools ...
 
-draft review          # Open interactive review TUI
-draft verify          # Run tests and record evidence
-draft commit -m "Fix login validation"
-
-# If anything goes wrong
-draft undo
+draft status                # provider-neutral change/risk/verification summary
+draft review --yes          # approve change groups (TUI launches when interactive)
+draft verify "cargo test"   # run verification (shown before it runs)
+draft commit -m "Fix login" # finalize into a Git commit + write a receipt
+draft receipt list          # receipt maps Draft change → commit SHA
+draft undo                  # safely reverse the last finalization
 ```
+
+`draft commit` is a compatibility command that routes to the **finalization**
+engine.
 
 ---
 
@@ -36,45 +34,50 @@ draft undo
 
 | Command | Description |
 |---|---|
-| `draft start` | Initialize Draft in the current repo |
-| `draft status` | Show repo and risk summary |
-| `draft review` | Review changes and open TUI |
-| `draft verify` | Run and record verification |
-| `draft commit -m "..."` | Create a safe Git commit |
-| `draft undo` | Restore last checkpoint |
+| `draft start` / `draft workspace init` | Initialize a Draft workspace |
+| `draft workspace detect` | Detect the provider for this path |
+| `draft status` | Provider-neutral status summary |
+| `draft review [--yes]` | Review / approve change groups |
+| `draft verify [CMD]` | Run and record verification |
+| `draft commit -m "..."` | Finalize reviewed changes |
+| `draft undo` | Reverse the last finalization |
+| `draft provider list` | List providers and capabilities |
+| `draft receipt list/show <id>` | Inspect durable receipts |
+| `draft service start/stop/status` | Manage the optional `draftd` daemon |
 
-See [docs/COMMANDS.md](docs/COMMANDS.md) for full reference.
+Full documentation is in [docs/](docs/README.md).
 
 ---
 
-## Install
+## Architecture
 
-### From source (requires Rust)
-
-```bash
-git clone https://github.com/your-org/draft
-cd draft
-cargo install --path cli
+```
+cli / tui → (draftd over IPC, or embedded) → core::App → core engines → core::vcs registry → providers/{git,fs,jj,mercurial,pijul}
 ```
 
-### Verify
+Core is provider-neutral; Git lives only in `providers/git`. See
+[docs/architecture.md](docs/architecture.md).
+
+---
+
+## Install (from source, Rust 1.75+)
 
 ```bash
-draft --version
+cargo build --release
+# binaries: target/release/draft and target/release/draftd
+draft --version    # 0.2.0
 ```
 
 ---
 
-## Storage
+## Storage & safety
 
-Draft stores all data locally in `.draft/` inside your repo. Nothing is sent to any server. See [docs/STORAGE.md](docs/STORAGE.md) for the full layout.
+Draft stores everything locally in `.draft/` (atomic writes; rebuildable indexes). Nothing is uploaded by default. `.draft/` is excluded from provider history by default. A pre-finalization checkpoint enables `draft undo`. See [docs/storage-layout.md](docs/storage-layout.md) and [docs/security.md](docs/security.md).
 
-## Safety
+## Migrating from v0.1.0
 
-Draft creates a checkpoint before every commit. `draft undo` restores it. See [docs/SAFETY.md](docs/SAFETY.md) for guarantees and limitations.
-
----
+Existing Git-backed v0.1.0 workspaces migrate automatically on first use. See [docs/migration/v0.1-to-v0.2.md](docs/migration/v0.1-to-v0.2.md).
 
 ## License
 
-MIT
+MIT or Apache 2.0

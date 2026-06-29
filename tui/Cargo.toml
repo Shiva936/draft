@@ -1,11 +1,13 @@
 [package]
 name = "draft-tui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
 draft-core = { path = "../core" }
+draft-ipc = { path = "../services/ipc" }
 ratatui = "0.26"
 crossterm = "0.27"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 chrono = "0.4"

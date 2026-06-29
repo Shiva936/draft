@@ -1,0 +1,10 @@
+[package]
+name = "draft-watcher"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+notify = "6.1"
+
+[dev-dependencies]
+tempfile = "3.8"

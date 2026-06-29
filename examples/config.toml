@@ -1,0 +1,29 @@
+# Example .draft/config.toml (workspace policy). Written by `draft workspace init`
+# and safe to edit by hand.
+
+version = "0.2.0"
+
+[provider]
+provider_id = "git"
+experimental_ack = false
+
+[finalization]
+require_review = false
+require_verification = false
+block_on_high_risk = true
+allow_unverified = true
+allow_high_risk_with_confirmation = true
+
+[risk]
+detect_secrets = true
+large_diff_threshold_lines = 1000
+deletion_threshold_files = 10
+many_files_threshold = 25
+
+[verification]
+# Each command is shown before it runs. Structured execution (no shell).
+# [[verification.commands]]
+# name = "test"
+# command = "cargo"
+# args = ["test"]
+# timeout_ms = 600000
