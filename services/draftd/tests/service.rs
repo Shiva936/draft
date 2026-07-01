@@ -14,7 +14,7 @@ fn call(
 }
 
 #[test]
-fn daemon_dispatcher_covers_v3_control_plane() {
+fn daemon_dispatcher_covers_control_plane() {
     let state = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let store = ServiceStore::open(state.path().to_path_buf());

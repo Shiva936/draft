@@ -1,11 +1,11 @@
 # Rollback
 
-Rollback restores workspace files toward a prior Draft snapshot or supported target.
+Rollback restores workspace files toward a prior Draft snapshot or receipt.
 
 ## Preview First
 
 ```bash
-draft rollback <target> --plan
+draft rollback <snapshot-or-receipt> --plan
 ```
 
 The plan lists affected files and warnings. Review the plan before applying.
@@ -13,7 +13,7 @@ The plan lists affected files and warnings. Review the plan before applying.
 ## Apply
 
 ```bash
-draft rollback <target> --yes
+draft rollback <snapshot-or-receipt> --yes
 ```
 
 Applying rollback is explicit because it can overwrite workspace files.
@@ -22,7 +22,7 @@ Applying rollback is explicit because it can overwrite workspace files.
 
 Rollback must:
 
-- never target `.draft/`;
+- never restore `.draft/`;
 - reject paths that escape the workspace root;
 - record a rollback event;
 - write a receipt;

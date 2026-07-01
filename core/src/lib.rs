@@ -4,14 +4,14 @@
 //! Core owns local `.draft/` storage, scanning, snapshots, changepacks,
 //! evidence, verification, review, approval, save receipts, and rollback.
 
+mod app;
 pub mod common;
 pub mod error;
 pub mod fsutil;
 pub mod identity;
 pub mod lock;
-mod v3;
 
 /// The Draft version string used in metadata, receipts, and `--version`.
 pub const DRAFT_VERSION: &str = "0.3.0";
 
-pub use v3::*;
+pub use app::*;

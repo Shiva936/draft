@@ -13,7 +13,7 @@ the control plane and durable service jobs, the TUI exposes review cockpit secti
 | Area | Status | Evidence |
 | --- | --- | --- |
 | Native `.draft/` store | Implemented | Workspace metadata, config, object store, event log, receipts, index, snapshots, tasks, runs, changepacks, evidence, and policies are stored below `.draft/`. |
-| Hard `.draft/` exclusion | Implemented | Scanner, snapshots, save candidates, rollback plans, watcher paths, and target execution guards exclude Draft metadata. |
+| Hard `.draft/` exclusion | Implemented | Scanner, snapshots, save candidates, rollback plans, watcher paths, and hook execution guards exclude Draft metadata. |
 | `.draft/.ignore` | Implemented | Draft has a dedicated ignore command and file. It is separate from any external tool configuration. |
 | Native scanner | Implemented | Status and snapshots walk the workspace directly and include files that are not known to any external system. |
 | Snapshots and checkpoints | Implemented | Checkpoint creates a snapshot plus receipt and event. |
@@ -32,7 +32,7 @@ the control plane and durable service jobs, the TUI exposes review cockpit secti
 | CLI without daemon | Implemented | CLI invokes core directly and does not require `draftd`. |
 | TUI cockpit | Implemented | TUI renders workspace, changepacks, files, blockers, receipt count, service mode, and action affordances through a testable terminal renderer. |
 | Public documentation | Implemented | The docs cover user, operator, security, contributor, architecture, command, service, and release-compliance topics. |
-| v0.4 reserved slot | Implemented | `target.remote` is rejected in v0.3.0 and documented as reserved only. |
+| Command hooks | Implemented | `hooks.save` is opaque hook execution after save approval and safety checks; raw and rich hooks use `{{name}}` placeholders, `--var` dynamic variables, and receipt hook status fields. |
 
 ## Release Gates
 
@@ -50,4 +50,4 @@ audits.
 
 ## Maintainer Notes
 
-Draft must remain local-only in v0.3.0. External commands are opaque strings run only through `target.local` after save approval and safety checks. They are captured as receipt evidence; they are not parsed, detected, or modeled.
+Draft must remain local-only in v0.3.0. Hooks are opaque commands run only when the owning Draft command reaches the configured hook phase. They are captured as receipt evidence with `native_save_status`, `hook_status`, and `overall_status`; they are not parsed, detected, or modeled.

@@ -10,7 +10,7 @@ Draft records evidence from:
 - `draft verify` command executions;
 - generated verification summaries;
 - risk and policy outputs;
-- save receipts and external command results.
+- save receipts and hook results.
 
 ## Captured Data
 

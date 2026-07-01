@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Serialize;
@@ -129,9 +130,10 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
             )
         })
         .into_response(id),
-        "save.run" => {
-            with_path(&req, |p| app.save(p, &string_param(&req, "pack")?)).into_response(id)
-        }
+        "save.run" => with_path(&req, |p| {
+            app.save(p, &string_param(&req, "pack")?, BTreeMap::new())
+        })
+        .into_response(id),
         "rollback.plan" => with_path(&req, |p| {
             app.rollback_plan(p, &string_param(&req, "target")?)
         })
@@ -210,7 +212,7 @@ fn run_job(app: &App, path: &Path, req: &Request, kind: &str) -> DraftResult<Val
             &string_param(req, "right")?,
             &string_param(req, "output")?,
         )?),
-        "save" => to_value(app.save(path, &string_param(req, "pack")?)?),
+        "save" => to_value(app.save(path, &string_param(req, "pack")?, BTreeMap::new())?),
         "rollback-plan" => to_value(app.rollback_plan(path, &string_param(req, "target")?)?),
         "index-rebuild" => to_value(app.index_rebuild(path)?),
         other => Err(DraftError::new(

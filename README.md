@@ -2,7 +2,7 @@
 
 Draft v0.3.0 is a local-first **Verified Changepacks + Review Cockpit** for human and AI-generated software changes.
 
-Draft records work as reviewed, verified changepacks inside `.draft/`. The project does not model external history systems in v0.3.0. The only optional integration point is `target.local`, an opaque command string that runs after Draft save approval and safety checks.
+Draft records work as reviewed, verified changepacks inside `.draft/`. The project does not model external history systems in v0.3.0. Optional external actions are user-owned opaque command hooks under `hooks.*`.
 
 ## What Draft Is For
 
@@ -15,7 +15,7 @@ Draft is useful when a person or agent needs to produce a change that can be ins
 - an append-only hash-chained event log;
 - a CLI that works without a daemon and services that can power live flows.
 
-Draft is intentionally local-first. It saves verified changepacks into `.draft/`. Any action outside Draft is explicit, local, and receipt-backed through `target.local`.
+Draft is intentionally local-first. It saves verified changepacks into `.draft/`. Any action outside Draft is explicit, local, and receipt-backed through `hooks.save`.
 
 ## Install From Source
 
@@ -52,15 +52,15 @@ draft receipt list
 
 The save step writes a durable receipt under `.draft/`. It does not require a daemon.
 
-## Optional Local Save Command
+## Optional Save Hook
 
-`target.local` can run an opaque shell command after approval:
+`hooks.save` can run an opaque shell command after approval:
 
 ```bash
-draft config set target.local "printf %s {message} > .last-draft-save"
+draft config set hooks.save "printf %s \"{{message}}\" > .last-draft-save"
 ```
 
-Draft renders `{message}`, checks policy, verifies that `.draft/` is not part of the save candidate, executes the command from the workspace root, captures stdout, stderr, exit code, command hash, and writes all of that into the save receipt.
+Draft renders `{{message}}`, checks policy, verifies that `.draft/` is not part of the save candidate, executes the command from the workspace root, captures stdout, stderr, exit code, command hash, and writes all of that into the save receipt.
 
 Draft does not parse, detect, or model what the command does.
 
@@ -74,7 +74,7 @@ See [docs/command-reference.md](docs/command-reference.md) for command behavior 
 
 Draft stores its private state below `.draft/`: config and policy, content-addressed objects, snapshots and checkpoints, tasks, runs, changepacks, evidence, reviews, receipts, rebuildable indexes, and append-only hash-chained events.
 
-`.draft/` is always hard-excluded from status, snapshots, changepacks, save candidates, rollback plans, and external command candidate checks. If a save candidate contains `.draft/`, Draft aborts the save, emits `SaveFailed`, records a failed receipt, and does not run `target.local`.
+`.draft/` is always hard-excluded from status, snapshots, changepacks, save candidates, rollback plans, and hook candidate checks. If a save candidate contains `.draft/`, Draft aborts the save, emits `SaveFailed`, records a failed receipt, and does not run `hooks.save`.
 
 ## Documentation
 

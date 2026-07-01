@@ -59,7 +59,7 @@ draft receipt list
 draft receipt show <receipt-id>
 ```
 
-Save persists the approved changepack into `.draft/` and writes a receipt. If `target.local` is configured, Draft runs it only after approval and safety checks. If `.draft/` appears in the save candidate, Draft aborts, records a failed receipt, emits `SaveFailed`, and does not execute `target.local`.
+Save persists the approved changepack into `.draft/` and writes a receipt. If `hooks.save` is configured, Draft runs it only after approval and safety checks. If `.draft/` appears in the save candidate, Draft aborts, records a failed receipt, emits `SaveFailed`, and does not execute `hooks.save`.
 
 ## Roll Back
 
@@ -68,7 +68,7 @@ draft rollback <snapshot-id> --plan
 draft rollback <snapshot-id> --yes
 ```
 
-Rollback first produces a plan. Applying the plan is explicit because it may overwrite workspace files. Rollback never targets `.draft/`.
+Rollback first produces a plan. Applying the plan is explicit because it may overwrite workspace files. Rollback never restores `.draft/`.
 
 ## Use The Daemon Optionaly
 

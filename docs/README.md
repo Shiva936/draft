@@ -1,6 +1,6 @@
 # Draft Documentation
 
-Draft v0.3.0 is organized around local verified changepacks. The docs are written for users, agent authors, contributors, and maintainers of the open-source project.
+Draft v0.3.0 is organized around local verified changepacks. The docs are written for users, agent actors, contributors, and maintainers of the open-source project.
 
 ## Start Here
 
@@ -26,10 +26,10 @@ Draft v0.3.0 is organized around local verified changepacks. The docs are writte
 - [Services](services.md)
 - [Configuration](config-rules.md)
 - [Draft Ignore Rules](ignore-rules.md)
-- [target.local](target-local.md)
+- [Hooks](hooks.md)
 
 ## v0.3.0 Boundary
 
-Draft v0.3.0 is local-first. It stores verified changepacks in `.draft/`, supports optional opaque `target.local` execution after approval, and reserves later extension points without implementing network or hosted-service behavior.
+Draft v0.3.0 is local-first. It stores verified changepacks in `.draft/` and supports optional opaque `hooks.*` command execution without implementing network, hosted-service, or native external-action behavior.
 
 Draft does not read external tool metadata to decide what changed. The workspace scanner walks files directly and applies only Draft’s own rules plus the hard `.draft/` exclusion.

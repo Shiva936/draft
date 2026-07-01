@@ -14,16 +14,12 @@ Draft v0.3.0 introduces the local Verified Changepacks + Review Cockpit model.
 - Content-addressed object storage.
 - Rebuildable SQLite index.
 - Verification, risk, policy, review, compare, compose, save, and rollback commands.
-- Optional `target.local` execution after Draft save approval and safety checks.
+- Optional `hooks.save` execution after Draft save approval and safety checks.
 - Local daemon IPC dispatch for service-backed flows.
 - Public documentation for users, operators, contributors, and maintainers.
 
 ### Safety
 
 - `.draft/` is hard-excluded from status, snapshots, changepacks, save candidates, rollback plans, and external command candidate checks.
-- If `.draft/` appears in a save candidate, Draft aborts save, emits `SaveFailed`, records a failed receipt, and skips `target.local`.
-- `target.local` is opaque. Draft captures stdout, stderr, exit code, command hash, and receipt linkage without interpreting the command.
-
-### Reserved
-
-- `target.remote` is reserved for later design work and is rejected in v0.3.0.
+- If `.draft/` appears in a save candidate, Draft aborts save, emits `SaveFailed`, records a failed receipt, and skips `hooks.save`.
+- Hooks are opaque. Draft captures stdout, stderr, exit code, command hash, and receipt linkage without interpreting the command.

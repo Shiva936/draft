@@ -803,7 +803,12 @@ impl App {
         })
     }
 
-    pub fn save(&self, cwd: &Path, pack_id: &str) -> DraftResult<SaveReceipt> {
+    pub fn save(
+        &self,
+        cwd: &Path,
+        pack_id: &str,
+        vars: BTreeMap<String, String>,
+    ) -> DraftResult<SaveReceipt> {
         let ws = self.open(cwd)?;
         let mut pack = load_pack(&ws, pack_id)?;
         let started = now();
@@ -827,7 +832,7 @@ impl App {
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
-            return Err(DraftError::new(DraftErrorKind::SaveFailed, "Warning: .draft/ is included in the save candidate.\n\nDraft metadata must never be saved into the target repository or external version-control system.\n\nSave aborted."));
+            return Err(DraftError::new(DraftErrorKind::SaveFailed, "Warning: .draft/ is included in the save candidate.\n\nDraft metadata must never be saved into an external repository or external system.\n\nSave aborted."));
         }
         if policy.save.block_if_tests_fail && pack.verification_refs.is_empty() {
             let receipt = failed_save(&ws, &pack, started, "verification is required before save")?;
@@ -864,52 +869,94 @@ impl App {
             id: receipt_id,
             changepack_id: pack.id.clone(),
             actor: resolve_actor(&ws.layout.draft_dir),
-            status: SaveStatus::SavedNativeOnly,
+            native_save_status: NativeSaveStatus::Saved,
+            hook_status: HookStatus::NotConfigured,
+            overall_status: SaveOverallStatus::Saved,
             message_ref,
-            target_local_command_hash: None,
-            external_result: None,
+            hook_results: Vec::new(),
             started_at: started,
             ended_at: now(),
             receipt_hash: String::new(),
             failure_reason: None,
         };
-        if !cfg.target_local.trim().is_empty() {
-            let shell_name = default_shell();
-            let command = cfg
-                .target_local
-                .replace("{message}", &shell_quote(&rendered_message));
-            let hash = command_hash(&shell_name, &ws.root, &command, &rendered_message);
-            let out = shell(&command, &ws.root);
-            let (exit_code, stdout, stderr) = match out {
-                Ok(o) => (o.status.code().unwrap_or(-1), o.stdout, o.stderr),
-                Err(e) => (-1, Vec::new(), e.to_string().into_bytes()),
+        if let Some(hook) = cfg.hook("save") {
+            let ctx = HookContext {
+                message: rendered_message.clone(),
+                title: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
+                description: String::new(),
+                task_id: pack
+                    .task_id
+                    .as_ref()
+                    .map(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                run_id: pack
+                    .run_id
+                    .as_ref()
+                    .map(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                changepack_id: pack.id.to_string(),
+                receipt_id: receipt.id.to_string(),
+                actor_name: cfg.identity_username.clone(),
+                actor_email: cfg.identity_email.clone(),
+                timestamp: now().to_rfc3339(),
+                verified: (!pack.verification_refs.is_empty()).to_string(),
+                risk_level: "unknown".to_string(),
+                files_changed: patch.files.len().to_string(),
+                workspace_root: ws.root.display().to_string(),
+                hook_name: "save".to_string(),
+                hook_phase: hook.phase.clone(),
+                vars,
             };
-            receipt.target_local_command_hash = Some(hash.clone());
-            receipt.external_result = Some(ExternalCommandResult {
-                shell: shell_name,
-                working_dir: ws.root.display().to_string(),
-                command_hash: hash,
-                exit_code,
-                stdout_ref: store.put_bytes(&stdout)?,
-                stderr_ref: store.put_bytes(&stderr)?,
-            });
-            if exit_code != 0 {
-                receipt.status = SaveStatus::Failed;
-                receipt.failure_reason = Some(format!("target.local exited with {exit_code}"));
-                receipt.ended_at = now();
-                receipt.receipt_hash = hash_json(&receipt)?;
-                write_save_receipt(&ws, &receipt)?;
-                ws.events()?.append(
-                    "SaveFailed",
-                    Some(pack.id.to_string()),
-                    serde_json::to_value(&receipt).unwrap_or(Value::Null),
-                )?;
-                return Err(
-                    DraftError::new(DraftErrorKind::SaveFailed, "target.local failed")
-                        .with_context(format!("exit code {exit_code}")),
-                );
+            match run_hook(&ws, &store, "save", &hook, &ctx) {
+                Ok(result) => {
+                    let failed = result.exit_code != 0;
+                    receipt.hook_results.push(result);
+                    if failed {
+                        receipt.hook_status = HookStatus::Failed;
+                        if hook.continue_on_error {
+                            receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                        } else {
+                            receipt.overall_status = SaveOverallStatus::Failed;
+                            receipt.failure_reason = Some("hooks.save failed".to_string());
+                            receipt.ended_at = now();
+                            receipt.receipt_hash = hash_json(&receipt)?;
+                            write_save_receipt(&ws, &receipt)?;
+                            ws.events()?.append(
+                                "SaveFailed",
+                                Some(pack.id.to_string()),
+                                serde_json::to_value(&receipt).unwrap_or(Value::Null),
+                            )?;
+                            return Err(DraftError::new(
+                                DraftErrorKind::SaveFailed,
+                                "hooks.save failed",
+                            ));
+                        }
+                    } else {
+                        receipt.hook_status = HookStatus::Succeeded;
+                    }
+                }
+                Err(e) => {
+                    receipt.hook_status = HookStatus::Failed;
+                    if hook.continue_on_error {
+                        receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                        receipt.failure_reason = Some(e.message);
+                    } else {
+                        receipt.overall_status = SaveOverallStatus::Failed;
+                        receipt.failure_reason = Some(e.message.clone());
+                        receipt.ended_at = now();
+                        receipt.receipt_hash = hash_json(&receipt)?;
+                        write_save_receipt(&ws, &receipt)?;
+                        ws.events()?.append(
+                            "SaveFailed",
+                            Some(pack.id.to_string()),
+                            serde_json::to_value(&receipt).unwrap_or(Value::Null),
+                        )?;
+                        return Err(DraftError::new(DraftErrorKind::SaveFailed, e.message));
+                    }
+                }
             }
-            receipt.status = SaveStatus::SavedWithExternalCommand;
         }
         receipt.ended_at = now();
         receipt.receipt_hash = hash_json(&receipt)?;
@@ -925,14 +972,14 @@ impl App {
         Ok(receipt)
     }
 
-    pub fn rollback_plan(&self, cwd: &Path, target: &str) -> DraftResult<RollbackPlan> {
+    pub fn rollback_plan(&self, cwd: &Path, reference: &str) -> DraftResult<RollbackPlan> {
         let ws = self.open(cwd)?;
-        let snapshot = resolve_snapshot_target(&ws, target)?;
+        let snapshot = resolve_snapshot_reference(&ws, reference)?;
         let current = Snapshotter::new(&ws)?.create_snapshot()?;
         let patch = diff_snapshot_values(&snapshot, &current);
         Ok(RollbackPlan {
             id: RollbackPlanId::generate(),
-            target_snapshot_id: snapshot.id,
+            rollback_snapshot_id: snapshot.id,
             affected_files: patch
                 .files
                 .into_iter()
@@ -944,9 +991,9 @@ impl App {
         })
     }
 
-    pub fn rollback(&self, cwd: &Path, target: &str, yes: bool) -> DraftResult<RollbackReceipt> {
+    pub fn rollback(&self, cwd: &Path, reference: &str, yes: bool) -> DraftResult<RollbackReceipt> {
         let ws = self.open(cwd)?;
-        let plan = self.rollback_plan(cwd, target)?;
+        let plan = self.rollback_plan(cwd, reference)?;
         if plan.destructive && !yes {
             return Err(DraftError::new(
                 DraftErrorKind::RiskPolicyBlocked,
@@ -958,7 +1005,7 @@ impl App {
             Some(plan.id.to_string()),
             serde_json::to_value(&plan).unwrap_or(Value::Null),
         )?;
-        let snap = load_snapshot(&ws, &plan.target_snapshot_id)?;
+        let snap = load_snapshot(&ws, &plan.rollback_snapshot_id)?;
         restore_snapshot(&ws, &snap)?;
         let mut receipt = RollbackReceipt {
             schema_version: SCHEMA_VERSION,
@@ -1164,7 +1211,10 @@ const DEFAULT_IGNORE: &str = "# Draft private metadata is always excluded.\n.dra
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DraftConfig {
     pub identity: IdentityConfig,
-    pub target: TargetConfig,
+    #[serde(default)]
+    pub save: SaveConfig,
+    #[serde(default)]
+    pub hooks: HooksConfig,
     pub verification: VerificationConfig,
     pub policy: PolicyConfigSection,
 }
@@ -1173,7 +1223,8 @@ impl Default for DraftConfig {
     fn default() -> Self {
         Self {
             identity: IdentityConfig::default(),
-            target: TargetConfig::default(),
+            save: SaveConfig::default(),
+            hooks: HooksConfig::default(),
             verification: VerificationConfig {
                 default_profile: "standard".to_string(),
             },
@@ -1192,8 +1243,9 @@ impl DraftConfig {
         match key {
             "identity.username" => self.identity.username = value.to_string(),
             "identity.email" => self.identity.email = value.to_string(),
-            "target.local" => self.target.local = value.to_string(),
-            "target.message_template" => self.target.message_template = value.to_string(),
+            "save.message_template" => self.save.message_template = value.to_string(),
+            "hooks.save" => self.hooks.save = Some(HookConfig::Raw(value.to_string())),
+            "hooks.verify" => self.hooks.verify = Some(HookConfig::Raw(value.to_string())),
             _ => {
                 return Err(DraftError::invalid_config(format!(
                     "unsupported config key '{key}'"
@@ -1214,18 +1266,88 @@ pub struct IdentityConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TargetConfig {
-    pub local: String,
+pub struct SaveConfig {
     pub message_template: String,
 }
 
-impl Default for TargetConfig {
+impl Default for SaveConfig {
     fn default() -> Self {
         Self {
-            local: String::new(),
-            message_template: "{title}\n\n{description}\n\nDraft-Task: {task_id}\nDraft-Run: {run_id}\nDraft-Changepack: {changepack_id}\nDraft-Verified: {verified}\nDraft-Risk: {risk_level}\nDraft-Receipt: {receipt_id}\nDraft-Author: {author_name} <{author_email}>".to_string(),
+            message_template: "{{title}}\n\n{{description}}\n\nDraft-Task: {{task_id}}\nDraft-Run: {{run_id}}\nDraft-Changepack: {{changepack_id}}\nDraft-Verified: {{verified}}\nDraft-Risk: {{risk_level}}\nDraft-Receipt: {{receipt_id}}\nDraft-Actor: {{actor_name}} <{{actor_email}}>".to_string(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HooksConfig {
+    pub save: Option<HookConfig>,
+    pub verify: Option<HookConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HookConfig {
+    Raw(String),
+    Entry(HookEntry),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookEntry {
+    pub command: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_hook_phase")]
+    pub phase: String,
+    #[serde(default = "default_hook_shell")]
+    pub shell: String,
+    #[serde(default = "default_hook_cwd")]
+    pub cwd: String,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub continue_on_error: bool,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl HookConfig {
+    fn entry(&self) -> Option<HookEntry> {
+        match self {
+            HookConfig::Raw(command) => {
+                if command.trim().is_empty() {
+                    None
+                } else {
+                    Some(HookEntry {
+                        command: command.clone(),
+                        enabled: true,
+                        phase: default_hook_phase(),
+                        shell: default_hook_shell(),
+                        cwd: default_hook_cwd(),
+                        timeout_ms: None,
+                        continue_on_error: false,
+                        env: BTreeMap::new(),
+                    })
+                }
+            }
+            HookConfig::Entry(entry) if entry.enabled && !entry.command.trim().is_empty() => {
+                Some(entry.clone())
+            }
+            HookConfig::Entry(_) => None,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_hook_phase() -> String {
+    "after_success".to_string()
+}
+fn default_hook_shell() -> String {
+    "default".to_string()
+}
+fn default_hook_cwd() -> String {
+    "workspace".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1254,12 +1376,19 @@ impl ConfigReport {
     }
 }
 
+fn hook_config_command(hook: &HookConfig) -> String {
+    match hook {
+        HookConfig::Raw(command) => command.clone(),
+        HookConfig::Entry(entry) => entry.command.clone(),
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedConfig {
     identity_username: String,
     identity_email: String,
-    target_local: String,
-    target_message_template: String,
+    save_message_template: String,
+    hooks: HooksConfig,
 }
 
 impl ResolvedConfig {
@@ -1280,22 +1409,27 @@ impl ResolvedConfig {
         if let Ok(v) = std::env::var("DRAFT_IDENTITY_EMAIL") {
             cfg.identity.email = v;
         }
-        if let Ok(v) = std::env::var("DRAFT_TARGET_LOCAL") {
-            cfg.target.local = v;
-        }
         Ok(Self {
             identity_username: cfg.identity.username,
             identity_email: cfg.identity.email,
-            target_local: cfg.target.local,
-            target_message_template: cfg.target.message_template,
+            save_message_template: cfg.save.message_template,
+            hooks: cfg.hooks,
         })
+    }
+    fn hook(&self, name: &str) -> Option<HookEntry> {
+        match name {
+            "save" => self.hooks.save.as_ref().and_then(HookConfig::entry),
+            "verify" => self.hooks.verify.as_ref().and_then(HookConfig::entry),
+            _ => None,
+        }
     }
     fn get(&self, key: &str) -> Option<String> {
         match key {
             "identity.username" => Some(self.identity_username.clone()),
             "identity.email" => Some(self.identity_email.clone()),
-            "target.local" => Some(self.target_local.clone()),
-            "target.message_template" => Some(self.target_message_template.clone()),
+            "save.message_template" => Some(self.save_message_template.clone()),
+            "hooks.save" => self.hooks.save.as_ref().map(hook_config_command),
+            "hooks.verify" => self.hooks.verify.as_ref().map(hook_config_command),
             _ => None,
         }
     }
@@ -1304,8 +1438,9 @@ impl ResolvedConfig {
         for k in [
             "identity.username",
             "identity.email",
-            "target.local",
-            "target.message_template",
+            "save.message_template",
+            "hooks.save",
+            "hooks.verify",
         ] {
             m.insert(k.to_string(), self.get(k).unwrap_or_default());
         }
@@ -1320,11 +1455,14 @@ fn merge_config(mut base: DraftConfig, overlay: DraftConfig) -> DraftConfig {
     if !overlay.identity.email.is_empty() {
         base.identity.email = overlay.identity.email;
     }
-    if !overlay.target.local.is_empty() {
-        base.target.local = overlay.target.local;
+    if !overlay.save.message_template.is_empty() {
+        base.save.message_template = overlay.save.message_template;
     }
-    if !overlay.target.message_template.is_empty() {
-        base.target.message_template = overlay.target.message_template;
+    if overlay.hooks.save.is_some() {
+        base.hooks.save = overlay.hooks.save;
+    }
+    if overlay.hooks.verify.is_some() {
+        base.hooks.verify = overlay.hooks.verify;
     }
     base
 }
@@ -2164,38 +2302,60 @@ pub struct SaveReceipt {
     pub id: ReceiptId,
     pub changepack_id: ChangepackId,
     pub actor: ActorRef,
-    pub status: SaveStatus,
+    pub native_save_status: NativeSaveStatus,
+    pub hook_status: HookStatus,
+    pub overall_status: SaveOverallStatus,
     pub message_ref: String,
-    pub target_local_command_hash: Option<String>,
-    pub external_result: Option<ExternalCommandResult>,
+    pub hook_results: Vec<HookResult>,
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
     pub receipt_hash: String,
     pub failure_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SaveStatus {
-    SavedNativeOnly,
-    SavedWithExternalCommand,
+pub enum NativeSaveStatus {
+    Saved,
     Failed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExternalCommandResult {
+#[serde(rename_all = "snake_case")]
+pub enum HookStatus {
+    NotConfigured,
+    Skipped,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveOverallStatus {
+    Saved,
+    Failed,
+    SavedWithHookFailure,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookResult {
+    pub hook_name: String,
+    pub hook_phase: String,
     pub shell: String,
     pub working_dir: String,
     pub command_hash: String,
     pub exit_code: i32,
     pub stdout_ref: String,
     pub stderr_ref: String,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: DateTime<Utc>,
+    pub env_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RollbackPlan {
     pub id: RollbackPlanId,
-    pub target_snapshot_id: SnapshotId,
+    pub rollback_snapshot_id: SnapshotId,
     pub affected_files: Vec<WorkspacePath>,
     pub destructive: bool,
     pub warnings: Vec<String>,
@@ -2269,9 +2429,9 @@ fn find_workspace_root(cwd: &Path) -> Option<PathBuf> {
 }
 
 fn reject_remote_key(key: &str) -> DraftResult<()> {
-    if key == "target.remote" {
+    if key.starts_with("target.") {
         return Err(DraftError::invalid_config(
-            "Remote targets are planned for Draft v0.4.0.",
+            "retired external-action config keys are not supported in Draft v0.3.0; use hooks.*",
         ));
     }
     Ok(())
@@ -2926,13 +3086,19 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
             params![
                 receipt.get("id").and_then(Value::as_str).unwrap_or_default(),
                 receipt.get("kind").and_then(Value::as_str).unwrap_or_else(|| {
-                    if receipt.get("target_local_command_hash").is_some() {
+                    if receipt.get("hook_results").is_some()
+                        || receipt.get("overall_status").is_some()
+                    {
                         "save"
                     } else {
                         "receipt"
                     }
                 }),
-                receipt.get("status").and_then(Value::as_str).unwrap_or_default(),
+                receipt
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .or_else(|| receipt.get("overall_status").and_then(Value::as_str))
+                    .unwrap_or_default(),
                 receipt
                     .get("subject_id")
                     .and_then(Value::as_str)
@@ -3052,10 +3218,11 @@ fn failed_save(
         id: ReceiptId::generate(),
         changepack_id: pack.id.clone(),
         actor: resolve_actor(&ws.layout.draft_dir),
-        status: SaveStatus::Failed,
+        native_save_status: NativeSaveStatus::Failed,
+        hook_status: HookStatus::Skipped,
+        overall_status: SaveOverallStatus::Failed,
         message_ref: store.put_bytes(b"")?,
-        target_local_command_hash: None,
-        external_result: None,
+        hook_results: Vec::new(),
         started_at: started,
         ended_at: now(),
         receipt_hash: String::new(),
@@ -3073,43 +3240,48 @@ fn render_message(
     receipt_id: &ReceiptId,
 ) -> String {
     let title = pack.name.clone().unwrap_or_else(|| pack.id.to_string());
-    cfg.target_message_template
-        .replace("{message}", &title)
-        .replace("{title}", &title)
-        .replace("{description}", "")
-        .replace(
-            "{task_id}",
-            pack.task_id.as_ref().map(|x| x.as_str()).unwrap_or(""),
-        )
-        .replace(
-            "{run_id}",
-            pack.run_id.as_ref().map(|x| x.as_str()).unwrap_or(""),
-        )
-        .replace("{changepack_id}", pack.id.as_str())
-        .replace("{receipt_id}", receipt_id.as_str())
-        .replace("{author_name}", &cfg.identity_username)
-        .replace("{author_email}", &cfg.identity_email)
-        .replace("{timestamp}", &now().to_rfc3339())
-        .replace(
-            "{verified}",
-            if pack.verification_refs.is_empty() {
-                "false"
-            } else {
-                "true"
-            },
-        )
-        .replace("{risk_level}", "unknown")
-        .replace("{files_changed}", &patch.files.len().to_string())
+    let mut values = BTreeMap::new();
+    values.insert("message".to_string(), title.clone());
+    values.insert("title".to_string(), title);
+    values.insert("description".to_string(), String::new());
+    values.insert(
+        "task_id".to_string(),
+        pack.task_id
+            .as_ref()
+            .map(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+    );
+    values.insert(
+        "run_id".to_string(),
+        pack.run_id
+            .as_ref()
+            .map(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+    );
+    values.insert("changepack_id".to_string(), pack.id.to_string());
+    values.insert("receipt_id".to_string(), receipt_id.to_string());
+    values.insert("actor_name".to_string(), cfg.identity_username.clone());
+    values.insert("actor_email".to_string(), cfg.identity_email.clone());
+    values.insert("timestamp".to_string(), now().to_rfc3339());
+    values.insert(
+        "verified".to_string(),
+        (!pack.verification_refs.is_empty()).to_string(),
+    );
+    values.insert("risk_level".to_string(), "unknown".to_string());
+    values.insert("files_changed".to_string(), patch.files.len().to_string());
+    interpolate_lenient(&cfg.save_message_template, &values)
 }
 
-fn resolve_snapshot_target(ws: &Workspace, target: &str) -> DraftResult<Snapshot> {
-    if target.starts_with("snap_") {
-        return load_snapshot(ws, &SnapshotId::new(target));
+fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Snapshot> {
+    if reference.starts_with("snap_") {
+        return load_snapshot(ws, &SnapshotId::new(reference));
     }
-    if let Ok(pack) = load_pack(ws, target) {
+    if let Ok(pack) = load_pack(ws, reference) {
         return load_snapshot(ws, &pack.base_snapshot_id);
     }
-    let receipt_path = ws.layout.receipts_dir().join(format!("{target}.json"));
+    let receipt_path = ws.layout.receipts_dir().join(format!("{reference}.json"));
     if receipt_path.exists() {
         let value: Value = read_json(&receipt_path)?;
         if let Some(snapshot_id) = value.get("subject_id").and_then(Value::as_str) {
@@ -3119,7 +3291,7 @@ fn resolve_snapshot_target(ws: &Workspace, target: &str) -> DraftResult<Snapshot
         }
     }
     Err(DraftError::not_found(format!(
-        "unknown rollback target '{target}'"
+        "unknown rollback reference '{reference}'"
     )))
 }
 
@@ -3191,16 +3363,233 @@ fn safe_workspace_dest(root: &Path, rel: &WorkspacePath) -> DraftResult<PathBuf>
     Ok(dest)
 }
 
+#[derive(Debug)]
+struct HookContext {
+    message: String,
+    title: String,
+    description: String,
+    task_id: String,
+    run_id: String,
+    changepack_id: String,
+    receipt_id: String,
+    actor_name: String,
+    actor_email: String,
+    timestamp: String,
+    verified: String,
+    risk_level: String,
+    files_changed: String,
+    workspace_root: String,
+    hook_name: String,
+    hook_phase: String,
+    vars: BTreeMap<String, String>,
+}
+
+#[derive(Debug)]
+struct HookFailure {
+    message: String,
+}
+
+fn run_hook(
+    ws: &Workspace,
+    store: &ObjectStore,
+    hook_name: &str,
+    hook: &HookEntry,
+    ctx: &HookContext,
+) -> Result<HookResult, HookFailure> {
+    let mut values = hook_values(ctx);
+    for (k, v) in &ctx.vars {
+        values.insert(k.clone(), v.clone());
+    }
+    let command = interpolate_strict(&hook.command, &values)?;
+    let shell_name = default_shell();
+    let cwd = match hook.cwd.as_str() {
+        "workspace" | "" => ws.root.clone(),
+        other => ws.root.join(other),
+    };
+    let mut env = hook_env(ctx);
+    for (k, v) in &hook.env {
+        env.insert(k.clone(), v.clone());
+    }
+    let mut env_keys: Vec<String> = env.keys().cloned().collect();
+    env_keys.sort();
+    let hash = command_hash(&shell_name, &cwd, &command, &ctx.message);
+    let started_at = now();
+    let out = shell_with_env(&command, &cwd, &env);
+    let ended_at = now();
+    let (exit_code, stdout, stderr) = match out {
+        Ok(o) => (o.status.code().unwrap_or(-1), o.stdout, o.stderr),
+        Err(e) => (-1, Vec::new(), e.to_string().into_bytes()),
+    };
+    let stdout_ref = store
+        .put_bytes(&stdout)
+        .map_err(|e| HookFailure { message: e.message })?;
+    let stderr_ref = store
+        .put_bytes(&stderr)
+        .map_err(|e| HookFailure { message: e.message })?;
+    Ok(HookResult {
+        hook_name: hook_name.to_string(),
+        hook_phase: hook.phase.clone(),
+        shell: shell_name,
+        working_dir: cwd.display().to_string(),
+        command_hash: hash,
+        exit_code,
+        stdout_ref,
+        stderr_ref,
+        started_at,
+        ended_at,
+        env_keys,
+    })
+}
+
+fn hook_values(ctx: &HookContext) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("message".to_string(), ctx.message.clone()),
+        ("title".to_string(), ctx.title.clone()),
+        ("description".to_string(), ctx.description.clone()),
+        ("task_id".to_string(), ctx.task_id.clone()),
+        ("run_id".to_string(), ctx.run_id.clone()),
+        ("changepack_id".to_string(), ctx.changepack_id.clone()),
+        ("receipt_id".to_string(), ctx.receipt_id.clone()),
+        ("actor_name".to_string(), ctx.actor_name.clone()),
+        ("actor_email".to_string(), ctx.actor_email.clone()),
+        ("timestamp".to_string(), ctx.timestamp.clone()),
+        ("verified".to_string(), ctx.verified.clone()),
+        ("risk_level".to_string(), ctx.risk_level.clone()),
+        ("files_changed".to_string(), ctx.files_changed.clone()),
+        ("workspace_root".to_string(), ctx.workspace_root.clone()),
+        ("hook_name".to_string(), ctx.hook_name.clone()),
+        ("hook_phase".to_string(), ctx.hook_phase.clone()),
+    ])
+}
+
+fn hook_env(ctx: &HookContext) -> BTreeMap<String, String> {
+    let mut env = BTreeMap::new();
+    env.insert("DRAFT_HOOK_NAME".to_string(), ctx.hook_name.clone());
+    env.insert("DRAFT_HOOK_PHASE".to_string(), ctx.hook_phase.clone());
+    env.insert(
+        "DRAFT_WORKSPACE_ROOT".to_string(),
+        ctx.workspace_root.clone(),
+    );
+    env.insert("DRAFT_RECEIPT_ID".to_string(), ctx.receipt_id.clone());
+    env.insert(
+        "DRAFT_CHANGE_PACK_ID".to_string(),
+        ctx.changepack_id.clone(),
+    );
+    env.insert("DRAFT_ACTOR_NAME".to_string(), ctx.actor_name.clone());
+    env.insert("DRAFT_ACTOR_EMAIL".to_string(), ctx.actor_email.clone());
+    for (k, v) in &ctx.vars {
+        env.insert(format!("DRAFT_VAR_{}", k.to_ascii_uppercase()), v.clone());
+    }
+    env
+}
+
+pub fn parse_hook_vars(values: Vec<String>) -> DraftResult<BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    for item in values {
+        if item.starts_with('-') {
+            return Err(DraftError::invalid_config(
+                "normal Draft flags are not allowed after --var",
+            ));
+        }
+        let (key, value) = item
+            .split_once('=')
+            .ok_or_else(|| DraftError::invalid_config("--var entries must be key=value"))?;
+        if !valid_var_name(key) {
+            return Err(DraftError::invalid_config(format!(
+                "invalid hook variable name '{key}'"
+            )));
+        }
+        if builtin_placeholder_names().contains(key) {
+            return Err(DraftError::invalid_config(format!(
+                "hook variable '{key}' overrides a built-in placeholder"
+            )));
+        }
+        out.insert(key.to_string(), value.to_string());
+    }
+    Ok(out)
+}
+
+fn valid_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn builtin_placeholder_names() -> BTreeSet<&'static str> {
+    BTreeSet::from([
+        "message",
+        "title",
+        "description",
+        "task_id",
+        "run_id",
+        "changepack_id",
+        "receipt_id",
+        "actor_name",
+        "actor_email",
+        "timestamp",
+        "verified",
+        "risk_level",
+        "files_changed",
+        "workspace_root",
+        "hook_name",
+        "hook_phase",
+    ])
+}
+
+fn interpolate_lenient(template: &str, values: &BTreeMap<String, String>) -> String {
+    let mut out = template.to_string();
+    for (k, v) in values {
+        out = out.replace(&format!("{{{{{k}}}}}"), v);
+    }
+    out
+}
+
+fn interpolate_strict(
+    template: &str,
+    values: &BTreeMap<String, String>,
+) -> Result<String, HookFailure> {
+    let mut out = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let end = after.find("}}").ok_or_else(|| HookFailure {
+            message: "unclosed hook placeholder".to_string(),
+        })?;
+        let name = &after[..end];
+        let value = values.get(name).ok_or_else(|| HookFailure {
+            message: format!("missing hook placeholder '{{{{{name}}}}}'"),
+        })?;
+        out.push_str(value);
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
 fn shell(command: &str, cwd: &Path) -> std::io::Result<std::process::Output> {
+    shell_with_env(command, cwd, &BTreeMap::new())
+}
+
+fn shell_with_env(
+    command: &str,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+) -> std::io::Result<std::process::Output> {
     if cfg!(windows) {
-        Command::new("cmd")
-            .args(["/C", command])
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", command])
             .current_dir(cwd)
+            .envs(env)
             .output()
     } else {
-        Command::new("sh")
-            .args(["-c", command])
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", command])
             .current_dir(cwd)
+            .envs(env)
             .output()
     }
 }
@@ -3210,14 +3599,6 @@ fn default_shell() -> String {
         "cmd.exe /C".to_string()
     } else {
         "sh -c".to_string()
-    }
-}
-
-fn shell_quote(s: &str) -> String {
-    if cfg!(windows) {
-        format!("\"{}\"", s.replace('"', "\\\""))
-    } else {
-        format!("'{}'", s.replace('\'', "'\"'\"'"))
     }
 }
 

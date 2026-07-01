@@ -8,6 +8,104 @@ fn draft(dir: &std::path::Path) -> Assert {
     c
 }
 
+fn write_saved_message_command() -> &'static str {
+    if cfg!(windows) {
+        "echo \"{{message}}\"> saved-message.txt"
+    } else {
+        "printf %s \"{{message}}\" > saved-message.txt"
+    }
+}
+
+fn failing_command() -> &'static str {
+    if cfg!(windows) {
+        "exit /B 7"
+    } else {
+        "exit 7"
+    }
+}
+
+fn hook_var_command() -> &'static str {
+    if cfg!(windows) {
+        "echo {{ticket}}:%DRAFT_VAR_TICKET%> hook-vars.txt"
+    } else {
+        "printf %s \"{{ticket}}:$DRAFT_VAR_TICKET\" > hook-vars.txt"
+    }
+}
+
+fn create_verified_approved_pack(dir: &std::path::Path, name: &str) -> String {
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    let out = draft(dir)
+        .args([
+            "pack",
+            "create",
+            "--name",
+            name,
+            "--from-working-tree",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pack_id = pack["id"].as_str().unwrap().to_string();
+    draft(dir).args(["verify", &pack_id]).assert().success();
+    draft(dir).args(["approve", &pack_id]).assert().success();
+    pack_id
+}
+
+fn write_rich_hook_config(dir: &std::path::Path, command: &str, continue_on_error: bool) {
+    let content = format!(
+        r#"[identity]
+username = "Ada"
+email = "ada@example.com"
+
+[save]
+message_template = "{{{{title}}}}"
+
+[hooks.save]
+command = "{}"
+enabled = true
+phase = "after_success"
+shell = "default"
+cwd = "workspace"
+continue_on_error = {}
+
+[verification]
+default_profile = "standard"
+
+[policy]
+require_verification = true
+require_approval = true
+require_human_approval_for_high_risk = true
+block_if_tests_fail = true
+"#,
+        command.replace('\\', "\\\\").replace('"', "\\\""),
+        continue_on_error
+    );
+    std::fs::write(dir.join(".draft/config.toml"), content).unwrap();
+}
+
+fn collect_files(path: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    if path.is_file() {
+        files.push(path.to_path_buf());
+        return;
+    }
+    for entry in std::fs::read_dir(path).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_files(&path, files);
+        } else {
+            files.push(path);
+        }
+    }
+}
+
 #[test]
 fn init_status_ignore_and_events_work_without_vcs() {
     let tmp = tempfile::tempdir().unwrap();
@@ -102,21 +200,18 @@ fn changepack_verify_approve_and_save_native_only() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|r| r["status"] == "saved_native_only"));
+        .any(|r| r["overall_status"] == "saved"
+            && r["hook_status"] == "not_configured"
+            && r["native_save_status"] == "saved"));
 }
 
 #[test]
-fn target_local_is_opaque_and_captures_receipt() {
+fn raw_hooks_save_is_opaque_and_captures_receipt() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
     draft(dir)
-        .args([
-            "config",
-            "set",
-            "target.local",
-            "printf %s {message} > saved-message.txt",
-        ])
+        .args(["config", "set", "hooks.save", write_saved_message_command()])
         .assert()
         .success();
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
@@ -148,7 +243,124 @@ fn target_local_is_opaque_and_captures_receipt() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|r| r["target_local_command_hash"].is_string()));
+        .any(|r| r["hook_results"][0]["command_hash"].is_string()
+            && r["hook_results"][0]["exit_code"] == 0
+            && r["hook_results"][0]["stdout_ref"].is_string()
+            && r["hook_results"][0]["stderr_ref"].is_string()
+            && r["overall_status"] == "saved"));
+}
+
+#[test]
+fn rich_hooks_save_supports_dynamic_vars_and_env() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    write_rich_hook_config(dir, hook_var_command(), false);
+    let pack_id = create_verified_approved_pack(dir, "var-save");
+
+    draft(dir)
+        .args(["save", &pack_id, "--var", "ticket=AUTH-123"])
+        .assert()
+        .success();
+
+    let rendered = std::fs::read_to_string(dir.join("hook-vars.txt")).unwrap();
+    assert!(rendered.contains("AUTH-123:AUTH-123"));
+}
+
+#[test]
+fn hooks_save_failure_obeys_continue_on_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    write_rich_hook_config(dir, failing_command(), true);
+    let pack_id = create_verified_approved_pack(dir, "continue-hook-failure");
+
+    draft(dir).args(["save", &pack_id]).assert().success();
+    let receipts = draft(dir)
+        .args(["receipt", "list", "--json"])
+        .output()
+        .unwrap();
+    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
+    assert!(receipts.as_array().unwrap().iter().any(|r| {
+        r["native_save_status"] == "saved"
+            && r["hook_status"] == "failed"
+            && r["overall_status"] == "saved_with_hook_failure"
+    }));
+}
+
+#[test]
+fn hooks_save_failure_fails_closed_by_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    write_rich_hook_config(dir, failing_command(), false);
+    let pack_id = create_verified_approved_pack(dir, "fail-closed-hook");
+
+    draft(dir)
+        .args(["save", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("SAVE_FAILED"));
+    let receipts = draft(dir)
+        .args(["receipt", "list", "--json"])
+        .output()
+        .unwrap();
+    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
+    assert!(receipts.as_array().unwrap().iter().any(|r| {
+        r["native_save_status"] == "saved"
+            && r["hook_status"] == "failed"
+            && r["overall_status"] == "failed"
+    }));
+}
+
+#[test]
+fn hooks_save_missing_placeholder_fails_before_execution() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let command = if cfg!(windows) {
+        "echo ran> should-not-exist && echo {{missing}}"
+    } else {
+        "touch should-not-exist && echo {{missing}}"
+    };
+    write_rich_hook_config(dir, command, false);
+    let pack_id = create_verified_approved_pack(dir, "missing-placeholder");
+
+    draft(dir)
+        .args(["save", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("SAVE_FAILED"));
+    assert!(!dir.join("should-not-exist").exists());
+}
+
+#[test]
+fn hook_var_tail_validation_rejects_invalid_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let pack_id = create_verified_approved_pack(dir, "bad-vars");
+
+    draft(dir)
+        .args(["save", &pack_id, "--var", "bad-name=x"])
+        .assert()
+        .failure()
+        .stderr(contains("invalid hook variable name"));
+    draft(dir)
+        .args(["save", &pack_id, "--var", "missing_equals"])
+        .assert()
+        .failure()
+        .stderr(contains("key=value"));
+    draft(dir)
+        .args(["save", &pack_id, "--var", "message=nope"])
+        .assert()
+        .failure()
+        .stderr(contains("overrides a built-in"));
+    draft(dir)
+        .args(["save", &pack_id, "--var", "--json"])
+        .assert()
+        .failure()
+        .stderr(contains("normal Draft flags"));
 }
 
 #[test]
@@ -174,7 +386,7 @@ fn save_aborts_if_pack_candidate_contains_draft_dir() {
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
     draft(dir)
-        .args(["config", "set", "target.local", "touch should-not-exist"])
+        .args(["config", "set", "hooks.save", "touch should-not-exist"])
         .assert()
         .success();
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
@@ -229,14 +441,81 @@ fn save_aborts_if_pack_candidate_contains_draft_dir() {
 }
 
 #[test]
-fn remote_target_is_reserved() {
+fn v03_docs_do_not_use_retired_external_action_terms() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut files = Vec::new();
+    for rel in [
+        "docs",
+        "plans/v0.3.0",
+        "examples",
+        "README.md",
+        "RELEASE_NOTES.md",
+        "SECURITY.md",
+        "CONTRIBUTING.md",
+    ] {
+        let path = root.join(rel);
+        if path.exists() {
+            collect_files(&path, &mut files);
+        }
+    }
+
+    let retired_terms = [
+        "target.local",
+        "target.remote",
+        "remote target",
+        "remote targets",
+        "provider",
+        "providers",
+        "landing",
+        "commit-native",
+        "target_local_command_hash",
+        "external command result",
+        "[target]",
+        "target-local",
+        "remote-target",
+        "hooks.remote",
+        "draft push",
+        "draft pr ",
+        "branch",
+        "branches",
+    ];
+
+    let mut violations = Vec::new();
+    for file in files {
+        let Ok(content) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let lower = content.to_lowercase();
+        for term in retired_terms {
+            if lower.contains(term) {
+                violations.push(format!("{} contains {term}", file.display()));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "retired external-action terms remain:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn old_target_keys_are_rejected() {
     let tmp = tempfile::tempdir().unwrap();
     draft(tmp.path()).args(["init"]).assert().success();
+    draft(tmp.path())
+        .args(["config", "set", "target.local", "anything"])
+        .assert()
+        .failure()
+        .stderr(contains("retired external-action config keys"));
     draft(tmp.path())
         .args(["config", "set", "target.remote", "anything"])
         .assert()
         .failure()
-        .stderr(contains("Remote targets are planned for Draft v0.4.0"));
+        .stderr(contains("retired external-action config keys"));
 }
 
 #[test]

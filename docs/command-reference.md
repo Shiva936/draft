@@ -20,7 +20,7 @@ Creates a snapshot and receipt. Use checkpoints before agent runs, large edits, 
 
 ### `draft index rebuild`
 
-Rebuilds the local SQLite index from durable store files. Indexes are cache data; the JSON/JSONL store remains authoritative.
+Rebuilds the local SQLite index from durable store files. Indexes are cache data; the JSON/JSONL store remains actoritative.
 
 ## Configuration And Ignore Rules
 
@@ -30,10 +30,19 @@ Reads and writes Draft config. Supported v0.3.0 keys include:
 
 - `identity.username`
 - `identity.email`
-- `target.local`
-- `target.message_template`
+- `hooks.save`
+- `hooks.verify`
+- `save.message_template`
 
-`target.remote` is reserved and rejected in v0.3.0.
+Draft v0.3.0 has no external-action config keys. User-owned remote commands may be configured only as opaque hook command text.
+
+Hook-capable commands accept `--var` as a tail marker for dynamic hook variables:
+
+```bash
+draft save auth-refactor --var ticket="AUTH-123" release="v0.3.0"
+```
+
+Every token after `--var` must be `key=value`; normal Draft flags are not allowed after it.
 
 ### `draft ignore add|remove|list`
 
@@ -101,13 +110,13 @@ Creates a new changepack from compatible sources. Overlapping changes are reject
 
 ### `draft save <pack-id>`
 
-Saves an approved, verified changepack into `.draft/`, optionally runs `target.local`, and records a save receipt. Draft aborts before external command execution if `.draft/` is present in the save candidate.
+Saves an approved, verified changepack into `.draft/`, optionally runs `hooks.save`, and records a save receipt. `hooks.save` may be a raw command string or rich hook entry. Draft aborts before hook execution if `.draft/` is present in the save candidate. Hook placeholders use `{{name}}`.
 
-### `draft rollback <target> --plan`
+### `draft rollback <snapshot-or-receipt> --plan`
 
 Previews affected files.
 
-### `draft rollback <target> --yes`
+### `draft rollback <snapshot-or-receipt> --yes`
 
 Applies rollback after explicit confirmation.
 

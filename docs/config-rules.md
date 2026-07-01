@@ -12,15 +12,21 @@ Human-readable actor name used in events, receipts, reviews, and approvals.
 
 Optional actor email used only as Draft metadata.
 
-## Local Save Target
+## Hooks
 
-`target.local`
+`hooks.save`
 
-An optional opaque command string. Draft runs it after a changepack is verified, approved, policy-allowed, and confirmed to have no `.draft/` save-candidate violation.
+An optional opaque command hook. It may be a raw command string or a rich hook entry. Draft runs it after a changepack is verified, approved, policy-allowed, and confirmed to have no `.draft/` save-candidate violation.
 
-`target.message_template`
+`hooks.verify`
 
-Template used to render the save message. The rendered message is stored as an object and can be interpolated into `target.local` with `{message}`.
+Configuration namespace for verification hooks. It uses the same hook entry model as `hooks.save`.
+
+`save.message_template`
+
+Template used to render the save message. The rendered message is stored as an object and can be interpolated into `hooks.save` with `{{message}}`.
+
+Hook command placeholders use `{{name}}`. Hook-capable commands may supply dynamic variables through `--var key=value`; these become `{{key}}` placeholders and `DRAFT_VAR_KEY` environment variables.
 
 ## Verification
 
@@ -31,10 +37,6 @@ Name of the default verification profile. The profile commands are read from Dra
 ## Policy
 
 Policy values are stored in `.draft/policy.toml`. Defaults require verification and approval before save. See [policy.md](policy.md).
-
-## Reserved Keys
-
-`target.remote` is reserved for a later version and is rejected in v0.3.0. Reserved keys should not be used by scripts because their behavior is intentionally undefined in this release.
 
 ## Precedence
 

@@ -39,10 +39,10 @@ draft-core::App
 5. Verification and risk attach evidence and policy inputs.
 6. Review decisions approve or reject the changepack.
 7. Save records the verified changepack and receipt in `.draft/`.
-8. Optional `target.local` execution is captured as receipt evidence.
+8. Optional `hooks.save` execution is captured as receipt evidence.
 9. Every important transition appends a hash-chained event.
 
-## Store Authority
+## Store Actority
 
 JSON and JSONL records are the durable source of truth. SQLite indexes are rebuildable caches. Object files are content-addressed by hash.
 

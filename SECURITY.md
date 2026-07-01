@@ -8,7 +8,7 @@ The active development line is v0.3.x until the next minor line is released.
 
 ## Reporting
 
-Please report suspected vulnerabilities privately to the project maintainers before public disclosure. Include the Draft version or commit tested, operating system and shell, reproduction steps, and whether `.draft/` contents, receipts, rollback, event integrity, or `target.local` were involved.
+Please report suspected vulnerabilities privately to the project maintainers before public disclosure. Include the Draft version or commit tested, operating system and shell, reproduction steps, and whether `.draft/` contents, receipts, rollback, event integrity, or hooks were involved.
 
 ## Security-Sensitive Areas
 
@@ -17,7 +17,7 @@ Please report suspected vulnerabilities privately to the project maintainers bef
 - `.draft/` hard exclusion;
 - event hash-chain verification;
 - receipt integrity;
-- external command capture through `target.local`;
+- external command capture through hooks;
 - daemon IPC request validation.
 
 ## Non-Goals In v0.3.0

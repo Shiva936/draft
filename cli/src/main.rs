@@ -82,6 +82,8 @@ enum Command {
     /// Run configured verification checks.
     Verify {
         pack: String,
+        #[arg(long = "var", num_args = 1.., allow_hyphen_values = true, value_name = "key=value")]
+        vars: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -135,15 +137,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Save an approved changepack into .draft/ and optionally target.local.
+    /// Save an approved changepack into .draft/ and optionally run hooks.save.
     Save {
         pack: String,
+        #[arg(long = "var", num_args = 1.., allow_hyphen_values = true, value_name = "key=value")]
+        vars: Vec<String>,
         #[arg(long)]
         json: bool,
     },
     /// Roll back to a checkpoint, pack base snapshot, or receipt.
     Rollback {
-        target: String,
+        reference: String,
         #[arg(long)]
         plan: bool,
         #[arg(long)]
@@ -396,7 +400,8 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             }
             None => render_json_or_text(app.runs(&cwd)?, json, "Runs"),
         },
-        Command::Verify { pack, json } => {
+        Command::Verify { pack, vars, json } => {
+            let _vars = draft_core::parse_hook_vars(vars)?;
             render_json_or_text(app.verify(&cwd, &pack)?, json, "Verification complete")
         }
         Command::Risk { pack, json } => {
@@ -453,19 +458,24 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             json,
             "Compose complete",
         ),
-        Command::Save { pack, json } => {
-            render_json_or_text(app.save(&cwd, &pack)?, json, "Changepack saved")
+        Command::Save { pack, vars, json } => {
+            let vars = draft_core::parse_hook_vars(vars)?;
+            render_json_or_text(app.save(&cwd, &pack, vars)?, json, "Changepack saved")
         }
         Command::Rollback {
-            target,
+            reference,
             plan,
             yes,
             json,
         } => {
             if plan {
-                render_json_or_text(app.rollback_plan(&cwd, &target)?, json, "Rollback plan")
+                render_json_or_text(app.rollback_plan(&cwd, &reference)?, json, "Rollback plan")
             } else {
-                render_json_or_text(app.rollback(&cwd, &target, yes)?, json, "Rollback complete")
+                render_json_or_text(
+                    app.rollback(&cwd, &reference, yes)?,
+                    json,
+                    "Rollback complete",
+                )
             }
         }
         Command::Receipt { action } => match action {

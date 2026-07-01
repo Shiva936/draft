@@ -4,9 +4,11 @@
 username = "Ada"
 email = "ada@example.com"
 
-[target]
-local = ""
-message_template = "{title}\n\n{description}\n\nDraft-Task: {task_id}\nDraft-Run: {run_id}\nDraft-Changepack: {changepack_id}\nDraft-Verified: {verified}\nDraft-Risk: {risk_level}\nDraft-Receipt: {receipt_id}\nDraft-Author: {author_name} <{author_email}>"
+[save]
+message_template = "{{title}}\n\n{{description}}\n\nDraft-Task: {{task_id}}\nDraft-Run: {{run_id}}\nDraft-Changepack: {{changepack_id}}\nDraft-Verified: {{verified}}\nDraft-Risk: {{risk_level}}\nDraft-Receipt: {{receipt_id}}\nDraft-Actor: {{actor_name}} <{{actor_email}}>"
+
+[hooks]
+save = ""
 
 [verification]
 default_profile = "standard"

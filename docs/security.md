@@ -20,7 +20,7 @@ Untrusted or sensitive:
 
 ## Hard `.draft/` Exclusion
 
-`.draft/` is private metadata. Draft excludes it from scans, snapshots, changepacks, save candidates, rollback plans, and external command candidate checks.
+`.draft/` is private metadata. Draft excludes it from scans, snapshots, changepacks, save candidates, rollback plans, and hook candidate checks.
 
 If `.draft/` appears in a save candidate, Draft:
 
@@ -28,7 +28,7 @@ If `.draft/` appears in a save candidate, Draft:
 2. aborts the save;
 3. emits `SaveFailed`;
 4. records a failed save receipt;
-5. skips `target.local`.
+5. skips `hooks.save`.
 
 ## Event Integrity
 
@@ -40,13 +40,13 @@ draft events --verify-chain
 
 This detects edits, missing links, and parse failures. Event hashing is tamper-evident, not a substitute for backups or cryptographic signing.
 
-## External Commands
+## Hooks And External Commands
 
-`target.local` and `spawn` execute local commands. Draft captures stdout, stderr, exit code, working directory, and command hash, but it does not sandbox the command. Users should configure commands carefully and review receipts.
+`hooks.save`, `hooks.verify`, future `hooks.*` entries, and `spawn` execute local commands. Draft captures stdout, stderr, exit code, working directory, and command hash, but it does not sandbox the command. Users should configure commands carefully and review receipts.
 
 ## Rollback Safety
 
-Rollback plans should be reviewed before applying. Draft filters `.draft/` from rollback targets and rejects paths that escape the workspace root.
+Rollback plans should be reviewed before applying. Draft filters `.draft/` from rollback paths and rejects paths that escape the workspace root.
 
 ## Disclosure
 

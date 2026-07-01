@@ -21,15 +21,18 @@ A save receipt records:
 - receipt id;
 - changepack id;
 - actor;
-- status;
+- native save status;
+- hook status;
+- overall status;
 - rendered message object reference;
-- optional `target.local` command hash;
-- optional external command result;
+- optional hook results;
 - start and end times;
 - failure reason when applicable;
 - receipt hash.
 
-If `target.local` runs, stdout and stderr are stored as objects and referenced by the receipt.
+If `hooks.save` runs, the receipt records the hook name, command hash, shell, working directory, exit code, timestamps, and stdout/stderr object references.
+
+If the Draft-native save succeeds but a required hook fails, the receipt records `native_save_status = "saved"`, `hook_status = "failed"`, and `overall_status = "failed"`. With `continue_on_error = true`, Draft records `overall_status = "saved_with_hook_failure"`.
 
 ## Failed Save Receipts
 
