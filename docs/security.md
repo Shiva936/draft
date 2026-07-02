@@ -1,6 +1,6 @@
 # Security Model
 
-Draft v0.3.0 is a local tool. Its security model focuses on protecting the local workspace, preserving audit evidence, and preventing Draft metadata from entering user change candidates.
+Draft v0.3.1 is a local tool. Its security model focuses on protecting the local workspace, preserving audit evidence, and preventing Draft metadata from entering user change candidates.
 
 ## Trust Boundary
 
@@ -26,7 +26,7 @@ If `.draft/` appears in a save candidate, Draft:
 
 1. warns;
 2. aborts the save;
-3. emits `SaveFailed`;
+3. emits `save.completed` with failure status;
 4. records a failed save receipt;
 5. skips `hooks.save`.
 
@@ -46,7 +46,7 @@ This detects edits, missing links, and parse failures. Event hashing is tamper-e
 
 ## Rollback Safety
 
-Rollback plans should be reviewed before applying. Draft filters `.draft/` from rollback paths and rejects paths that escape the workspace root.
+Rollback receipts and events should be reviewed after applying. Draft filters `.draft/` from rollback paths and rejects paths that escape the workspace root.
 
 ## Disclosure
 

@@ -129,12 +129,7 @@ fn daemon_dispatcher_covers_control_plane() {
         ("19", "events.verify", json!({})),
         ("20", "events.replay", json!({})),
         ("21", "index.rebuild", json!({})),
-        ("22", "rollback.plan", json!({ "target": snapshot_id })),
-        (
-            "23",
-            "rollback.apply",
-            json!({ "target": snapshot_id, "yes": true }),
-        ),
+        ("22", "rollback.run", json!({ "target": snapshot_id })),
         ("24", "run.list", json!({})),
     ] {
         let mut params = extra;

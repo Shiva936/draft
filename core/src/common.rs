@@ -103,7 +103,7 @@ id_newtype!(
     ReviewSessionId, "rev_");
 id_newtype!(
     /// Identifies a Draft checkpoint.
-    CheckpointId, "ckpt_");
+    CheckpointId, "chk_");
 id_newtype!(
     /// Identifies a verification plan.
     VerificationPlanId, "vplan_");
@@ -112,7 +112,7 @@ id_newtype!(
     VerificationResultId, "vres_");
 id_newtype!(
     /// Identifies a durable receipt.
-    ReceiptId, "rcpt_");
+    ReceiptId, "rcp_");
 id_newtype!(
     /// Identifies an actor (human/agent/service).
     ActorId, "act_");

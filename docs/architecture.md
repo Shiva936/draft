@@ -1,6 +1,6 @@
 # Architecture
 
-Draft v0.3.0 is structured as a local-first Rust workspace:
+Draft v0.3.1 is structured as a local-first Rust workspace:
 
 ```text
 cli / tui

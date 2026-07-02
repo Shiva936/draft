@@ -20,6 +20,6 @@ Please report suspected vulnerabilities privately to the project maintainers bef
 - external command capture through hooks;
 - daemon IPC request validation.
 
-## Non-Goals In v0.3.0
+## Non-Goals
 
-Draft v0.3.0 does not implement network publishing, hosted review flows, or credential exchange. Any external command is user-configured and receipt-backed.
+Draft does not implement network publishing, hosted review flows, or credential exchange. Any external command is user-configured and receipt-backed.

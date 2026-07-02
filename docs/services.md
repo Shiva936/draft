@@ -20,7 +20,7 @@ The daemon does not change Draft’s authority model. Durable state still lives 
 ## Durable Jobs
 
 The service store records durable local jobs for scan, verify, risk, compose,
-save, rollback-plan, and index-rebuild requests. Jobs have queued, running,
+save, rollback, and index-rebuild requests. Jobs have queued, running,
 completed, failed, and cancelled states. Job execution delegates to
 `draft-core`, records the result or error, and keeps the CLI independent from
 the daemon.
@@ -57,4 +57,4 @@ The service store records local daemon metadata so clients can discover service 
 
 ## Reserved Boundary
 
-The `sync` crate is intentionally no-network in v0.3.0. It exists as a named boundary for later design work without changing current local-first behavior.
+The `sync` crate is intentionally no-network in v0.3.1. It exists as a named boundary for later design work without changing current local-first behavior.

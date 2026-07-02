@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -20,13 +20,13 @@ use crate::identity::{resolve_actor, ActorKind, ActorRef};
 use crate::lock::FileGuard;
 
 const DRAFT_DIR: &str = ".draft";
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 
 crate::id_newtype!(EventId, "evt_");
-crate::id_newtype!(SnapshotId, "snap_");
-crate::id_newtype!(TaskId, "task_");
+crate::id_newtype!(SnapshotId, "chk_");
+crate::id_newtype!(TaskId, "tsk_");
 crate::id_newtype!(RunId, "run_");
-crate::id_newtype!(ChangepackId, "pack_");
+crate::id_newtype!(ChangepackId, "pck_");
 crate::id_newtype!(EvidenceId, "evd_");
 crate::id_newtype!(PatchSetId, "patch_");
 crate::id_newtype!(DecisionId, "dec_");
@@ -42,6 +42,10 @@ impl App {
     }
 
     pub fn init(&self, root: &Path) -> DraftResult<InitReport> {
+        self.init_with_base(root, "base")
+    }
+
+    pub fn init_with_base(&self, root: &Path, base_pack_name: &str) -> DraftResult<InitReport> {
         let layout = DraftLayout::for_root(root);
         let created = !layout.draft_dir.exists();
         layout.create_all()?;
@@ -73,9 +77,34 @@ impl App {
         let store = EventStore::new(layout.clone(), meta.id.clone())?;
         if created {
             store.append(
-                "WorkspaceInitialized",
+                "repo.initialized",
                 None,
                 serde_json::json!({ "root": root.display().to_string() }),
+            )?;
+            let base = Changepack::new(
+                meta.id.clone(),
+                None,
+                None,
+                SnapshotId::new("chk_empty"),
+                SnapshotId::new("chk_empty"),
+                Some(base_pack_name.to_string()),
+            );
+            let pack_dir = layout.pack_dir(&base.id);
+            ensure_dir(&pack_dir)?;
+            write_json(&pack_dir.join("manifest.json"), &base)?;
+            write_atomic(
+                layout.selected_pack_file().as_path(),
+                base.id.to_string().as_bytes(),
+            )?;
+            store.append(
+                "pack.created",
+                Some(base.id.to_string()),
+                serde_json::to_value(&base).unwrap_or(Value::Null),
+            )?;
+            store.append(
+                "pack.selected",
+                Some(base.id.to_string()),
+                serde_json::json!({ "name": base_pack_name }),
             )?;
         }
         Ok(InitReport {
@@ -111,7 +140,7 @@ impl App {
         cfg.set(key, value)?;
         write_toml(&ws.layout.config_toml(), &cfg)?;
         ws.events()?
-            .append("ConfigChanged", None, serde_json::json!({ "key": key }))?;
+            .append("config.set", None, serde_json::json!({ "key": key }))?;
         Ok(ConfigReport::single(key, value))
     }
 
@@ -131,7 +160,7 @@ impl App {
         cfg.unset(key)?;
         write_toml(&ws.layout.config_toml(), &cfg)?;
         ws.events()?
-            .append("ConfigChanged", None, serde_json::json!({ "key": key }))?;
+            .append("config.unset", None, serde_json::json!({ "key": key }))?;
         Ok(ConfigReport::single(key, ""))
     }
 
@@ -142,6 +171,85 @@ impl App {
         })
     }
 
+    pub fn hook_list(&self, cwd: &Path) -> DraftResult<ConfigReport> {
+        let report = self.config_list(cwd)?;
+        Ok(ConfigReport {
+            entries: report
+                .entries
+                .into_iter()
+                .filter(|(k, _)| k.starts_with("hooks."))
+                .collect(),
+        })
+    }
+
+    pub fn hook_get(&self, cwd: &Path, key: &str) -> DraftResult<ConfigReport> {
+        self.config_get(cwd, key)
+    }
+
+    pub fn hook_set(&self, cwd: &Path, key: &str, value: &str) -> DraftResult<ConfigReport> {
+        let full_key = if key.starts_with("hooks.") {
+            key.to_string()
+        } else {
+            format!("hooks.{key}")
+        };
+        self.config_set(cwd, &full_key, value)
+    }
+
+    pub fn hook_unset(&self, cwd: &Path, key: &str) -> DraftResult<ConfigReport> {
+        let full_key = if key.starts_with("hooks.") {
+            key.to_string()
+        } else {
+            format!("hooks.{key}")
+        };
+        self.config_unset(cwd, &full_key)
+    }
+
+    pub fn hook_run(&self, cwd: &Path, hook_name: &str) -> DraftResult<HookRunReport> {
+        let ws = self.open(cwd)?;
+        let cfg = ResolvedConfig::load(&ws)?;
+        let hook = cfg.hook(hook_name).ok_or_else(|| {
+            DraftError::not_found(format!("hook '{hook_name}' is not configured"))
+        })?;
+        ws.events()?.append(
+            "hook.started",
+            Some(hook_name.to_string()),
+            serde_json::json!({}),
+        )?;
+        let store = ObjectStore::new(ws.layout.clone());
+        let ctx = HookContext {
+            message: String::new(),
+            title: String::new(),
+            description: String::new(),
+            task_id: String::new(),
+            run_id: String::new(),
+            changepack_id: String::new(),
+            receipt_id: ReceiptId::generate().to_string(),
+            actor_name: cfg.identity_username.clone(),
+            actor_email: cfg.identity_email.clone(),
+            timestamp: now().to_rfc3339(),
+            verified: "false".to_string(),
+            risk_level: "unknown".to_string(),
+            files_changed: "0".to_string(),
+            workspace_root: ws.root.display().to_string(),
+            hook_name: hook_name.to_string(),
+            hook_phase: hook.phase.clone(),
+            vars: BTreeMap::new(),
+        };
+        let result = run_hook(&ws, &store, hook_name, &hook, &ctx)
+            .map_err(|e| DraftError::new(DraftErrorKind::SaveFailed, e.message))?;
+        ws.events()?.append(
+            "hook.completed",
+            Some(hook_name.to_string()),
+            serde_json::to_value(&result).unwrap_or(Value::Null),
+        )?;
+        Ok(HookRunReport {
+            hook_name: hook_name.to_string(),
+            exit_code: result.exit_code,
+            stdout_ref: result.stdout_ref,
+            stderr_ref: result.stderr_ref,
+        })
+    }
+
     pub fn ignore_add(&self, cwd: &Path, pattern: &str) -> DraftResult<IgnoreReport> {
         let ws = self.open(cwd)?;
         let mut patterns = read_ignore_lines(&ws.layout.ignore_file())?;
@@ -149,7 +257,7 @@ impl App {
             patterns.push(pattern.to_string());
             write_atomic(&ws.layout.ignore_file(), patterns.join("\n").as_bytes())?;
             ws.events()?.append(
-                "IgnoreRulesChanged",
+                "ignore.added",
                 None,
                 serde_json::json!({ "action": "add", "pattern": pattern }),
             )?;
@@ -163,7 +271,7 @@ impl App {
         patterns.retain(|p| p != pattern);
         write_atomic(&ws.layout.ignore_file(), patterns.join("\n").as_bytes())?;
         ws.events()?.append(
-            "IgnoreRulesChanged",
+            "ignore.removed",
             None,
             serde_json::json!({ "action": "remove", "pattern": pattern }),
         )?;
@@ -181,7 +289,7 @@ impl App {
         let ws = self.open(cwd)?;
         let status = Scanner::new(&ws)?.status()?;
         ws.events()?.append(
-            "WorkspaceScanned",
+            "workspace.scanned",
             None,
             serde_json::json!({
                 "changes": status.changes.len(),
@@ -189,6 +297,16 @@ impl App {
             }),
         )?;
         Ok(status)
+    }
+
+    pub fn status_v031(
+        &self,
+        cwd: &Path,
+        _pack: Option<&str>,
+        _component: Option<&str>,
+        _full: bool,
+    ) -> DraftResult<WorkspaceStatus> {
+        self.status(cwd)
     }
 
     pub fn checkpoint(&self, cwd: &Path, message: &str) -> DraftResult<CheckpointReport> {
@@ -202,7 +320,7 @@ impl App {
         );
         write_receipt(&ws, &receipt)?;
         ws.events()?.append(
-            "SnapshotCreated",
+            "checkpoint.created",
             Some(snapshot.id.to_string()),
             serde_json::json!({ "message": message }),
         )?;
@@ -236,7 +354,7 @@ impl App {
             &task,
         )?;
         ws.events()?.append(
-            "TaskCreated",
+            "task.created",
             Some(task.id.to_string()),
             serde_json::to_value(&task).unwrap_or(Value::Null),
         )?;
@@ -253,6 +371,239 @@ impl App {
         read_json(&ws.layout.tasks_dir().join(format!("{}.json", id)))
     }
 
+    pub fn task_spawn(
+        &self,
+        cwd: &Path,
+        name: &str,
+        pack_id: Option<&str>,
+        candidates: Vec<String>,
+        cron: Option<String>,
+        instruction: Vec<String>,
+    ) -> DraftResult<TaskSpawnReport> {
+        let instruction = instruction.join(" ");
+        let task = self.task_create(cwd, name, Some(instruction.clone()))?;
+        let ws = self.open(cwd)?;
+        let pack_id = pack_id
+            .map(ToString::to_string)
+            .or_else(|| self.selected_pack_id(cwd).ok());
+        ws.events()?.append(
+            "task.spawned",
+            Some(task.id.to_string()),
+            serde_json::json!({
+                "pack_id": pack_id,
+                "candidates": candidates,
+                "cron": cron,
+                "instruction": redact_secrets(&instruction)
+            }),
+        )?;
+        let mut runs = Vec::new();
+        for candidate in candidates {
+            let record = self.ensure_candidate(&ws, &candidate)?;
+            let command = render_candidate_command(&record.template, &instruction);
+            match self.spawn_run(cwd, task.id.as_str(), &candidate, command) {
+                Ok(run) => runs.push(TaskRunSummary {
+                    candidate: candidate.clone(),
+                    run_id: Some(run.id.to_string()),
+                    status: format!("{:?}", run.status),
+                    error: None,
+                }),
+                Err(e) => runs.push(TaskRunSummary {
+                    candidate: candidate.clone(),
+                    run_id: None,
+                    status: "failed".to_string(),
+                    error: Some(e.to_string()),
+                }),
+            }
+        }
+        Ok(TaskSpawnReport {
+            task,
+            pack_id,
+            cron,
+            runs,
+        })
+    }
+
+    pub fn task_current(&self, cwd: &Path) -> DraftResult<Value> {
+        let tasks = self.task_list(cwd)?;
+        if let Some(task) = tasks.last() {
+            Ok(serde_json::to_value(task).unwrap_or(Value::Null))
+        } else {
+            Ok(serde_json::json!({ "message": "No running tasks." }))
+        }
+    }
+
+    pub fn candidate_list(&self, cwd: &Path) -> DraftResult<Vec<CandidateRecord>> {
+        let ws = self.open(cwd)?;
+        let mut records: Vec<CandidateRecord> = load_json_dir(&ws.layout.candidates_dir())?;
+        for builtin in builtin_candidates() {
+            if !records.iter().any(|r| r.name == builtin.name) {
+                records.push(builtin);
+            }
+        }
+        records.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(records)
+    }
+
+    pub fn candidate_show(&self, cwd: &Path, name: &str) -> DraftResult<CandidateRecord> {
+        let ws = self.open(cwd)?;
+        if let Ok(record) = read_json(&ws.layout.candidates_dir().join(format!("{name}.json"))) {
+            return Ok(record);
+        }
+        builtin_candidates()
+            .into_iter()
+            .find(|r| r.name == name)
+            .ok_or_else(|| DraftError::not_found(format!("unknown candidate '{name}'")))
+    }
+
+    pub fn candidate_add(
+        &self,
+        cwd: &Path,
+        name: &str,
+        kind: Option<&str>,
+        template: Vec<String>,
+    ) -> DraftResult<CandidateRecord> {
+        self.write_candidate(
+            cwd,
+            name,
+            kind.unwrap_or("command"),
+            "custom",
+            template,
+            "candidate.added",
+        )
+    }
+
+    pub fn candidate_update(
+        &self,
+        cwd: &Path,
+        name: &str,
+        kind: Option<&str>,
+        template: Vec<String>,
+    ) -> DraftResult<CandidateRecord> {
+        let existing_kind = self.candidate_show(cwd, name).ok().map(|c| c.kind);
+        self.write_candidate(
+            cwd,
+            name,
+            kind.unwrap_or(existing_kind.as_deref().unwrap_or("command")),
+            "custom",
+            template,
+            "candidate.updated",
+        )
+    }
+
+    pub fn candidate_remove(&self, cwd: &Path, name: &str) -> DraftResult<CandidateRecord> {
+        let ws = self.open(cwd)?;
+        let mut record = self.candidate_show(cwd, name)?;
+        record.active = false;
+        write_json(
+            &ws.layout.candidates_dir().join(format!("{name}.json")),
+            &record,
+        )?;
+        ws.events()?.append(
+            "candidate.removed",
+            Some(name.to_string()),
+            serde_json::json!({}),
+        )?;
+        Ok(record)
+    }
+
+    pub fn candidate_packs(
+        &self,
+        cwd: &Path,
+        pack: Option<&str>,
+        candidate: Option<&str>,
+    ) -> DraftResult<Vec<CandidatePackAssignment>> {
+        let ws = self.open(cwd)?;
+        let packs = self.pack_list(cwd)?;
+        let mut out = Vec::new();
+        for p in packs {
+            if let Some(filter) = pack {
+                if p.id.as_str() != filter && p.name.as_deref() != Some(filter) {
+                    continue;
+                }
+            }
+            let run = p
+                .run_id
+                .as_ref()
+                .and_then(|run_id| self.run_show(&ws.root, run_id.as_str()).ok());
+            let name = run
+                .as_ref()
+                .map(|run| run.actor_name.clone())
+                .unwrap_or_else(|| {
+                    p.run_id
+                        .as_ref()
+                        .map(|_| "unknown".to_string())
+                        .unwrap_or_else(|| "manual".to_string())
+                });
+            if candidate.map(|c| c != name).unwrap_or(false) {
+                continue;
+            }
+            out.push(CandidatePackAssignment {
+                pack_id: p.id.to_string(),
+                candidate: name,
+                task_id: p.task_id.as_ref().map(ToString::to_string),
+                run_id: p.run_id.as_ref().map(ToString::to_string),
+            });
+        }
+        Ok(out)
+    }
+
+    fn write_candidate(
+        &self,
+        cwd: &Path,
+        name: &str,
+        kind: &str,
+        source: &str,
+        template: Vec<String>,
+        event: &str,
+    ) -> DraftResult<CandidateRecord> {
+        let ws = self.open(cwd)?;
+        let record = CandidateRecord {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            source: source.to_string(),
+            template: template.join(" "),
+            role: None,
+            persona: None,
+            active: true,
+        };
+        write_json(
+            &ws.layout.candidates_dir().join(format!("{name}.json")),
+            &record,
+        )?;
+        ws.events()?.append(
+            event,
+            Some(name.to_string()),
+            serde_json::to_value(&record).unwrap_or(Value::Null),
+        )?;
+        Ok(record)
+    }
+
+    fn ensure_candidate(&self, ws: &Workspace, name: &str) -> DraftResult<CandidateRecord> {
+        let path = ws.layout.candidates_dir().join(format!("{name}.json"));
+        if path.exists() {
+            return read_json(&path);
+        }
+        let record = builtin_candidates()
+            .into_iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| CandidateRecord {
+                name: name.to_string(),
+                kind: "command".to_string(),
+                source: "auto".to_string(),
+                template: format!("{name} {{{{instruction}}}}"),
+                role: None,
+                persona: None,
+                active: true,
+            });
+        write_json(&path, &record)?;
+        ws.events()?.append(
+            "candidate.auto_registered",
+            Some(name.to_string()),
+            serde_json::to_value(&record).unwrap_or(Value::Null),
+        )?;
+        Ok(record)
+    }
+
     pub fn pack_create(
         &self,
         cwd: &Path,
@@ -261,6 +612,9 @@ impl App {
         from_working_tree: bool,
     ) -> DraftResult<Changepack> {
         let ws = self.open(cwd)?;
+        if let Some(name) = name.as_deref() {
+            self.ensure_unique_pack_name(&ws, name)?;
+        }
         let base = latest_snapshot(&ws)?.unwrap_or_else(|| empty_snapshot(&ws));
         let result = Snapshotter::new(&ws)?.create_snapshot()?;
         let patch = diff_snapshots(&ws, &base, &result)?;
@@ -303,21 +657,179 @@ impl App {
         pack.manifest_hash = hash_json(&pack)?;
         write_json(&pack_dir.join("manifest.json"), &pack)?;
         ws.events()?.append(
-            "ChangepackCreated",
+            "pack.created",
             Some(pack.id.to_string()),
             serde_json::to_value(&pack).unwrap_or(Value::Null),
+        )?;
+        write_atomic(
+            ws.layout.selected_pack_file().as_path(),
+            pack.id.to_string().as_bytes(),
+        )?;
+        ws.events()?.append(
+            "pack.selected",
+            Some(pack.id.to_string()),
+            serde_json::json!({}),
         )?;
         Ok(pack)
     }
 
+    pub fn pack_create_from_base(
+        &self,
+        cwd: &Path,
+        name: String,
+        base_pack_ref: Option<String>,
+    ) -> DraftResult<Changepack> {
+        let ws = self.open(cwd)?;
+        self.ensure_unique_pack_name(&ws, &name)?;
+        let base_ref = match base_pack_ref {
+            Some(base) => Some(base),
+            None => Some(self.selected_pack_id(cwd)?),
+        };
+        let mut pack = self.pack_create(cwd, Some(name), None, true)?;
+        if let Some(base_ref) = base_ref {
+            let ws = self.open(cwd)?;
+            let base = self.resolve_pack_ref(&ws, &base_ref)?;
+            pack.base_snapshot_id = base.result_snapshot_id.clone();
+            save_pack_manifest(&ws, &mut pack)?;
+        }
+        Ok(pack)
+    }
+
+    pub fn pack_select(&self, cwd: &Path, id: &str) -> DraftResult<Changepack> {
+        self.pack_select_ref(cwd, id)
+    }
+
+    pub fn pack_select_ref(&self, cwd: &Path, reference: &str) -> DraftResult<Changepack> {
+        let ws = self.open(cwd)?;
+        let pack = self.resolve_pack_ref(&ws, reference)?;
+        write_atomic(
+            ws.layout.selected_pack_file().as_path(),
+            pack.id.to_string().as_bytes(),
+        )?;
+        ws.events()?.append(
+            "pack.selected",
+            Some(pack.id.to_string()),
+            serde_json::json!({}),
+        )?;
+        Ok(pack)
+    }
+
+    pub fn pack_show_selected(&self, cwd: &Path) -> DraftResult<PackReport> {
+        let id = self.selected_pack_id(cwd)?;
+        self.pack_show(cwd, &id)
+    }
+
+    pub fn pack_delete_ref(&self, cwd: &Path, reference: &str) -> DraftResult<PackDeleteReport> {
+        let ws = self.open(cwd)?;
+        let pack = self.resolve_pack_ref(&ws, reference)?;
+        if pack.base_snapshot_id.as_str() == "chk_empty"
+            && pack.result_snapshot_id.as_str() == "chk_empty"
+        {
+            return Err(DraftError::invalid_config("cannot delete the base pack"));
+        }
+        let active = self.pack_list(cwd)?;
+        if active.len() <= 1 {
+            return Err(DraftError::invalid_config(
+                "cannot delete the last active pack",
+            ));
+        }
+        let selected = self.selected_pack_id(cwd).ok();
+        let replacement = if selected.as_deref() == Some(pack.id.as_str()) {
+            active
+                .iter()
+                .filter(|p| p.id != pack.id)
+                .max_by_key(|p| p.created_at)
+                .map(|p| p.id.to_string())
+        } else {
+            selected
+        };
+        let Some(replacement_id) = replacement else {
+            return Err(DraftError::invalid_config(
+                "cannot delete selected pack without a replacement",
+            ));
+        };
+        let pack_dir = ws.layout.pack_dir(&pack.id);
+        let mut deleted_files = count_files(&pack_dir)?;
+        let mut deleted_runs = 0usize;
+        let mut deleted_tasks = 0usize;
+        if let Some(run_id) = &pack.run_id {
+            let run_path = ws.layout.runs_dir().join(format!("{run_id}.json"));
+            if run_path.exists() {
+                fs::remove_file(&run_path)?;
+                deleted_files += 1;
+                deleted_runs += 1;
+            }
+        }
+        if let Some(task_id) = &pack.task_id {
+            let task_is_still_referenced = active
+                .iter()
+                .filter(|p| p.id != pack.id)
+                .any(|p| p.task_id.as_ref() == Some(task_id));
+            let task_path = ws.layout.tasks_dir().join(format!("{task_id}.json"));
+            if !task_is_still_referenced && task_path.exists() {
+                fs::remove_file(&task_path)?;
+                deleted_files += 1;
+                deleted_tasks += 1;
+            }
+        }
+        ws.events()?.append(
+            "pack.deleted",
+            Some(pack.id.to_string()),
+            serde_json::json!({
+                "name": pack.name,
+                "replacement_selected_pack": replacement_id,
+                "deleted_files": deleted_files,
+                "deleted_runs": deleted_runs,
+                "deleted_tasks": deleted_tasks
+            }),
+        )?;
+        fs::remove_dir_all(&pack_dir)
+            .map_err(|e| DraftError::storage(format!("failed to delete pack {}: {e}", pack.id)))?;
+        write_atomic(
+            ws.layout.selected_pack_file().as_path(),
+            replacement_id.as_bytes(),
+        )?;
+        let deleted_objects = garbage_collect_objects(&ws)?;
+        Ok(PackDeleteReport {
+            deleted_pack_id: pack.id.to_string(),
+            deleted_pack_name: pack.name,
+            replacement_selected_pack: replacement_id,
+            deleted_files: deleted_files + deleted_objects,
+        })
+    }
+
+    pub fn selected_pack_id(&self, cwd: &Path) -> DraftResult<String> {
+        let ws = self.open(cwd)?;
+        let raw = fs::read_to_string(ws.layout.selected_pack_file()).map_err(|e| {
+            DraftError::not_found(format!(
+                "no selected pack: {e}; run `draft pack -s <pck-id/name>`"
+            ))
+        })?;
+        Ok(raw.trim().to_string())
+    }
+
+    fn resolve_pack_arg(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<String> {
+        match pack_id {
+            Some(id) if !id.trim().is_empty() => Ok(id.to_string()),
+            _ => self.selected_pack_id(cwd),
+        }
+    }
+
     pub fn pack_list(&self, cwd: &Path) -> DraftResult<Vec<Changepack>> {
         let ws = self.open(cwd)?;
+        self.pack_list_for_workspace(&ws)
+    }
+
+    fn pack_list_for_workspace(&self, ws: &Workspace) -> DraftResult<Vec<Changepack>> {
         let mut packs = Vec::new();
         if ws.layout.changepacks_dir().exists() {
             for entry in fs::read_dir(ws.layout.changepacks_dir())? {
                 let p = entry?.path().join("manifest.json");
                 if p.exists() {
-                    packs.push(read_json(&p)?);
+                    let pack: Changepack = read_json(&p)?;
+                    if pack.active {
+                        packs.push(pack);
+                    }
                 }
             }
         }
@@ -327,14 +839,54 @@ impl App {
 
     pub fn pack_show(&self, cwd: &Path, id: &str) -> DraftResult<PackReport> {
         let ws = self.open(cwd)?;
-        let pack = load_pack(&ws, id)?;
-        let patch = load_patch(&ws, &pack)?;
+        let pack = self.resolve_pack_ref(&ws, id)?;
+        let patch = load_patch(&ws, &pack).unwrap_or_else(|_| empty_patch_for_pack(&pack));
         let evidence = load_evidence(&ws, &pack).ok();
         Ok(PackReport {
             pack,
             patch,
             evidence,
         })
+    }
+
+    fn ensure_unique_pack_name(&self, ws: &Workspace, name: &str) -> DraftResult<()> {
+        if name.trim().is_empty() {
+            return Err(DraftError::invalid_config("pack name cannot be empty"));
+        }
+        if self
+            .pack_list_for_workspace(ws)?
+            .iter()
+            .any(|p| p.name.as_deref() == Some(name))
+        {
+            return Err(DraftError::invalid_config(format!(
+                "pack name '{name}' already exists"
+            )));
+        }
+        Ok(())
+    }
+
+    fn resolve_pack_ref(&self, ws: &Workspace, reference: &str) -> DraftResult<Changepack> {
+        if reference.starts_with("pck_") {
+            let pack = load_pack(ws, reference)?;
+            if !pack.active {
+                return Err(DraftError::not_found(format!(
+                    "pack '{reference}' is not active"
+                )));
+            }
+            return Ok(pack);
+        }
+        let matches: Vec<_> = self
+            .pack_list_for_workspace(ws)?
+            .into_iter()
+            .filter(|p| p.name.as_deref() == Some(reference))
+            .collect();
+        match matches.len() {
+            1 => Ok(matches.into_iter().next().unwrap()),
+            0 => Err(DraftError::not_found(format!("unknown pack '{reference}'"))),
+            _ => Err(DraftError::invalid_config(format!(
+                "pack name '{reference}' is ambiguous"
+            ))),
+        }
     }
 
     pub fn spawn_run(
@@ -348,7 +900,7 @@ impl App {
         let base = Snapshotter::new(&ws)?.create_snapshot()?;
         let run_id = RunId::generate();
         ws.events()?.append(
-            "RunStarted",
+            "task.started",
             Some(run_id.to_string()),
             serde_json::json!({ "task_id": task_id, "name": name, "command": command }),
         )?;
@@ -410,11 +962,14 @@ impl App {
         };
         write_json(&ws.layout.runs_dir().join(format!("{}.json", run.id)), &run)?;
         ws.events()?.append(
-            "RunCompleted",
+            "task.completed",
             Some(run.id.to_string()),
             serde_json::to_value(&run).unwrap_or(Value::Null),
         )?;
-        let _ = self.pack_create(cwd, Some(name.to_string()), Some(task_id.to_string()), true)?;
+        let mut pack =
+            self.pack_create(cwd, Some(name.to_string()), Some(task_id.to_string()), true)?;
+        pack.run_id = Some(run.id.clone());
+        save_pack_manifest(&ws, &mut pack)?;
         Ok(run)
     }
 
@@ -433,7 +988,7 @@ impl App {
         let mut pack = load_pack(&ws, pack_id)?;
         let checks = read_or_default::<VerifyFile>(&ws.layout.verify_toml()).checks;
         ws.events()?.append(
-            "VerificationStarted",
+            "verify.started",
             Some(pack.id.to_string()),
             serde_json::json!({ "checks": checks.len() }),
         )?;
@@ -444,11 +999,20 @@ impl App {
             .filter(|c| c.enabled && !c.command.trim().is_empty())
         {
             let start = Instant::now();
-            let out = shell(&check.command, &ws.root);
+            let out = shell_with_env_timeout(
+                &check.command,
+                &ws.root,
+                &BTreeMap::new(),
+                check
+                    .timeout_seconds
+                    .map(|seconds| seconds.saturating_mul(1000)),
+            );
             let (exit_code, stdout, stderr) = match out {
                 Ok(o) => (o.status.code().unwrap_or(-1), o.stdout, o.stderr),
                 Err(e) => (-1, Vec::new(), e.to_string().into_bytes()),
             };
+            let stdout = sanitize_output_bytes(&stdout);
+            let stderr = sanitize_output_bytes(&stderr);
             results.push(VerificationResult {
                 check_name: check.name,
                 command_hash: command_hash(&default_shell(), &ws.root, &check.command, ""),
@@ -466,7 +1030,7 @@ impl App {
             });
         }
         if results.is_empty() {
-            results.push(VerificationResult::skipped());
+            results.push(VerificationResult::skipped(&store)?);
         }
         let failed = results
             .iter()
@@ -489,11 +1053,20 @@ impl App {
         }
         save_pack_manifest(&ws, &mut pack)?;
         ws.events()?.append(
-            "VerificationCompleted",
+            "verify.completed",
             Some(pack.id.to_string()),
             serde_json::to_value(&report).unwrap_or(Value::Null),
         )?;
         Ok(report)
+    }
+
+    pub fn verify_selected(
+        &self,
+        cwd: &Path,
+        pack_id: Option<&str>,
+    ) -> DraftResult<VerificationReport> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        self.verify(cwd, &pack_id)
     }
 
     pub fn risk(&self, cwd: &Path, pack_id: &str) -> DraftResult<RiskSummary> {
@@ -502,9 +1075,20 @@ impl App {
         let patch = load_patch(&ws, &pack)?;
         let mut score = patch.files.len() as u32;
         let mut factors = Vec::new();
+        let mut reason_codes = Vec::new();
+        let mut hotspots = Vec::new();
+        let mut evidence_gaps = Vec::new();
         if patch.files.iter().any(|f| f.binary) {
             score += 3;
             factors.push("binary files".to_string());
+            reason_codes.push("binary_change".to_string());
+            hotspots.extend(
+                patch
+                    .files
+                    .iter()
+                    .filter(|f| f.binary)
+                    .map(|f| f.path.clone()),
+            );
         }
         if patch
             .files
@@ -513,6 +1097,14 @@ impl App {
         {
             score += 2;
             factors.push("deletions".to_string());
+            reason_codes.push("deletion".to_string());
+            hotspots.extend(
+                patch
+                    .files
+                    .iter()
+                    .filter(|f| matches!(f.change_kind, FileChangeKind::Deleted))
+                    .map(|f| f.path.clone()),
+            );
         }
         if patch
             .files
@@ -521,6 +1113,29 @@ impl App {
         {
             score += 5;
             factors.push("sensitive paths".to_string());
+            reason_codes.push("sensitive_path".to_string());
+            hotspots.extend(
+                patch
+                    .files
+                    .iter()
+                    .filter(|f| f.path.0.contains("secret") || f.path.0.contains(".env"))
+                    .map(|f| f.path.clone()),
+            );
+        }
+        if patch.files.len() >= 20 {
+            score += 4;
+            factors.push("large change set".to_string());
+            reason_codes.push("large_change_set".to_string());
+        }
+        if pack.verification_refs.is_empty() {
+            score += 2;
+            factors.push("missing verification".to_string());
+            reason_codes.push("missing_verification".to_string());
+            evidence_gaps.push("verification receipt missing".to_string());
+        }
+        if factors.is_empty() {
+            factors.push("small text-only change".to_string());
+            reason_codes.push("low_complexity".to_string());
         }
         let level = if score >= 10 {
             RiskLevel::Critical
@@ -531,26 +1146,48 @@ impl App {
         } else {
             RiskLevel::Low
         };
-        let summary = RiskSummary {
-            changepack_id: pack.id.to_string(),
-            level,
-            score,
-            factors,
-            files_changed: patch.files.len(),
+        hotspots.sort();
+        hotspots.dedup();
+        let policy_decision = if matches!(level, RiskLevel::Critical | RiskLevel::High)
+            && pack.verification_refs.is_empty()
+        {
+            "blocked_until_verified".to_string()
+        } else {
+            "allowed_for_review".to_string()
         };
-        let receipt = Receipt::new(
+        let mut receipt = Receipt::new(
             "risk",
             level.label(),
             Some(pack.id.to_string()),
-            serde_json::to_value(&summary).unwrap_or(Value::Null),
+            Value::Null,
         );
+        let summary = RiskSummary {
+            changepack_id: pack.id.to_string(),
+            receipt_id: receipt.id.to_string(),
+            level,
+            score,
+            factors,
+            reason_codes,
+            hotspots,
+            evidence_gaps,
+            policy_decision,
+            files_changed: patch.files.len(),
+        };
+        receipt.payload = serde_json::to_value(&summary).unwrap_or(Value::Null);
+        receipt.receipt_hash.clear();
+        receipt.receipt_hash = hash_json(&receipt)?;
         write_receipt(&ws, &receipt)?;
         ws.events()?.append(
-            "RiskAssessed",
+            "risk.completed",
             Some(pack.id.to_string()),
             serde_json::to_value(&summary).unwrap_or(Value::Null),
         )?;
         Ok(summary)
+    }
+
+    pub fn risk_selected(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<RiskSummary> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        self.risk(cwd, &pack_id)
     }
 
     pub fn review(
@@ -573,13 +1210,13 @@ impl App {
                 created_at: now(),
             });
             ws.events()?.append(
-                "ReviewCommentAdded",
+                "review.comment_added",
                 Some(pack.id.to_string()),
                 serde_json::json!({ "count": comments.comments.len() }),
             )?;
         } else {
             ws.events()?.append(
-                "ReviewStarted",
+                "review.started",
                 Some(pack.id.to_string()),
                 serde_json::json!({}),
             )?;
@@ -591,6 +1228,14 @@ impl App {
             pack.status = pack.status.transition(ChangepackStatus::Reviewed)?;
             save_pack_manifest(&ws, &mut pack)?;
         }
+        write_json(
+            &ws.layout.pack_dir(&pack.id).join("review.lock.json"),
+            &serde_json::json!({
+                "pack_id": pack.id,
+                "actor": resolve_actor(&ws.layout.draft_dir),
+                "updated_at": now()
+            }),
+        )?;
         save_review_file(&ws, &pack.id, &comments)?;
         Ok(ReviewReport {
             changepack_id: pack.id.to_string(),
@@ -598,6 +1243,16 @@ impl App {
             decisions: comments.decisions.len(),
             status: pack.status,
         })
+    }
+
+    pub fn review_selected(
+        &self,
+        cwd: &Path,
+        pack_id: Option<&str>,
+        comment: Option<String>,
+    ) -> DraftResult<ReviewReport> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        self.review(cwd, &pack_id, comment)
     }
 
     pub fn decide(
@@ -609,6 +1264,19 @@ impl App {
     ) -> DraftResult<Decision> {
         let ws = self.open(cwd)?;
         let mut pack = load_pack(&ws, pack_id)?;
+        if matches!(kind, DecisionKind::Approve | DecisionKind::Reject)
+            && !matches!(
+                pack.status,
+                ChangepackStatus::Reviewed
+                    | ChangepackStatus::Approved
+                    | ChangepackStatus::Rejected
+            )
+        {
+            return Err(DraftError::new(
+                DraftErrorKind::ReviewRequired,
+                "review is required before approve/reject",
+            ));
+        }
         let decision = Decision {
             id: DecisionId::generate(),
             changepack_id: pack.id.clone(),
@@ -627,12 +1295,18 @@ impl App {
             _ => pack.status,
         };
         save_pack_manifest(&ws, &mut pack)?;
+        let review_lock = ws.layout.pack_dir(&pack.id).join("review.lock.json");
+        if matches!(decision.kind, DecisionKind::Approve | DecisionKind::Reject)
+            && review_lock.exists()
+        {
+            fs::remove_file(review_lock)?;
+        }
         let event = if decision.kind == DecisionKind::Approve {
-            "ChangepackApproved"
+            "pack.approved"
         } else if decision.kind == DecisionKind::Reject {
-            "ChangepackRejected"
+            "pack.rejected"
         } else {
-            "DecisionRecorded"
+            "review.completed"
         };
         let receipt_kind = if decision.kind == DecisionKind::Approve {
             "approval"
@@ -652,6 +1326,17 @@ impl App {
             serde_json::to_value(&decision).unwrap_or(Value::Null),
         )?;
         Ok(decision)
+    }
+
+    pub fn decide_selected(
+        &self,
+        cwd: &Path,
+        pack_id: Option<&str>,
+        kind: DecisionKind,
+        reason: Option<String>,
+    ) -> DraftResult<Decision> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        self.decide(cwd, &pack_id, kind, reason)
     }
 
     pub fn compare(&self, cwd: &Path, left: &str, right: &str) -> DraftResult<CompareReport> {
@@ -698,7 +1383,7 @@ impl App {
             }),
         };
         ws.events()?.append(
-            "ChangepackCompared",
+            "compare.completed",
             None,
             serde_json::to_value(&report).unwrap_or(Value::Null),
         )?;
@@ -790,7 +1475,7 @@ impl App {
         );
         write_receipt(&ws, &receipt)?;
         ws.events()?.append(
-            "ChangepackComposed",
+            "compose.completed",
             Some(pack.id.to_string()),
             serde_json::json!({ "receipt_id": receipt.id.to_string() }),
         )?;
@@ -800,6 +1485,60 @@ impl App {
             receipt_id: receipt.id.to_string(),
             files: patch.files.len(),
             compatible: true,
+        })
+    }
+
+    pub fn disperse(
+        &self,
+        cwd: &Path,
+        pack_id: &str,
+        output_a: &str,
+        output_b: &str,
+    ) -> DraftResult<DisperseResult> {
+        let ws = self.open(cwd)?;
+        let source = load_pack(&ws, pack_id)?;
+        let mut left = source.clone();
+        left.id = ChangepackId::generate();
+        left.name = Some(output_a.to_string());
+        left.source_pack_ids = vec![source.id.to_string()];
+        let mut right = source.clone();
+        right.id = ChangepackId::generate();
+        right.name = Some(output_b.to_string());
+        right.source_pack_ids = vec![source.id.to_string()];
+        ensure_dir(&ws.layout.pack_dir(&left.id))?;
+        ensure_dir(&ws.layout.pack_dir(&right.id))?;
+        let patch = load_patch(&ws, &source)?;
+        let evidence = load_evidence(&ws, &source).ok();
+        write_json(&ws.layout.pack_dir(&left.id).join("patch.json"), &patch)?;
+        write_json(&ws.layout.pack_dir(&right.id).join("patch.json"), &patch)?;
+        if let Some(evidence) = evidence {
+            write_json(
+                &ws.layout.pack_dir(&left.id).join("evidence.json"),
+                &evidence,
+            )?;
+            write_json(
+                &ws.layout.pack_dir(&right.id).join("evidence.json"),
+                &evidence,
+            )?;
+        }
+        save_pack_manifest(&ws, &mut left)?;
+        save_pack_manifest(&ws, &mut right)?;
+        let receipt = Receipt::new(
+            "disperse",
+            "completed",
+            Some(source.id.to_string()),
+            serde_json::json!({ "outputs": [left.id.to_string(), right.id.to_string()] }),
+        );
+        write_receipt(&ws, &receipt)?;
+        ws.events()?.append(
+            "disperse.completed",
+            Some(source.id.to_string()),
+            serde_json::json!({ "receipt_id": receipt.id.to_string() }),
+        )?;
+        Ok(DisperseResult {
+            source_pack_id: source.id.to_string(),
+            output_pack_ids: vec![left.id.to_string(), right.id.to_string()],
+            receipt_id: receipt.id.to_string(),
         })
     }
 
@@ -813,7 +1552,7 @@ impl App {
         let mut pack = load_pack(&ws, pack_id)?;
         let started = now();
         ws.events()?.append(
-            "SaveStarted",
+            "save.started",
             Some(pack.id.to_string()),
             serde_json::json!({}),
         )?;
@@ -828,7 +1567,7 @@ impl App {
                 "Warning: .draft/ is included in the save candidate.",
             )?;
             ws.events()?.append(
-                "SaveFailed",
+                "save.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
@@ -837,7 +1576,7 @@ impl App {
         if policy.save.block_if_tests_fail && pack.verification_refs.is_empty() {
             let receipt = failed_save(&ws, &pack, started, "verification is required before save")?;
             ws.events()?.append(
-                "SaveFailed",
+                "save.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
@@ -851,7 +1590,7 @@ impl App {
         {
             let receipt = failed_save(&ws, &pack, started, "approval is required before save")?;
             ws.events()?.append(
-                "SaveFailed",
+                "save.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
@@ -924,7 +1663,7 @@ impl App {
                             receipt.receipt_hash = hash_json(&receipt)?;
                             write_save_receipt(&ws, &receipt)?;
                             ws.events()?.append(
-                                "SaveFailed",
+                                "save.completed",
                                 Some(pack.id.to_string()),
                                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
                             )?;
@@ -949,7 +1688,7 @@ impl App {
                         receipt.receipt_hash = hash_json(&receipt)?;
                         write_save_receipt(&ws, &receipt)?;
                         ws.events()?.append(
-                            "SaveFailed",
+                            "save.completed",
                             Some(pack.id.to_string()),
                             serde_json::to_value(&receipt).unwrap_or(Value::Null),
                         )?;
@@ -965,11 +1704,21 @@ impl App {
         pack.status = pack.status.transition(ChangepackStatus::Saved)?;
         save_pack_manifest(&ws, &mut pack)?;
         ws.events()?.append(
-            "SaveCompleted",
+            "save.completed",
             Some(pack.id.to_string()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
         Ok(receipt)
+    }
+
+    pub fn save_selected(
+        &self,
+        cwd: &Path,
+        pack_id: Option<&str>,
+        vars: BTreeMap<String, String>,
+    ) -> DraftResult<SaveReceipt> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        self.save(cwd, &pack_id, vars)
     }
 
     pub fn rollback_plan(&self, cwd: &Path, reference: &str) -> DraftResult<RollbackPlan> {
@@ -997,11 +1746,11 @@ impl App {
         if plan.destructive && !yes {
             return Err(DraftError::new(
                 DraftErrorKind::RiskPolicyBlocked,
-                "rollback is destructive; pass --yes to apply",
+                "rollback is destructive and requires explicit CLI invocation",
             ));
         }
         ws.events()?.append(
-            "RollbackCreated",
+            "rollback.started",
             Some(plan.id.to_string()),
             serde_json::to_value(&plan).unwrap_or(Value::Null),
         )?;
@@ -1017,15 +1766,9 @@ impl App {
             ended_at: now(),
             receipt_hash: String::new(),
         };
-        receipt.receipt_hash = hash_json(&receipt)?;
-        write_json(
-            &ws.layout
-                .receipts_dir()
-                .join(format!("{}.json", receipt.id)),
-            &receipt,
-        )?;
+        write_rollback_receipt(&ws, &mut receipt)?;
         ws.events()?.append(
-            "RollbackCompleted",
+            "rollback.completed",
             Some(receipt.id.to_string()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
@@ -1041,6 +1784,102 @@ impl App {
         Ok(out)
     }
 
+    pub fn storage_stats(&self, cwd: &Path) -> DraftResult<StorageStats> {
+        let ws = self.open(cwd)?;
+        Ok(StorageStats {
+            draft_size_bytes: dir_size(&ws.layout.draft_dir)?,
+            repo_size_bytes: dir_size_excluding_draft(&ws.root)?,
+            objects_size_bytes: dir_size(&ws.layout.objects_dir())?,
+            packs_size_bytes: dir_size(&ws.layout.changepacks_dir())?,
+            receipts_size_bytes: dir_size(&ws.layout.receipts_dir())?,
+            events_size_bytes: fs::metadata(ws.layout.events_file())
+                .map(|m| m.len())
+                .unwrap_or(0),
+            draft_repo_ratio: storage_ratio(
+                dir_size(&ws.layout.draft_dir)?,
+                dir_size_excluding_draft(&ws.root)?,
+            ),
+            growth_status: storage_growth_status(
+                dir_size(&ws.layout.draft_dir)?,
+                dir_size_excluding_draft(&ws.root)?,
+            ),
+        })
+    }
+
+    pub fn storage_gc(&self, cwd: &Path) -> DraftResult<StorageMaintenanceReport> {
+        let ws = self.open(cwd)?;
+        let removed = garbage_collect_objects(&ws)?;
+        ws.events()?.append(
+            "storage.gc_completed",
+            None,
+            serde_json::json!({ "removed": removed }),
+        )?;
+        Ok(StorageMaintenanceReport::new(
+            "gc",
+            removed,
+            "unreachable objects removed",
+        ))
+    }
+
+    pub fn storage_compact(&self, cwd: &Path) -> DraftResult<StorageMaintenanceReport> {
+        let ws = self.open(cwd)?;
+        let compacted = compact_loose_objects(&ws)?;
+        ws.events()?.append(
+            "storage.compacted",
+            None,
+            serde_json::json!({ "compacted": compacted }),
+        )?;
+        Ok(StorageMaintenanceReport::new(
+            "compact",
+            compacted,
+            "loose objects compacted",
+        ))
+    }
+
+    pub fn storage_prune(&self, cwd: &Path) -> DraftResult<StorageMaintenanceReport> {
+        let ws = self.open(cwd)?;
+        let mut removed = 0;
+        for dir in [ws.layout.cache_dir(), ws.layout.tmp_dir()] {
+            if dir.exists() {
+                for entry in fs::read_dir(&dir)? {
+                    let path = entry?.path();
+                    if path.is_file() {
+                        fs::remove_file(path)?;
+                        removed += 1;
+                    }
+                }
+            }
+        }
+        ws.events()?.append(
+            "storage.pruned",
+            None,
+            serde_json::json!({ "removed": removed }),
+        )?;
+        Ok(StorageMaintenanceReport::new(
+            "prune",
+            removed,
+            "cache/tmp files pruned",
+        ))
+    }
+
+    pub fn storage_doctor(&self, cwd: &Path) -> DraftResult<StorageDoctorReport> {
+        let ws = self.open(cwd)?;
+        let chain = ws.events()?.verify_chain()?;
+        let object_errors = verify_objects(&ws)?;
+        let receipt_errors = verify_receipts(&ws)?;
+        Ok(StorageDoctorReport {
+            event_chain_ok: chain.ok,
+            event_chain_error: chain.error,
+            draft_hard_excluded: true,
+            objects_ok: object_errors.is_empty(),
+            object_errors,
+            receipts_ok: receipt_errors.is_empty(),
+            receipt_errors,
+            receipts: list_with_extension(&ws.layout.receipts_dir(), "json")?.len(),
+            packs: self.pack_list(cwd)?.len(),
+        })
+    }
+
     pub fn receipt_show(&self, cwd: &Path, id: &str) -> DraftResult<Value> {
         let ws = self.open(cwd)?;
         let p = ws.layout.receipts_dir().join(format!("{}.json", id));
@@ -1051,6 +1890,20 @@ impl App {
 
     pub fn events(&self, cwd: &Path) -> DraftResult<Vec<EventEnvelope>> {
         self.open(cwd)?.events()?.read_all()
+    }
+
+    pub fn events_page(
+        &self,
+        cwd: &Path,
+        top: bool,
+        bottom: bool,
+        page: Option<usize>,
+        limit: Option<usize>,
+        filter: Option<&str>,
+    ) -> DraftResult<Vec<EventEnvelope>> {
+        self.open(cwd)?
+            .events()?
+            .read_page(top, bottom, page, limit, filter)
     }
 
     pub fn verify_events(&self, cwd: &Path) -> DraftResult<HashChainStatus> {
@@ -1114,13 +1967,16 @@ impl DraftLayout {
         for dir in [
             self.draft_dir.clone(),
             self.objects_dir(),
+            self.object_packs_dir(),
             self.events_dir(),
             self.snapshots_dir(),
             self.tasks_dir(),
             self.runs_dir(),
+            self.candidates_dir(),
             self.changepacks_dir(),
             self.receipts_dir(),
             self.indexes_dir(),
+            self.cache_dir(),
             self.locks_dir(),
             self.tmp_dir(),
         ] {
@@ -1149,8 +2005,14 @@ impl DraftLayout {
     pub fn workspace_json(&self) -> PathBuf {
         self.draft_dir.join("workspace.json")
     }
+    pub fn selected_pack_file(&self) -> PathBuf {
+        self.draft_dir.join("selected-pack")
+    }
     pub fn objects_dir(&self) -> PathBuf {
-        self.draft_dir.join("objects/sha256")
+        self.draft_dir.join("objects/blake3")
+    }
+    pub fn object_packs_dir(&self) -> PathBuf {
+        self.draft_dir.join("objects/packs")
     }
     pub fn events_dir(&self) -> PathBuf {
         self.draft_dir.join("events")
@@ -1167,6 +2029,9 @@ impl DraftLayout {
     pub fn runs_dir(&self) -> PathBuf {
         self.draft_dir.join("runs")
     }
+    pub fn candidates_dir(&self) -> PathBuf {
+        self.draft_dir.join("candidates")
+    }
     pub fn changepacks_dir(&self) -> PathBuf {
         self.draft_dir.join("changepacks")
     }
@@ -1175,6 +2040,9 @@ impl DraftLayout {
     }
     pub fn indexes_dir(&self) -> PathBuf {
         self.draft_dir.join("indexes")
+    }
+    pub fn cache_dir(&self) -> PathBuf {
+        self.draft_dir.join("cache")
     }
     pub fn index_file(&self) -> PathBuf {
         self.indexes_dir().join("draft.sqlite")
@@ -1376,6 +2244,14 @@ impl ConfigReport {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookRunReport {
+    pub hook_name: String,
+    pub exit_code: i32,
+    pub stdout_ref: String,
+    pub stderr_ref: String,
+}
+
 fn hook_config_command(hook: &HookConfig) -> String {
     match hook {
         HookConfig::Raw(command) => command.clone(),
@@ -1522,7 +2398,7 @@ impl EventStore {
             actor: resolve_actor(&self.layout.draft_dir),
             workspace_id: self.workspace_id.clone(),
             subject_id,
-            payload,
+            payload: redact_value(payload),
             prev_event_hash: prev,
             event_hash: String::new(),
             schema_version: SCHEMA_VERSION,
@@ -1548,6 +2424,59 @@ impl EventStore {
             })?);
         }
         Ok(out)
+    }
+    fn read_page(
+        &self,
+        top: bool,
+        bottom: bool,
+        page: Option<usize>,
+        limit: Option<usize>,
+        filter: Option<&str>,
+    ) -> DraftResult<Vec<EventEnvelope>> {
+        let file = fs::File::open(self.layout.events_file())?;
+        let reader = BufReader::new(file);
+        let limit = limit.unwrap_or(5);
+        let page = page.unwrap_or(1).saturating_sub(1);
+        let skip = page * limit;
+        let newest_first = bottom || !top;
+        let mut selected = Vec::new();
+        let mut seen = 0usize;
+        for (idx, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let event: EventEnvelope = serde_json::from_str(&line).map_err(|e| {
+                DraftError::storage(format!("event log parse failed at line {}: {e}", idx + 1))
+            })?;
+            if let Some(filter) = filter {
+                if !event.event_type.contains(filter)
+                    && !event
+                        .subject_id
+                        .as_deref()
+                        .map(|s| s.contains(filter))
+                        .unwrap_or(false)
+                {
+                    continue;
+                }
+            }
+            if newest_first {
+                selected.push(event);
+                let max = skip + limit;
+                if selected.len() > max {
+                    selected.remove(0);
+                }
+            } else if seen >= skip && selected.len() < limit {
+                selected.push(event);
+            }
+            seen += 1;
+        }
+        if newest_first {
+            selected.reverse();
+            Ok(selected.into_iter().take(limit).collect())
+        } else {
+            Ok(selected)
+        }
     }
     fn verify_chain(&self) -> DraftResult<HashChainStatus> {
         let events = self.read_all()?;
@@ -1596,6 +2525,67 @@ pub struct EventReplayReport {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageStats {
+    pub draft_size_bytes: u64,
+    pub repo_size_bytes: u64,
+    pub objects_size_bytes: u64,
+    pub packs_size_bytes: u64,
+    pub receipts_size_bytes: u64,
+    pub events_size_bytes: u64,
+    pub draft_repo_ratio: f64,
+    pub growth_status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageMaintenanceReport {
+    pub operation: String,
+    pub removed: usize,
+    pub status: String,
+}
+
+impl StorageMaintenanceReport {
+    fn new(operation: &str, removed: usize, status: &str) -> Self {
+        Self {
+            operation: operation.to_string(),
+            removed,
+            status: status.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageDoctorReport {
+    pub event_chain_ok: bool,
+    pub event_chain_error: Option<String>,
+    pub draft_hard_excluded: bool,
+    pub objects_ok: bool,
+    pub object_errors: Vec<String>,
+    pub receipts_ok: bool,
+    pub receipt_errors: Vec<String>,
+    pub receipts: usize,
+    pub packs: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct ObjectPackIndex {
+    objects: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ObjectPack {
+    schema_version: u32,
+    id: String,
+    created_at: DateTime<Utc>,
+    entries: Vec<ObjectPackEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ObjectPackEntry {
+    object_ref: String,
+    compressed_hex: String,
+}
+
 #[derive(Debug, Clone)]
 struct ObjectStore {
     layout: DraftLayout,
@@ -1606,20 +2596,64 @@ impl ObjectStore {
         Self { layout }
     }
     fn put_bytes(&self, data: &[u8]) -> DraftResult<String> {
-        let hash = sha256_hex(data);
+        let hash = blake3_hex(data);
         let (a, rest) = hash.split_at(2);
         let path = self.layout.objects_dir().join(a).join(rest);
         if !path.exists() {
-            write_atomic(&path, data)?;
+            let compressed = zstd::stream::encode_all(data, 3)
+                .map_err(|e| DraftError::storage(format!("zstd compression failed: {e}")))?;
+            write_atomic(&path, &compressed)?;
         }
-        Ok(format!("sha256:{hash}"))
+        Ok(format!("b3:{hash}"))
     }
     fn get_bytes(&self, object_ref: &str) -> DraftResult<Vec<u8>> {
-        let h = object_ref.strip_prefix("sha256:").unwrap_or(object_ref);
+        let h = object_ref.strip_prefix("b3:").ok_or_else(|| {
+            DraftError::storage(format!("unsupported object reference '{object_ref}'"))
+        })?;
         let (a, rest) = h.split_at(2);
-        let mut data = Vec::new();
-        fs::File::open(self.layout.objects_dir().join(a).join(rest))?.read_to_end(&mut data)?;
+        let loose_path = self.layout.objects_dir().join(a).join(rest);
+        let compressed = if loose_path.exists() {
+            fs::read(loose_path)?
+        } else {
+            self.get_packed_bytes(object_ref)?
+        };
+        let data = zstd::stream::decode_all(compressed.as_slice())
+            .map_err(|e| DraftError::storage(format!("zstd decompression failed: {e}")))?;
+        let actual = blake3_hex(&data);
+        if actual != h {
+            return Err(DraftError::storage(format!(
+                "object hash mismatch for {object_ref}: expected {h}, got {actual}"
+            )));
+        }
         Ok(data)
+    }
+
+    fn get_packed_bytes(&self, object_ref: &str) -> DraftResult<Vec<u8>> {
+        let index = read_object_pack_index(&self.layout)?;
+        let pack_name = index.objects.get(object_ref).ok_or_else(|| {
+            DraftError::not_found(format!(
+                "object {object_ref} not found in loose or packed store"
+            ))
+        })?;
+        let pack_path = self.layout.object_packs_dir().join(pack_name);
+        let pack_bytes = fs::read(&pack_path)?;
+        let json = zstd::stream::decode_all(pack_bytes.as_slice()).map_err(|e| {
+            DraftError::storage(format!(
+                "object pack decompression failed for {}: {e}",
+                pack_path.display()
+            ))
+        })?;
+        let pack: ObjectPack = serde_json::from_slice(&json).map_err(json_err)?;
+        let entry = pack
+            .entries
+            .into_iter()
+            .find(|entry| entry.object_ref == object_ref)
+            .ok_or_else(|| {
+                DraftError::storage(format!(
+                    "object {object_ref} missing from indexed pack {pack_name}"
+                ))
+            })?;
+        hex_decode(&entry.compressed_hex)
     }
 }
 
@@ -1862,6 +2896,41 @@ pub struct Task {
     pub status: TaskStatus,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSpawnReport {
+    pub task: Task,
+    pub pack_id: Option<String>,
+    pub cron: Option<String>,
+    pub runs: Vec<TaskRunSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRunSummary {
+    pub candidate: String,
+    pub run_id: Option<String>,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateRecord {
+    pub name: String,
+    pub kind: String,
+    pub source: String,
+    pub template: String,
+    pub role: Option<String>,
+    pub persona: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidatePackAssignment {
+    pub pack_id: String,
+    pub candidate: String,
+    pub task_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -1917,6 +2986,8 @@ pub struct Changepack {
     pub receipt_refs: Vec<String>,
     pub source_pack_ids: Vec<String>,
     pub status: ChangepackStatus,
+    #[serde(default = "default_true")]
+    pub active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub manifest_hash: String,
@@ -1948,6 +3019,7 @@ impl Changepack {
             receipt_refs: vec![],
             source_pack_ids: vec![],
             status: ChangepackStatus::Draft,
+            active: true,
             created_at: now(),
             updated_at: now(),
             manifest_hash: String::new(),
@@ -2070,6 +3142,14 @@ pub struct PackReport {
     pub evidence: Option<Evidence>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackDeleteReport {
+    pub deleted_pack_id: String,
+    pub deleted_pack_name: Option<String>,
+    pub replacement_selected_pack: String,
+    pub deleted_files: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VerifyFile {
     pub checks: Vec<VerificationCheck>,
@@ -2100,20 +3180,19 @@ pub struct VerificationResult {
 }
 
 impl VerificationResult {
-    fn skipped() -> Self {
-        Self {
+    fn skipped(store: &ObjectStore) -> DraftResult<Self> {
+        let empty_ref = store.put_bytes(b"")?;
+        Ok(Self {
             check_name: "no enabled checks".to_string(),
             command_hash: sha256_hex(b"skipped"),
             started_at: now(),
             ended_at: now(),
             duration_ms: 0,
             exit_code: 0,
-            stdout_ref: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                .to_string(),
-            stderr_ref: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-                .to_string(),
+            stdout_ref: empty_ref.clone(),
+            stderr_ref: empty_ref,
             status: VerificationStatus::Skipped,
-        }
+        })
     }
 }
 
@@ -2156,9 +3235,14 @@ impl RiskLevel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskSummary {
     pub changepack_id: String,
+    pub receipt_id: String,
     pub level: RiskLevel,
     pub score: u32,
     pub factors: Vec<String>,
+    pub reason_codes: Vec<String>,
+    pub hotspots: Vec<WorkspacePath>,
+    pub evidence_gaps: Vec<String>,
+    pub policy_decision: String,
     pub files_changed: usize,
 }
 
@@ -2297,6 +3381,13 @@ pub struct ComposeResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisperseResult {
+    pub source_pack_id: String,
+    pub output_pack_ids: Vec<String>,
+    pub receipt_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveReceipt {
     pub schema_version: u32,
     pub id: ReceiptId,
@@ -2431,7 +3522,7 @@ fn find_workspace_root(cwd: &Path) -> Option<PathBuf> {
 fn reject_remote_key(key: &str) -> DraftResult<()> {
     if key.starts_with("target.") {
         return Err(DraftError::invalid_config(
-            "retired external-action config keys are not supported in Draft v0.3.0; use hooks.*",
+            "retired external-action config keys are not supported in Draft v0.3.1; use hooks.*",
         ));
     }
     Ok(())
@@ -2661,7 +3752,7 @@ fn latest_snapshot(ws: &Workspace) -> DraftResult<Option<Snapshot>> {
 fn empty_snapshot(ws: &Workspace) -> Snapshot {
     Snapshot {
         schema_version: SCHEMA_VERSION,
-        id: SnapshotId::new("snap_empty"),
+        id: SnapshotId::new("chk_empty"),
         workspace_id: ws.id.clone(),
         manifest_hash: sha256_hex(b"empty"),
         files: vec![],
@@ -2677,7 +3768,7 @@ fn empty_snapshot(ws: &Workspace) -> Snapshot {
 }
 
 fn load_snapshot(ws: &Workspace, id: &SnapshotId) -> DraftResult<Snapshot> {
-    if id.as_str() == "snap_empty" {
+    if id.as_str() == "chk_empty" {
         return Ok(empty_snapshot(ws));
     }
     read_json(&ws.layout.snapshots_dir().join(format!("{}.json", id)))
@@ -2858,12 +3949,12 @@ fn build_text_hunks(
     let old_hash = if old_joined.is_empty() {
         None
     } else {
-        Some(format!("sha256:{}", sha256_hex(old_joined.as_bytes())))
+        Some(format!("b3:{}", blake3_hex(old_joined.as_bytes())))
     };
     let new_hash = if new_joined.is_empty() {
         None
     } else {
-        Some(format!("sha256:{}", sha256_hex(new_joined.as_bytes())))
+        Some(format!("b3:{}", blake3_hex(new_joined.as_bytes())))
     };
     let id_input = format!(
         "{}:{}:{}:{}:{}:{}",
@@ -2987,25 +4078,47 @@ fn save_review_file(ws: &Workspace, id: &ChangepackId, file: &ReviewFile) -> Dra
 }
 
 fn write_receipt(ws: &Workspace, receipt: &Receipt) -> DraftResult<()> {
+    let mut receipt = receipt.clone();
+    receipt.payload = redact_value(receipt.payload);
+    receipt.receipt_hash.clear();
+    receipt.receipt_hash = hash_json(&receipt)?;
     write_json(
         &ws.layout
             .receipts_dir()
             .join(format!("{}.json", receipt.id)),
-        receipt,
+        &receipt,
     )
 }
 
 fn write_save_receipt(ws: &Workspace, receipt: &SaveReceipt) -> DraftResult<()> {
+    let mut receipt = receipt.clone();
+    receipt.failure_reason = receipt
+        .failure_reason
+        .as_ref()
+        .map(|reason| redact_secrets(reason));
+    receipt.receipt_hash.clear();
+    receipt.receipt_hash = hash_json(&receipt)?;
     write_json(
         &ws.layout
             .receipts_dir()
             .join(format!("{}.json", receipt.id)),
-        receipt,
+        &receipt,
     )?;
     write_json(
         &ws.layout
             .pack_dir(&receipt.changepack_id)
             .join("receipts.json"),
+        &receipt,
+    )
+}
+
+fn write_rollback_receipt(ws: &Workspace, receipt: &mut RollbackReceipt) -> DraftResult<()> {
+    receipt.receipt_hash.clear();
+    receipt.receipt_hash = hash_json(receipt)?;
+    write_json(
+        &ws.layout
+            .receipts_dir()
+            .join(format!("{}.json", receipt.id)),
         receipt,
     )
 }
@@ -3275,24 +4388,502 @@ fn render_message(
 }
 
 fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Snapshot> {
-    if reference.starts_with("snap_") {
+    if reference.starts_with("chk_") {
         return load_snapshot(ws, &SnapshotId::new(reference));
     }
-    if let Ok(pack) = load_pack(ws, reference) {
+    if reference.starts_with("pck_") {
+        let pack = load_pack(ws, reference)?;
         return load_snapshot(ws, &pack.base_snapshot_id);
     }
-    let receipt_path = ws.layout.receipts_dir().join(format!("{reference}.json"));
-    if receipt_path.exists() {
+    if reference.starts_with("rcp_") {
+        let receipt_path = ws.layout.receipts_dir().join(format!("{reference}.json"));
+        if !receipt_path.exists() {
+            return Err(DraftError::not_found(format!(
+                "unknown rollback receipt '{reference}'"
+            )));
+        }
         let value: Value = read_json(&receipt_path)?;
         if let Some(snapshot_id) = value.get("subject_id").and_then(Value::as_str) {
-            if snapshot_id.starts_with("snap_") {
+            if snapshot_id.starts_with("chk_") {
                 return load_snapshot(ws, &SnapshotId::new(snapshot_id));
+            }
+            if snapshot_id.starts_with("pck_") {
+                let pack = load_pack(ws, snapshot_id)?;
+                return load_snapshot(ws, &pack.base_snapshot_id);
+            }
+        }
+        if let Some(pack_id) = value.get("changepack_id").and_then(Value::as_str) {
+            let pack = load_pack(ws, pack_id)?;
+            return load_snapshot(ws, &pack.base_snapshot_id);
+        }
+        return Err(DraftError::invalid_config(format!(
+            "receipt '{reference}' is not reversible"
+        )));
+    }
+    Err(DraftError::invalid_config(format!(
+        "rollback reference '{reference}' must start with chk_, pck_, or rcp_"
+    )))
+}
+
+fn dir_size(path: &Path) -> DraftResult<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0;
+    for entry in walkdir::WalkDir::new(path) {
+        let entry = entry.map_err(|e| DraftError::storage(e.to_string()))?;
+        if entry.file_type().is_file() {
+            total += entry
+                .metadata()
+                .map_err(|e| DraftError::storage(e.to_string()))?
+                .len();
+        }
+    }
+    Ok(total)
+}
+
+fn dir_size_excluding_draft(path: &Path) -> DraftResult<u64> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0;
+    for entry in walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry
+                .path()
+                .strip_prefix(path)
+                .ok()
+                .and_then(|rel| rel.to_str())
+                .map(|rel| !is_draft_path(rel))
+                .unwrap_or(true)
+        })
+    {
+        let entry = entry.map_err(|e| DraftError::storage(e.to_string()))?;
+        if entry.file_type().is_file() {
+            total += entry
+                .metadata()
+                .map_err(|e| DraftError::storage(e.to_string()))?
+                .len();
+        }
+    }
+    Ok(total)
+}
+
+fn storage_ratio(draft_size: u64, repo_size: u64) -> f64 {
+    if repo_size == 0 {
+        0.0
+    } else {
+        draft_size as f64 / repo_size as f64
+    }
+}
+
+fn storage_growth_status(draft_size: u64, repo_size: u64) -> String {
+    let ratio = storage_ratio(draft_size, repo_size);
+    if ratio >= 0.5 {
+        "critical".to_string()
+    } else if ratio >= 0.25 {
+        "warning".to_string()
+    } else {
+        "ok".to_string()
+    }
+}
+
+fn garbage_collect_objects(ws: &Workspace) -> DraftResult<usize> {
+    let reachable = collect_reachable_object_refs(ws)?;
+    let mut removed = 0usize;
+    if !ws.layout.objects_dir().exists() {
+        return Ok(0);
+    }
+    for path in collect_object_files(&ws.layout.objects_dir())? {
+        let Some(object_ref) = object_ref_for_path(&ws.layout, &path) else {
+            continue;
+        };
+        if !reachable.contains(&object_ref) {
+            fs::remove_file(path)?;
+            removed += 1;
+        }
+    }
+    let _ = prune_empty_dirs(&ws.layout.objects_dir())?;
+    Ok(removed)
+}
+
+fn verify_objects(ws: &Workspace) -> DraftResult<Vec<String>> {
+    let mut errors = Vec::new();
+    let store = ObjectStore::new(ws.layout.clone());
+    for path in collect_object_files(&ws.layout.objects_dir())? {
+        let Some(object_ref) = object_ref_for_path(&ws.layout, &path) else {
+            errors.push(format!("unrecognized object path {}", path.display()));
+            continue;
+        };
+        if let Err(e) = store.get_bytes(&object_ref) {
+            errors.push(format!("{object_ref}: {e}"));
+        }
+    }
+    let index = read_object_pack_index(&ws.layout)?;
+    for object_ref in index.objects.keys() {
+        if let Err(e) = store.get_bytes(object_ref) {
+            errors.push(format!("{object_ref}: {e}"));
+        }
+    }
+    Ok(errors)
+}
+
+fn compact_loose_objects(ws: &Workspace) -> DraftResult<usize> {
+    let mut entries = Vec::new();
+    let mut loose_paths = Vec::new();
+    for path in collect_object_files(&ws.layout.objects_dir())? {
+        let Some(object_ref) = object_ref_for_path(&ws.layout, &path) else {
+            continue;
+        };
+        let compressed = fs::read(&path)?;
+        entries.push(ObjectPackEntry {
+            object_ref,
+            compressed_hex: hex_encode(&compressed),
+        });
+        loose_paths.push(path);
+    }
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    ensure_dir(&ws.layout.object_packs_dir())?;
+    let pack_id = format!("opk_{}", uuid::Uuid::new_v4().simple());
+    let pack_name = format!("{pack_id}.json.zst");
+    let pack = ObjectPack {
+        schema_version: SCHEMA_VERSION,
+        id: pack_id,
+        created_at: now(),
+        entries,
+    };
+    let json = serde_json::to_vec(&pack).map_err(json_err)?;
+    let compressed = zstd::stream::encode_all(json.as_slice(), 3)
+        .map_err(|e| DraftError::storage(format!("object pack compression failed: {e}")))?;
+    write_atomic(&ws.layout.object_packs_dir().join(&pack_name), &compressed)?;
+
+    let mut index = read_object_pack_index(&ws.layout)?;
+    for entry in &pack.entries {
+        index
+            .objects
+            .insert(entry.object_ref.clone(), pack_name.clone());
+    }
+    write_object_pack_index(&ws.layout, &index)?;
+    let store = ObjectStore::new(ws.layout.clone());
+    for entry in &pack.entries {
+        store.get_bytes(&entry.object_ref)?;
+    }
+
+    let removed = loose_paths.len();
+    for path in loose_paths {
+        fs::remove_file(path)?;
+    }
+    let _ = prune_empty_dirs(&ws.layout.objects_dir())?;
+    Ok(removed)
+}
+
+fn read_object_pack_index(layout: &DraftLayout) -> DraftResult<ObjectPackIndex> {
+    let path = layout.object_packs_dir().join("index.json");
+    if !path.exists() {
+        return Ok(ObjectPackIndex::default());
+    }
+    read_json(&path)
+}
+
+fn write_object_pack_index(layout: &DraftLayout, index: &ObjectPackIndex) -> DraftResult<()> {
+    write_json(&layout.object_packs_dir().join("index.json"), index)
+}
+
+fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
+    let mut errors = Vec::new();
+    for path in list_with_extension(&ws.layout.receipts_dir(), "json")? {
+        let text = fs::read_to_string(&path)?;
+        let mut value: Value = match serde_json::from_str(&text) {
+            Ok(value) => value,
+            Err(e) => {
+                errors.push(format!("{}: invalid JSON: {e}", path.display()));
+                continue;
+            }
+        };
+        let Some(expected) = value
+            .get("receipt_hash")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+        else {
+            errors.push(format!("{}: missing receipt_hash", path.display()));
+            continue;
+        };
+        if let Value::Object(map) = &mut value {
+            map.insert("receipt_hash".to_string(), Value::String(String::new()));
+        }
+        let actual = hash_json(&value)?;
+        if actual != expected {
+            errors.push(format!(
+                "{}: receipt hash mismatch: expected {expected}, got {actual}",
+                path.display()
+            ));
+        }
+    }
+    Ok(errors)
+}
+
+fn collect_reachable_object_refs(ws: &Workspace) -> DraftResult<HashSet<String>> {
+    let mut refs = HashSet::new();
+    collect_object_refs_from_json_dir(&ws.layout.draft_dir, &ws.layout, &mut refs)?;
+    Ok(refs)
+}
+
+fn collect_object_refs_from_json_dir(
+    dir: &Path,
+    layout: &DraftLayout,
+    refs: &mut HashSet<String>,
+) -> DraftResult<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if should_skip_storage_scan(&path, layout) {
+            continue;
+        }
+        if path.is_dir() {
+            collect_object_refs_from_json_dir(&path, layout, refs)?;
+        } else if matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("json") | Some("jsonl")
+        ) {
+            let text = fs::read_to_string(&path)?;
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                    if let Ok(value) = serde_json::from_str::<Value>(line) {
+                        collect_object_refs_from_value(&value, refs);
+                    }
+                }
+            } else if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                collect_object_refs_from_value(&value, refs);
             }
         }
     }
-    Err(DraftError::not_found(format!(
-        "unknown rollback reference '{reference}'"
-    )))
+    Ok(())
+}
+
+fn should_skip_storage_scan(path: &Path, layout: &DraftLayout) -> bool {
+    path.starts_with(layout.objects_dir())
+        || path.starts_with(layout.cache_dir())
+        || path.starts_with(layout.tmp_dir())
+}
+
+fn collect_object_refs_from_value(value: &Value, refs: &mut HashSet<String>) {
+    match value {
+        Value::String(s) if is_object_ref(s) => {
+            refs.insert(s.to_string());
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_object_refs_from_value(value, refs);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                collect_object_refs_from_value(value, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_object_ref(value: &str) -> bool {
+    value
+        .strip_prefix("b3:")
+        .map(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()))
+        .unwrap_or(false)
+}
+
+fn collect_object_files(dir: &Path) -> DraftResult<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if !dir.exists() {
+        return Ok(files);
+    }
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            files.extend(collect_object_files(&path)?);
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
+fn object_ref_for_path(layout: &DraftLayout, path: &Path) -> Option<String> {
+    let rel = path.strip_prefix(layout.objects_dir()).ok()?;
+    let parts: Vec<_> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let hash = format!("{}{}", parts[0], parts[1]);
+    if hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(format!("b3:{hash}"))
+    } else {
+        None
+    }
+}
+
+fn prune_empty_dirs(dir: &Path) -> DraftResult<bool> {
+    if !dir.exists() || !dir.is_dir() {
+        return Ok(false);
+    }
+    let mut empty = true;
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            if !prune_empty_dirs(&path)? {
+                empty = false;
+            }
+        } else {
+            empty = false;
+        }
+    }
+    if empty {
+        fs::remove_dir(dir)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn count_files(path: &Path) -> DraftResult<usize> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0;
+    for entry in walkdir::WalkDir::new(path) {
+        let entry = entry.map_err(|e| DraftError::storage(e.to_string()))?;
+        if entry.file_type().is_file() {
+            total += 1;
+        }
+    }
+    Ok(total)
+}
+
+fn empty_patch_for_pack(pack: &Changepack) -> PatchSet {
+    PatchSet {
+        schema_version: SCHEMA_VERSION,
+        id: PatchSetId::generate(),
+        base_snapshot_id: pack.base_snapshot_id.clone(),
+        result_snapshot_id: pack.result_snapshot_id.clone(),
+        files: Vec::new(),
+        patch_graph_hash: sha256_hex(b"empty"),
+    }
+}
+
+fn builtin_candidates() -> Vec<CandidateRecord> {
+    vec![
+        CandidateRecord {
+            name: "manual".to_string(),
+            kind: "manual".to_string(),
+            source: "builtin".to_string(),
+            template: "{{instruction}}".to_string(),
+            role: None,
+            persona: None,
+            active: true,
+        },
+        CandidateRecord {
+            name: "codex".to_string(),
+            kind: "command".to_string(),
+            source: "builtin".to_string(),
+            template: "codex {{instruction}}".to_string(),
+            role: None,
+            persona: None,
+            active: true,
+        },
+        CandidateRecord {
+            name: "claude".to_string(),
+            kind: "command".to_string(),
+            source: "builtin".to_string(),
+            template: "claude {{instruction}}".to_string(),
+            role: None,
+            persona: None,
+            active: true,
+        },
+    ]
+}
+
+fn render_candidate_command(template: &str, instruction: &str) -> Vec<String> {
+    let rendered = template.replace("{{instruction}}", instruction);
+    rendered
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn redact_secrets(input: &str) -> String {
+    input
+        .split_whitespace()
+        .map(|token| {
+            let lower = token.to_ascii_lowercase();
+            let sensitive = [
+                "password",
+                "passwd",
+                "pwd",
+                "token",
+                "secret",
+                "api_key",
+                "apikey",
+                "access_key",
+                "private_key",
+                "bearer",
+            ]
+            .iter()
+            .any(|key| lower.contains(key));
+            if sensitive {
+                if let Some((key, _)) = token.split_once('=') {
+                    format!("{key}=[REDACTED]")
+                } else if let Some((key, _)) = token.split_once(':') {
+                    format!("{key}:[REDACTED]")
+                } else {
+                    "[REDACTED]".to_string()
+                }
+            } else {
+                token.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn redact_value(value: Value) -> Value {
+    match value {
+        Value::String(s) => Value::String(redact_secrets(&s)),
+        Value::Array(values) => Value::Array(values.into_iter().map(redact_value).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    let lower = key.to_ascii_lowercase();
+                    if [
+                        "password",
+                        "passwd",
+                        "pwd",
+                        "token",
+                        "secret",
+                        "api_key",
+                        "apikey",
+                        "access_key",
+                        "private_key",
+                    ]
+                    .iter()
+                    .any(|needle| lower.contains(needle))
+                    {
+                        (key, Value::String("[REDACTED]".to_string()))
+                    } else {
+                        (key, redact_value(value))
+                    }
+                })
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 fn restore_snapshot(ws: &Workspace, snap: &Snapshot) -> DraftResult<()> {
@@ -3414,12 +5005,14 @@ fn run_hook(
     env_keys.sort();
     let hash = command_hash(&shell_name, &cwd, &command, &ctx.message);
     let started_at = now();
-    let out = shell_with_env(&command, &cwd, &env);
+    let out = shell_with_env_timeout(&command, &cwd, &env, hook.timeout_ms);
     let ended_at = now();
     let (exit_code, stdout, stderr) = match out {
         Ok(o) => (o.status.code().unwrap_or(-1), o.stdout, o.stderr),
         Err(e) => (-1, Vec::new(), e.to_string().into_bytes()),
     };
+    let stdout = sanitize_output_bytes(&stdout);
+    let stderr = sanitize_output_bytes(&stderr);
     let stdout_ref = store
         .put_bytes(&stdout)
         .map_err(|e| HookFailure { message: e.message })?;
@@ -3570,28 +5163,69 @@ fn interpolate_strict(
     Ok(out)
 }
 
-fn shell(command: &str, cwd: &Path) -> std::io::Result<std::process::Output> {
-    shell_with_env(command, cwd, &BTreeMap::new())
+fn shell_with_env_timeout(
+    command: &str,
+    cwd: &Path,
+    env: &BTreeMap<String, String>,
+    timeout_ms: Option<u64>,
+) -> std::io::Result<std::process::Output> {
+    if timeout_ms.is_none() {
+        return shell_with_env_unbounded(command, cwd, env);
+    }
+    let mut cmd = shell_command(command);
+    let mut child = cmd
+        .current_dir(cwd)
+        .envs(env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or_default());
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("hook timed out after {} ms", timeout.as_millis()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
-fn shell_with_env(
+fn shell_with_env_unbounded(
     command: &str,
     cwd: &Path,
     env: &BTreeMap<String, String>,
 ) -> std::io::Result<std::process::Output> {
+    let mut cmd = shell_command(command);
+    cmd.current_dir(cwd).envs(env).output()
+}
+
+fn shell_command(command: &str) -> Command {
     if cfg!(windows) {
         let mut cmd = Command::new("cmd");
-        cmd.args(["/C", command])
-            .current_dir(cwd)
-            .envs(env)
-            .output()
+        cmd.args(["/C", command]);
+        cmd
     } else {
         let mut cmd = Command::new("sh");
-        cmd.args(["-c", command])
-            .current_dir(cwd)
-            .envs(env)
-            .output()
+        cmd.args(["-c", command]);
+        cmd
     }
+}
+
+fn sanitize_output_bytes(bytes: &[u8]) -> Vec<u8> {
+    const MAX_CAPTURED_OUTPUT: usize = 1024 * 1024;
+    let mut text = String::from_utf8_lossy(bytes).to_string();
+    if text.len() > MAX_CAPTURED_OUTPUT {
+        text.truncate(MAX_CAPTURED_OUTPUT);
+        text.push_str("\n[Draft output truncated]\n");
+    }
+    redact_secrets(&text).into_bytes()
 }
 
 fn default_shell() -> String {
@@ -3655,6 +5289,43 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(bytes);
     format!("{:x}", h.finalize())
+}
+
+fn blake3_hex(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn hex_decode(input: &str) -> DraftResult<Vec<u8>> {
+    if !input.len().is_multiple_of(2) {
+        return Err(DraftError::storage("invalid hex length"));
+    }
+    let mut out = Vec::with_capacity(input.len() / 2);
+    let bytes = input.as_bytes();
+    for pair in bytes.chunks_exact(2) {
+        let high = hex_value(pair[0])?;
+        let low = hex_value(pair[1])?;
+        out.push((high << 4) | low);
+    }
+    Ok(out)
+}
+
+fn hex_value(byte: u8) -> DraftResult<u8> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(DraftError::storage("invalid hex byte")),
+    }
 }
 
 fn json_err(e: serde_json::Error) -> DraftError {

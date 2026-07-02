@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks through a complete Draft v0.3.0 workflow using only local files and the CLI.
+This guide walks through a complete Draft v0.3.1 workflow using only local files and the CLI.
 
 ## Create A Workspace
 
@@ -33,9 +33,9 @@ Status compares the current workspace to the latest snapshot and reports added, 
 ## Create A Changepack
 
 ```bash
-draft pack create --name "parser cleanup" --from-working-tree
-draft pack list
-draft pack show <pack-id>
+draft create "parser cleanup"
+draft list
+draft pack
 ```
 
 A changepack is Draft’s reviewable unit. It contains a patch reference, evidence references, task links, review decisions, approvals, risk results, verification results, save receipts, and provenance hashes.
@@ -59,16 +59,15 @@ draft receipt list
 draft receipt show <receipt-id>
 ```
 
-Save persists the approved changepack into `.draft/` and writes a receipt. If `hooks.save` is configured, Draft runs it only after approval and safety checks. If `.draft/` appears in the save candidate, Draft aborts, records a failed receipt, emits `SaveFailed`, and does not execute `hooks.save`.
+Save persists the approved changepack into `.draft/` and writes a receipt. If `hooks.save` is configured, Draft runs it only after approval and safety checks. If `.draft/` appears in the save candidate, Draft aborts, records a failed receipt, emits `save.completed` with failure status, and does not execute `hooks.save`.
 
 ## Roll Back
 
 ```bash
-draft rollback <snapshot-id> --plan
-draft rollback <snapshot-id> --yes
+draft rollback <chk-id|pck-id|rcp-id>
 ```
 
-Rollback first produces a plan. Applying the plan is explicit because it may overwrite workspace files. Rollback never restores `.draft/`.
+Rollback infers the target type from the ID prefix. Rollback never restores `.draft/`.
 
 ## Use The Daemon Optionaly
 

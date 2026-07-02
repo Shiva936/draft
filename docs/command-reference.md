@@ -1,141 +1,119 @@
 # Command Reference
 
-The Draft CLI is the primary v0.3.0 interface. Every core command works without `draftd`; service-backed flows are optional.
+The Draft CLI is the primary v0.3.1 interface. Core workflows are local-first and work without a daemon.
 
-Most read commands support `--json`. Human output is intended for terminals; JSON output is intended for scripts and TUI/service integration.
+Most read commands support `--json`. Human output is intended for terminals; JSON output is intended for scripts and TUI integration.
 
 ## Workspace
 
-### `draft init`
+### `draft init [-b <base-pack-name>]`
 
-Initializes `.draft/`, default config, policy, verification files, event log, object store, index, and workspace metadata.
+Initializes `.draft/`, creates `.draft/events/events.jsonl`, writes default config files, creates the base pack, and selects it. The default base pack name is `base`.
 
-### `draft status`
+### `draft status [-p <pck-id>] [-c repo|tasks|candidates|changes|hooks] [--full]`
 
-Scans the workspace directly and compares it to the latest snapshot. The scan includes files unknown to external systems and always excludes `.draft/`.
+Shows workspace or pack status. `.draft/` is always hard-excluded.
 
 ### `draft checkpoint <message>`
 
-Creates a snapshot and receipt. Use checkpoints before agent runs, large edits, or rollback-sensitive work.
+Creates a checkpoint with a `chk_` ID and a receipt.
 
-### `draft index rebuild`
+## Config, Hooks, And Ignore Rules
 
-Rebuilds the local SQLite index from durable store files. Indexes are cache data; the JSON/JSONL store remains actoritative.
+### `draft config [-k <key>]`
+### `draft config set <key> <value>`
+### `draft config unset <key>`
 
-## Configuration And Ignore Rules
+Reads and writes effective config. Repo `.draft/config.toml` overrides global `~/.draft/config.toml`.
 
-### `draft config set|get|unset|list`
+### `draft hook [-k <key>]`
+### `draft hook set <key> <value>`
+### `draft hook unset <key>`
+### `draft hook run <hook-name>`
 
-Reads and writes Draft config. Supported v0.3.0 keys include:
-
-- `identity.username`
-- `identity.email`
-- `hooks.save`
-- `hooks.verify`
-- `save.message_template`
-
-Draft v0.3.0 has no external-action config keys. User-owned remote commands may be configured only as opaque hook command text.
-
-Hook-capable commands accept `--var` as a tail marker for dynamic hook variables:
-
-```bash
-draft save auth-refactor --var ticket="AUTH-123" release="v0.3.0"
-```
-
-Every token after `--var` must be `key=value`; normal Draft flags are not allowed after it.
+Manages hook configuration. `hooks.save` is the save hook; Draft has no native commit, push, pull, sync, PR, MR, publish, host-specific, or remote commands.
 
 ### `draft ignore add|remove|list`
 
-Manages `.draft/.ignore`, Draft’s own ignore file. `.draft/` is hard-excluded even if the ignore file is edited.
+Manages `.draft/.ignore`. `.draft/` remains hard-excluded even if ignore rules are changed.
 
-## Tasks, Runs, And Evidence
+## Events And Logs
 
-### `draft task create|list|show`
+### `draft log [--top|--bottom] [-p <page>] [-l <entries>] [-f <filter>] [--raw]`
 
-Creates and inspects local task records. Tasks can be linked to changepacks.
-
-### `draft spawn`
-
-Runs an opaque command from the workspace root and captures evidence. This is useful for agent or script execution where output should be attached to the Draft record.
-
-### `draft runs`
-
-Lists and inspects captured runs.
-
-## Changepacks
-
-### `draft pack create --from-working-tree`
-
-Creates a changepack from the current workspace delta.
-
-### `draft pack list`
-
-Lists changepacks with current status.
-
-### `draft pack show <pack-id>`
-
-Shows the changepack manifest and references.
-
-## Verification, Risk, And Review
-
-### `draft verify <pack-id>`
-
-Runs configured checks and stores result evidence. The default policy requires verification before save.
-
-### `draft risk <pack-id>`
-
-Computes local risk findings from file changes, sensitive paths, binary changes, deletions, and related signals.
-
-### `draft review <pack-id>`
-
-Shows review state. With `--comment`, stores a review comment.
-
-### `draft approve <pack-id>`
-
-Records an approval decision.
-
-### `draft reject <pack-id>`
-
-Records a rejection decision.
-
-## Compare, Compose, Save, Rollback
-
-### `draft compare <left> <right>`
-
-Compares changepacks and reports overlaps.
-
-### `draft compose <left> <right> --output <name>`
-
-Creates a new changepack from compatible sources. Overlapping changes are rejected.
-
-### `draft save <pack-id>`
-
-Saves an approved, verified changepack into `.draft/`, optionally runs `hooks.save`, and records a save receipt. `hooks.save` may be a raw command string or rich hook entry. Draft aborts before hook execution if `.draft/` is present in the save candidate. Hook placeholders use `{{name}}`.
-
-### `draft rollback <snapshot-or-receipt> --plan`
-
-Previews affected files.
-
-### `draft rollback <snapshot-or-receipt> --yes`
-
-Applies rollback after explicit confirmation.
-
-## Receipts And Events
-
-### `draft receipt list|show`
-
-Inspects durable receipts for checkpoint, verification, save, compose, and rollback operations.
+Renders a timeline derived from `.draft/events/events.jsonl`. `--raw` prints the raw stream.
 
 ### `draft events`
 
-Shows append-only hash-chained events.
+Prints the raw append-only event stream.
 
-### `draft events --verify-chain`
+## Packs
 
-Verifies event hash links and reports tampering or parse failures.
+### `draft create <name> [-p <base-pck-id/name>]`
+### `draft pack`
+### `draft pack -s <pck-id/name>`
+### `draft pack -d <pck-id/name>`
+### `draft list`
 
-## Services
+Creates, shows, switches, deletes, and lists packs. Pack IDs use `pck_`. Pack names must be unique among available packs. `draft pack -d` asks for final `y/N` confirmation and emits `pack.deleted`.
 
-### `draft service status|start|stop`
+## Candidates And Tasks
 
-Controls the optional local daemon. The daemon is a convenience layer, not a requirement for core CLI operation.
+### `draft candidate list|show|remove`
+### `draft candidate add <name> [--kind command|chat|manual] -- <template>`
+### `draft candidate update <name> [--kind command|chat|manual] -- <template>`
+### `draft candidate packs [-p <pck-id>] [-c <candidate-name>]`
+
+Manages host-agnostic candidate execution profiles. Missing candidates referenced by task spawn are auto-registered.
+
+### `draft task spawn "<name>" [-p <pck-id>] [-c <candidate-name> ...] [--cron <expr>] -- <instruction>`
+### `draft task list`
+### `draft task`
+
+Spawns tasks and records task/candidate/pack provenance. `draft task` shows the latest task or reports that no task is running.
+
+## Verify, Risk, Review, And Decisions
+
+### `draft verify [-p <pck-id>]`
+
+Verifies a pack, defaulting to the selected pack.
+
+### `draft risk [-p <pck-id>] [--explain] [--include-evidence]`
+
+Runs deterministic local risk analysis, defaulting to the selected pack.
+
+### `draft review [-p <pck-id>] [--tui]`
+
+Starts review and locks the pack for final human decision. `--tui` opens the Review Cockpit.
+
+### `draft approve [-p <pck-id>]`
+### `draft reject [-p <pck-id>]`
+
+Records a mandatory human final decision. Review is required before approve/reject.
+
+## Compare, Compose, Disperse, Save, Rollback
+
+### `draft compare <pck-a> <pck-b> [--tui]`
+### `draft compose <pck-a> <pck-b> --output <name> [--tui]`
+### `draft disperse <pck-id> --output <pack-a-name> <pack-b-name> [--tui]`
+
+Compares, combines, or splits packs with receipt-backed provenance.
+
+### `draft save [-p <pck-id>] [--var key=value ...]`
+
+Saves an approved, verified pack and optionally runs `hooks.save`. `--var` values become hook placeholders and `DRAFT_VAR_*` environment variables; built-ins cannot be overridden.
+
+### `draft rollback <chk-id|pck-id|rcp-id>`
+
+Rolls back by inferring target type from the ID prefix. Rollback protects `.draft/`.
+
+## Receipts And Storage
+
+### `draft receipt list`
+### `draft receipt show <rcp-id>`
+
+Inspects durable operation receipts. Receipt IDs use `rcp_`.
+
+### `draft storage stats|gc|compact|prune|doctor`
+
+Reports and maintains `.draft/` storage. Indexes, caches, and temporary data are rebuildable.

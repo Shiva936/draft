@@ -48,7 +48,7 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
         "task.show" => {
             with_path(&req, |p| app.task_show(p, &string_param(&req, "task_id")?)).into_response(id)
         }
-        "snapshot.create" | "checkpoint.create" => {
+        "checkpoint.create" => {
             with_path(&req, |p| app.checkpoint(p, &string_param(&req, "message")?))
                 .into_response(id)
         }
@@ -65,7 +65,7 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
             )
         })
         .into_response(id),
-        "pack.create" | "changepack.create" => with_path(&req, |p| {
+        "pack.create" => with_path(&req, |p| {
             app.pack_create(
                 p,
                 optional_string_param(&req, "name"),
@@ -77,8 +77,8 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
             )
         })
         .into_response(id),
-        "pack.list" | "changepack.list" => with_path(&req, |p| app.pack_list(p)).into_response(id),
-        "pack.show" | "changepack.show" => {
+        "pack.list" => with_path(&req, |p| app.pack_list(p)).into_response(id),
+        "pack.show" => {
             with_path(&req, |p| app.pack_show(p, &string_param(&req, "pack")?)).into_response(id)
         }
         "verify.run" => {
@@ -134,19 +134,8 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
             app.save(p, &string_param(&req, "pack")?, BTreeMap::new())
         })
         .into_response(id),
-        "rollback.plan" => with_path(&req, |p| {
-            app.rollback_plan(p, &string_param(&req, "target")?)
-        })
-        .into_response(id),
-        "rollback.apply" => with_path(&req, |p| {
-            app.rollback(
-                p,
-                &string_param(&req, "target")?,
-                req.params
-                    .get("yes")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            )
+        "rollback.run" => with_path(&req, |p| {
+            app.rollback(p, &string_param(&req, "target")?, true)
         })
         .into_response(id),
         "receipt.list" => with_path(&req, |p| app.receipts(p)).into_response(id),
@@ -213,7 +202,7 @@ fn run_job(app: &App, path: &Path, req: &Request, kind: &str) -> DraftResult<Val
             &string_param(req, "output")?,
         )?),
         "save" => to_value(app.save(path, &string_param(req, "pack")?, BTreeMap::new())?),
-        "rollback-plan" => to_value(app.rollback_plan(path, &string_param(req, "target")?)?),
+        "rollback" => to_value(app.rollback(path, &string_param(req, "target")?, true)?),
         "index-rebuild" => to_value(app.index_rebuild(path)?),
         other => Err(DraftError::new(
             DraftErrorKind::IpcError,

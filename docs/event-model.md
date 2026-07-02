@@ -43,23 +43,31 @@ Event append uses a local lock under `.draft/locks/`, appends one JSON object pe
 
 Representative event types include:
 
-- `WorkspaceInitialized`
-- `WorkspaceScanned`
-- `SnapshotCreated`
-- `TaskCreated`
-- `RunStarted`
-- `RunCompleted`
-- `ChangepackCreated`
-- `VerificationCompleted`
-- `RiskAssessed`
-- `ReviewCommented`
-- `ChangepackApproved`
-- `ChangepackRejected`
-- `ChangepackComposed`
-- `SaveStarted`
-- `SaveCompleted`
-- `SaveFailed`
-- `RollbackCreated`
-- `RollbackApplied`
+- `repo.initialized`
+- `workspace.scanned`
+- `checkpoint.created`
+- `task.created`
+- `task.spawned`
+- `task.started`
+- `task.completed`
+- `pack.created`
+- `pack.selected`
+- `pack.deleted`
+- `verify.started`
+- `verify.completed`
+- `risk.completed`
+- `review.started`
+- `review.completed`
+- `pack.approved`
+- `pack.rejected`
+- `compare.completed`
+- `compose.completed`
+- `disperse.completed`
+- `save.started`
+- `save.completed`
+- `rollback.started`
+- `rollback.completed`
+- `storage.compacted`
+- `storage.gc_completed`
 
 Consumers should tolerate new event types and additional payload fields.

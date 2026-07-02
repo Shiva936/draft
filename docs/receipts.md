@@ -36,7 +36,7 @@ If the Draft-native save succeeds but a required hook fails, the receipt records
 
 ## Failed Save Receipts
 
-Failed saves are first-class. If save is blocked by policy, verification, approval, or `.draft/` candidate safety, Draft records a failed receipt and appends `SaveFailed`.
+Failed saves are first-class. If save is blocked by policy, verification, approval, or `.draft/` candidate safety, Draft records a failed receipt and appends `save.completed` with failure status.
 
 ## Inspecting Receipts
 

@@ -19,7 +19,7 @@ The cockpit exposes:
 - approve/reject actions;
 - compare and compose actions;
 - save readiness and receipt summary;
-- rollback-plan action affordance;
+- rollback action affordance;
 - service connection state.
 
 ## Daemon Relationship

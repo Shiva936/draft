@@ -33,44 +33,41 @@ fn plain_directory_end_to_end_with_rollback() {
     std::fs::write(dir.join("app.txt"), "hello world\n").unwrap();
     std::fs::write(dir.join("notes.txt"), "new file\n").unwrap();
     draft(dir)
-        .args(["task", "create", "update app text"])
+        .args(["task", "spawn", "update app text", "--", "update app text"])
         .assert()
         .success();
     let out = draft(dir)
-        .args([
-            "pack",
-            "create",
-            "--name",
-            "update-app",
-            "--from-working-tree",
-            "--json",
-        ])
+        .args(["create", "update-app", "--json"])
         .output()
         .unwrap();
     let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let pack_id = pack["id"].as_str().unwrap();
 
-    draft(dir).args(["risk", pack_id]).assert().success();
+    assert!(pack_id.starts_with("pck_"));
+    assert!(snapshot_id.starts_with("chk_"));
+
+    draft(dir).args(["risk", "-p", pack_id]).assert().success();
     draft(dir)
-        .args(["review", pack_id, "--comment", "looks fine"])
+        .args(["review", "-p", pack_id, "--comment", "looks fine"])
         .assert()
         .success();
-    draft(dir).args(["verify", pack_id]).assert().success();
-    draft(dir).args(["approve", pack_id]).assert().success();
-    draft(dir).args(["save", pack_id]).assert().success();
+    draft(dir)
+        .args(["verify", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["approve", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir).args(["save", "-p", pack_id]).assert().success();
     draft(dir)
         .args(["events"])
         .assert()
         .success()
-        .stdout(contains("SaveCompleted"));
+        .stdout(contains("save.completed"));
 
     draft(dir)
-        .args(["rollback", snapshot_id, "--plan"])
-        .assert()
-        .success()
-        .stdout(contains("app.txt"));
-    draft(dir)
-        .args(["rollback", snapshot_id, "--yes"])
+        .args(["rollback", snapshot_id])
         .assert()
         .success();
     assert_eq!(

@@ -6,14 +6,14 @@ Draft is designed to make AI-generated changes reviewable before save.
 
 ```bash
 draft checkpoint "before agent run"
-draft spawn --name "agent edit" -- <agent command>
+draft task spawn "agent edit" -- <agent command>
 draft status
-draft pack create --name "agent change" --from-working-tree
-draft verify <pack-id>
-draft risk <pack-id>
-draft review <pack-id>
-draft approve <pack-id> --reason "human reviewed"
-draft save <pack-id>
+draft create "agent change"
+draft verify -p <pck-id>
+draft risk -p <pck-id>
+draft review -p <pck-id>
+draft approve -p <pck-id> --reason "human reviewed"
+draft save -p <pck-id>
 ```
 
 ## Why Spawn Through Draft

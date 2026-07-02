@@ -1,6 +1,6 @@
 [package]
 name = "draft-core"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 [features]
@@ -19,3 +19,5 @@ walkdir = "2.4"
 ignore = "0.4"
 rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = "3.8" # also needed for some core testing/ops if required, keeping it here
+blake3 = "1.8.5"
+zstd = "0.13.3"

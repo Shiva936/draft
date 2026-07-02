@@ -1,0 +1,603 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1600" height="980" viewBox="0 0 1600 980" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<title id="title">From Workspace Noise to Verified Packs</title>
+<desc id="desc">Draft turns messy human and AI workspace changes into verified, reviewable packs through a local capture, verify, and review funnel.</desc>
+
+<defs>
+<radialGradient id="bg" cx="50%" cy="42%" r="82%">
+<stop offset="0" stop-color="#101d3e"/>
+<stop offset="0.44" stop-color="#050a17"/>
+<stop offset="1" stop-color="#02040a"/>
+</radialGradient>
+
+<linearGradient id="trust" x1="560" y1="140" x2="1035" y2="760" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#42ffd5">
+<animate attributeName="stop-color" dur="8s" repeatCount="indefinite" values="#42ffd5;#2ea8ff;#9568ff;#42ffd5"/>
+</stop>
+<stop offset="0.52" stop-color="#2ea8ff">
+<animate attributeName="stop-color" dur="8s" repeatCount="indefinite" values="#2ea8ff;#9568ff;#42ffd5;#2ea8ff"/>
+</stop>
+<stop offset="1" stop-color="#9568ff">
+<animate attributeName="stop-color" dur="8s" repeatCount="indefinite" values="#9568ff;#42ffd5;#2ea8ff;#9568ff"/>
+</stop>
+</linearGradient>
+
+<linearGradient id="noise" x1="55" y1="120" x2="590" y2="770" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#ff5b45"/>
+<stop offset="0.55" stop-color="#ffae3e"/>
+<stop offset="1" stop-color="#ff3b6b"/>
+</linearGradient>
+
+<linearGradient id="flow" x1="370" y1="450" x2="1165" y2="450" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#ff7043" stop-opacity="0.18"/>
+<stop offset="0.35" stop-color="#ffb84d" stop-opacity="0.75"/>
+<stop offset="0.58" stop-color="#36f6d2" stop-opacity="0.9"/>
+<stop offset="1" stop-color="#7a70ff" stop-opacity="0.08"/>
+</linearGradient>
+
+<filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+<feGaussianBlur stdDeviation="8" result="b"/>
+<feMerge>
+<feMergeNode in="b"/>
+<feMergeNode in="SourceGraphic"/>
+</feMerge>
+</filter>
+
+<filter id="deepGlow" x="-80%" y="-80%" width="260%" height="260%">
+<feGaussianBlur stdDeviation="16" result="b"/>
+<feColorMatrix in="b" type="matrix" values="0 0 0 0 .12 0 0 0 0 .70 0 0 0 0 1 0 0 0 .72 0" result="c"/>
+<feMerge>
+<feMergeNode in="c"/>
+<feMergeNode in="SourceGraphic"/>
+</feMerge>
+</filter>
+
+<filter id="warmGlow" x="-70%" y="-70%" width="240%" height="240%">
+<feGaussianBlur stdDeviation="7" result="b"/>
+<feColorMatrix in="b" type="matrix" values="1 0 0 0 .9 0 1 0 0 .28 0 0 1 0 .06 0 0 0 .68 0" result="c"/>
+<feMerge>
+<feMergeNode in="c"/>
+<feMergeNode in="SourceGraphic"/>
+</feMerge>
+</filter>
+
+<path id="cloudShape" d="M72 182C138 135 238 168 296 142C378 112 500 150 518 235C585 260 594 348 538 406C590 475 548 566 492 602C526 682 453 752 359 724C304 770 187 743 146 690C58 672 38 587 84 534C24 485 24 405 84 360C38 305 30 222 72 182Z"/>
+
+<clipPath id="cloudClip">
+<use href="#cloudShape"/>
+</clipPath>
+
+<path id="shield" d="M800 150C746 191 687 222 606 240C589 244 578 259 578 277V430C578 562 649 680 760 734L800 754L840 734C951 680 1022 562 1022 430V277C1022 259 1011 244 994 240C913 222 854 191 800 150Z"/>
+
+<clipPath id="shieldClip">
+<use href="#shield"/>
+</clipPath>
+
+<style><![CDATA[
+.title {
+font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+font-weight: 800;
+}
+
+.body {
+font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.mono {
+font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.drift1 {
+animation: drift1 7s ease-in-out infinite;
+transform-box: fill-box;
+transform-origin: center;
+}
+
+.drift2 {
+animation: drift2 8.2s ease-in-out infinite;
+transform-box: fill-box;
+transform-origin: center;
+}
+
+.drift3 {
+animation: drift3 6.8s ease-in-out infinite;
+transform-box: fill-box;
+transform-origin: center;
+}
+
+.drift4 {
+animation: drift4 9s ease-in-out infinite;
+transform-box: fill-box;
+transform-origin: center;
+}
+
+.pulse {
+animation: pulse 4.8s ease-in-out infinite;
+transform-origin: 800px 452px;
+}
+
+.scan {
+animation: scan 3.4s ease-in-out infinite;
+}
+
+.dash {
+stroke-dasharray: 10 18;
+animation: dash 3.6s linear infinite;
+}
+
+.settle {
+animation: settle 5.4s ease-in-out infinite;
+transform-box: fill-box;
+transform-origin: center;
+}
+
+.active {
+animation: active 3.4s ease-in-out infinite;
+transform-box: fill-box;
+transform-origin: center;
+}
+
+.badge {
+animation: badge 2.8s ease-in-out infinite;
+}
+
+.pixel {
+animation: pixel 4s linear infinite;
+}
+
+@keyframes drift1 {
+0%,100% { transform: translate(0,0) rotate(-2deg); opacity: .9; }
+50% { transform: translate(5px,-6px) rotate(-1deg); opacity: 1; }
+}
+
+@keyframes drift2 {
+0%,100% { transform: translate(0,0) rotate(2deg); opacity: .86; }
+50% { transform: translate(-6px,5px) rotate(1deg); opacity: 1; }
+}
+
+@keyframes drift3 {
+0%,100% { transform: translate(0,0) rotate(-1.5deg); opacity: .88; }
+50% { transform: translate(6px,4px) rotate(1deg); opacity: 1; }
+}
+
+@keyframes drift4 {
+0%,100% { transform: translate(0,0) rotate(2deg); opacity: .84; }
+50% { transform: translate(-5px,-5px) rotate(1deg); opacity: 1; }
+}
+
+@keyframes pulse {
+0%,100% { opacity: .62; filter: url(#softGlow); }
+50% { opacity: 1; filter: url(#deepGlow); }
+}
+
+@keyframes scan {
+0% { transform: translateY(-130px); opacity: 0; }
+20% { opacity: .85; }
+50% { opacity: 1; }
+80% { opacity: .85; }
+100% { transform: translateY(130px); opacity: 0; }
+}
+
+@keyframes dash {
+to { stroke-dashoffset: -220; }
+}
+
+@keyframes settle {
+0%,100% { transform: translate(0,0); opacity: .98; }
+50% { transform: translate(0,-4px); opacity: 1; }
+}
+
+@keyframes active {
+0%,100% { transform: translate(0,0) scale(1); }
+50% { transform: translate(0,-5px) scale(1.012); }
+}
+
+@keyframes badge {
+0%,100% { opacity: .82; }
+50% { opacity: 1; }
+}
+
+@keyframes pixel {
+0% { transform: translateX(-25px); opacity: 0; }
+15% { opacity: .65; }
+80% { opacity: .9; }
+100% { transform: translateX(42px); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+.drift1, .drift2, .drift3, .drift4, .pulse, .scan, .dash, .settle, .active, .badge, .pixel {
+animation: none;
+}
+}
+]]></style>
+</defs>
+
+<rect width="1600" height="980" fill="url(#bg)"/>
+<path d="M0 822C270 760 453 770 660 822C864 876 1062 862 1600 785V980H0V822Z" fill="#071024" opacity=".45"/>
+<path d="M0 860H1600M0 905H1600" stroke="#1d2d64" opacity=".35"/>
+<path d="M160 980L650 742M400 980L730 742M650 980L790 742M950 980L870 742M1220 980L940 742M1460 980L1020 742" stroke="#26316d" opacity=".18"/>
+
+<text x="800" y="64" text-anchor="middle" class="title" font-size="42" fill="#f4fbff" letter-spacing="2.5">FROM WORKSPACE NOISE TO VERIFIED PACKS</text>
+<text x="800" y="101" text-anchor="middle" class="body" font-size="18" fill="#8ea9c5" letter-spacing="1.4">Messy changes in. Reviewed packs out.</text>
+
+<g id="noise-cloud">
+<use href="#cloudShape" fill="#150910" stroke="url(#noise)" stroke-width="2" stroke-dasharray="7 14" opacity=".58" filter="url(#warmGlow)"/>
+
+<path class="dash" d="M320 210C430 224 498 294 575 340" stroke="#ff6a39" stroke-width="3" opacity=".6" fill="none"/>
+<path class="dash" d="M300 326C426 346 497 391 576 415" stroke="#ffaa3e" stroke-width="3" opacity=".65" fill="none" style="animation-delay:-.8s"/>
+<path class="dash" d="M298 472C423 482 496 488 576 482" stroke="#ff6543" stroke-width="3" opacity=".55" fill="none" style="animation-delay:-1.4s"/>
+<path class="dash" d="M330 626C438 608 507 548 576 520" stroke="#ffb63c" stroke-width="3" opacity=".5" fill="none" style="animation-delay:-2s"/>
+
+<g clip-path="url(#cloudClip)">
+<g class="drift1">
+<rect x="110" y="178" width="196" height="56" rx="14" fill="#241014" stroke="#ff5d4a" stroke-width="2" filter="url(#warmGlow)"/>
+<circle cx="140" cy="206" r="11" fill="#ff6d5d"/>
+<path d="M123 224C128 213 151 213 156 224" stroke="#ffb1a8" stroke-width="3.5" stroke-linecap="round"/>
+<text x="174" y="214" class="body" font-size="21" font-weight="700" fill="#fff2ec">human edit</text>
+</g>
+
+<g class="drift2">
+<rect x="132" y="260" width="164" height="56" rx="14" fill="#21100b" stroke="#ff8a3b" stroke-width="2" filter="url(#warmGlow)"/>
+<path d="M159 274L167 290L183 298L167 306L159 322L151 306L135 298L151 290Z" fill="#ffd36e"/>
+<text x="194" y="298" class="body" font-size="21" font-weight="700" fill="#fff2ec">AI edit</text>
+</g>
+
+<g class="drift3">
+<rect x="96" y="346" width="226" height="56" rx="14" fill="#22170b" stroke="#ffc145" stroke-width="2" filter="url(#warmGlow)"/>
+<path d="M132 359H157L170 372V389H132Z" stroke="#ffd87a" stroke-width="3" fill="none"/>
+<path d="M157 359V373H170" stroke="#ffd87a" stroke-width="3"/>
+<text x="184" y="383" class="body" font-size="20" font-weight="700" fill="#fff2ec">unknown file</text>
+</g>
+
+<g class="drift4">
+<rect x="118" y="432" width="170" height="56" rx="14" fill="#25100d" stroke="#ff6b47" stroke-width="2" filter="url(#warmGlow)"/>
+<path d="M148 445H171L183 458V479H148Z" stroke="#ffb1a2" stroke-width="3" fill="none"/>
+<text x="196" y="469" class="body" font-size="20" font-weight="700" fill="#fff2ec">temp.log</text>
+</g>
+
+<g class="drift3" style="animation-delay:-.6s">
+<rect x="106" y="516" width="192" height="56" rx="14" fill="#20140c" stroke="#ff9b3c" stroke-width="2" filter="url(#warmGlow)"/>
+<circle cx="128" cy="702" r="14" stroke="#ffb64a" stroke-width="3"/>
+<text x="123" y="553" class="body" font-size="20" font-weight="800" fill="#ffb64a">?</text>
+<text x="166" y="554" class="body" font-size="20" font-weight="700" fill="#fff2ec">untracked</text>
+</g>
+
+<g class="drift2" style="animation-delay:-2.2s">
+<rect x="130" y="592" width="142" height="56" rx="14" fill="#25150b" stroke="#ff943c" stroke-width="2" filter="url(#warmGlow)"/>
+<path d="M160 606L183 643H137Z" stroke="#ffb743" stroke-width="3.5" fill="none" stroke-linejoin="round"/>
+<path d="M160 618V629" stroke="#ffb743" stroke-width="3.5" stroke-linecap="round"/>
+<circle cx="160" cy="636" r="2.8" fill="#ffb743"/>
+<text x="204" y="630" class="body" font-size="21" font-weight="700" fill="#fff2ec">risk</text>
+</g>
+
+<g class="drift1" style="animation-delay:-1.4s">
+  <rect x="212" y="674" width="172" height="56" rx="14" fill="#25100d" stroke="#ff6148" stroke-width="2" filter="url(#warmGlow)"/>
+  <path d="M244 692V707M244 707C233 707 233 724 244 724M244 707C255 707 255 724 244 724" stroke="#ffb1a2" stroke-width="3" stroke-linecap="round"/>  
+  <text x="274" y="710" class="body" font-size="20" font-weight="700" fill="#fff2ec">conflict</text>
+</g>
+
+<g class="drift4" style="animation-delay:-1.8s">
+<rect x="350" y="612" width="132" height="44" rx="12" fill="#101524" stroke="#8d96b8" stroke-width="1.5" opacity=".86"/>
+<text x="372" y="641" class="mono" font-size="18" fill="#c7d0e6">legacy.py</text>
+</g>
+
+<g class="drift1" style="animation-delay:-.9s">
+<rect x="402" y="238" width="58" height="58" rx="9" stroke="#64708c" fill="#101524" opacity=".84"/>
+<text x="413" y="274" class="mono" font-size="21" fill="#a5aec7">&lt;/&gt;</text>
+</g>
+
+<g class="drift2" style="animation-delay:-1.7s">
+<rect x="420" y="678" width="48" height="56" rx="8" stroke="#7480a0" fill="#101524" opacity=".8"/>
+<text x="432" y="713" class="mono" font-size="19" fill="#a5aec7">JS</text>
+</g>
+
+<g id="right-alert">
+<path d="M452 360L492 428H412Z" stroke="#ffbf3e" stroke-width="4" fill="none" opacity=".9"/>
+<path d="M452 383V403" stroke="#ffbf3e" stroke-width="4" stroke-linecap="round" opacity=".9"/>
+<circle cx="452" cy="414" r="3.2" fill="#ffbf3e" opacity=".9"/>
+</g>
+</g>
+</g>
+
+<g id="draft-core">
+  <defs>
+    <clipPath id="draftShieldSafeClip">
+      <use href="#shield"/>
+    </clipPath>
+
+    <clipPath id="draftCaptureClip">
+      <path d="M635 328C735 358 865 358 965 328L928 448C843 462 757 462 672 448Z"/>
+    </clipPath>
+
+    <clipPath id="draftVerifyClip">
+      <path d="M672 448C757 462 843 462 928 448L891 558C819 572 781 572 709 558Z"/>
+    </clipPath>
+
+    <clipPath id="draftReviewClip">
+      <path d="M709 558C781 562 819 562 891 558L855 668L800 700L745 668Z"/>
+    </clipPath>
+  </defs>
+
+  <path d="M520 410C610 390 690 390 755 410" stroke="url(#flow)" stroke-width="42" opacity=".08" filter="url(#softGlow)"/>
+
+  <use href="#shield" fill="#061a24" fill-opacity=".42" stroke="url(#trust)" stroke-width="5" filter="url(#deepGlow)" class="pulse"/>
+  <use href="#shield" fill="none" stroke="url(#trust)" stroke-width="2" opacity=".72"/>
+
+  <g clip-path="url(#draftShieldSafeClip)">
+    <!-- Section 1: Capture -->
+    <path d="M635 328C735 358 865 358 965 328L928 448C843 462 757 462 672 448Z"
+          fill="#071b22"
+          fill-opacity=".72"
+          stroke="#37ffd4"
+          stroke-width="2"
+          stroke-opacity=".9">
+      <animate attributeName="fill-opacity"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values=".72;.9;.72;.72;.72;.72"
+               keyTimes="0;.12;.24;.48;.72;1"/>
+      <animate attributeName="stroke-opacity"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values=".9;1;.9;.72;.72;.9"
+               keyTimes="0;.12;.24;.48;.72;1"/>
+      <animate attributeName="stroke-width"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values="2;3;2;2;2;2"
+               keyTimes="0;.12;.24;.48;.72;1"/>
+    </path>
+
+    <!-- Section 2: Verify -->
+    <path d="M672 448C757 462 843 462 928 448L891 558C819 572 781 572 709 558Z"
+          fill="#07172c"
+          fill-opacity=".72"
+          stroke="#2ea8ff"
+          stroke-width="2"
+          stroke-opacity=".86">
+      <animate attributeName="fill-opacity"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values=".72;.72;.72;.9;.72;.72"
+               keyTimes="0;.24;.36;.48;.6;1"/>
+      <animate attributeName="stroke-opacity"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values=".76;.76;.86;1;.86;.76"
+               keyTimes="0;.24;.36;.48;.6;1"/>
+      <animate attributeName="stroke-width"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values="2;2;2;3;2;2"
+               keyTimes="0;.24;.36;.48;.6;1"/>
+    </path>
+
+    <!-- Section 3: Review -->
+    <path d="M709 558C781 562 819 562 891 558L855 668L800 700L745 668Z"
+          fill="#140d2e"
+          fill-opacity=".72"
+          stroke="#9568ff"
+          stroke-width="2"
+          stroke-opacity=".86">
+      <animate attributeName="fill-opacity"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values=".72;.72;.72;.72;.92;.72"
+               keyTimes="0;.48;.6;.72;.84;1"/>
+      <animate attributeName="stroke-opacity"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values=".76;.76;.76;.86;1;.86"
+               keyTimes="0;.48;.6;.72;.84;1"/>
+      <animate attributeName="stroke-width"
+               dur="5.4s"
+               repeatCount="indefinite"
+               values="2;2;2;2;3;2"
+               keyTimes="0;.48;.6;.72;.84;1"/>
+    </path>
+
+    <!-- Title / subtitle safely inside shield -->
+    <text x="800" y="248" text-anchor="middle" class="title" font-size="38" fill="#f4fbff">Draft</text>
+    <text x="800" y="282" text-anchor="middle" class="body" font-size="13.5" font-weight="700" fill="#48ffd5" letter-spacing="1.6">TRUSTED REVIEW BOUNDARY</text>
+
+    <!-- Capture: largest, centered as one combined icon+text unit inside top polygon -->
+    <g clip-path="url(#draftCaptureClip)">
+      <g transform="translate(800 398)">
+        <g transform="translate(-76 0)">
+          <rect x="-23" y="-23" width="46" height="46" rx="13" stroke="#56ffe0" stroke-width="3.3" stroke-dasharray="8 7"/>
+          <circle cx="0" cy="0" r="8.8" stroke="#56ffe0" stroke-width="3.3"/>
+        </g>
+        <text x="54" y="2" text-anchor="middle" dominant-baseline="middle" class="title" font-size="30" textLength="122" lengthAdjust="spacingAndGlyphs" fill="#56ffe0">Capture</text>
+      </g>
+    </g>
+
+    <!-- Verify: medium, centered as one combined icon+text unit inside middle polygon -->
+    <g clip-path="url(#draftVerifyClip)">
+      <g transform="translate(800 503)">
+        <g transform="translate(-48, 0) scale(0.7)">
+          <path d="M0 -27C-14 -18 -26 -16 -26 -16V5C-26 28 -7 40 0 44C7 40 26 28 26 5V-16C26 -16 14 -18 0 -27Z" stroke="#43c8ff" stroke-width="4.3" fill="none"/>
+          <path d="M-14 7L-3 18L17 -8" stroke="#43c8ff" stroke-width="5.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+        <text x="34" y="3" text-anchor="middle" dominant-baseline="middle" class="title" font-size="26" textLength="88" lengthAdjust="spacingAndGlyphs" fill="#43c8ff">Verify</text>
+      </g>
+    </g>
+
+    <!-- Review: smallest, centered as one combined icon+text unit inside lower polygon -->
+    <g clip-path="url(#draftReviewClip)">
+      <g transform="translate(800 613)">
+        <g transform="translate(-32, 0) scale(0.6)">
+          <circle cx="-13" cy="-14" r="8" stroke="#c17dff" stroke-width="4.6"/>
+          <circle cx="8" cy="-14" r="8" stroke="#c17dff" stroke-width="4.6"/>
+          <path d="M-28 17C-23 4 -4 4 1 17" stroke="#c17dff" stroke-width="4.6" stroke-linecap="round"/>
+          <path d="M-7 17C-2 4 19 4 24 17" stroke="#c17dff" stroke-width="4.6" stroke-linecap="round"/>
+        </g>
+        <text x="24" y="2" text-anchor="middle" dominant-baseline="middle" class="title" font-size="21.5" textLength="74" lengthAdjust="spacingAndGlyphs" fill="#c17dff">Review</text>
+      </g>
+    </g>
+  </g>
+
+  <g filter="url(#softGlow)" opacity=".78">
+    <rect class="pixel" x="538" y="405" width="9" height="9" rx="2" fill="#ffb64a"/>
+    <rect class="pixel" x="555" y="434" width="9" height="9" rx="2" fill="#ff744a" style="animation-delay:-.7s"/>
+    <rect class="pixel" x="570" y="477" width="9" height="9" rx="2" fill="#ffd15f" style="animation-delay:-1.5s"/>
+    <rect class="pixel" x="590" y="504" width="9" height="9" rx="2" fill="#45f6d4" style="animation-delay:-2.2s"/>
+  </g>
+
+  <path d="M1020 360H1125" stroke="#45ffd5" stroke-width="4" stroke-linecap="round" stroke-dasharray="22 18" class="dash"/>
+  <path d="M1020 455H1125" stroke="#42b7ff" stroke-width="4" stroke-linecap="round" stroke-dasharray="22 18" class="dash" style="animation-delay:-1s"/>
+  <path d="M1020 548H1125" stroke="#9a6dff" stroke-width="4" stroke-linecap="round" stroke-dasharray="22 18" class="dash" style="animation-delay:-2s"/>
+
+  <path d="M1124 348L1156 360L1124 372Z" fill="#45ffd5" opacity=".88"/>
+  <path d="M1124 443L1156 455L1124 467Z" fill="#42b7ff" opacity=".88"/>
+  <path d="M1124 536L1156 548L1124 560Z" fill="#9a6dff" opacity=".88"/>
+</g>
+
+<g id="pack-board" class="settle">
+  <rect x="1100" y="150" width="440" height="604" rx="28" fill="#06151b" fill-opacity=".82" stroke="#30f7c4" stroke-width="2.5" filter="url(#softGlow)"/>
+
+  <!-- Header -->
+  <g id="pack-board-header">
+    <path d="M1137 198C1147 193 1163 193 1173 198V216C1173 225 1160 229 1155 230C1150 229 1137 225 1137 216Z" stroke="#70ffd9" stroke-width="4.5" fill="none" stroke-linejoin="round"/>
+    <path d="M1145 211L1151 217L1164 201" stroke="#70ffd9" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1190" y="222" class="title" font-size="32" fill="#78ffd6">Verified Packs</text>
+  </g>
+
+  <!-- Top card: login fix -->
+  <g id="pack-card-login">
+    <rect x="1134" y="267" width="178" height="76" rx="16" fill="#071a22" stroke="#16bfa2" stroke-width="1.6"/>
+    <!-- Cube -->
+    <g transform="translate(1170 300)">
+      <path d="M0 -20L24 -7V17L0 30L-24 17V-7Z" stroke="#61ffd4" stroke-width="3" fill="none"/>
+      <path d="M-24 -7L0 6L24 -7M0 6V30" stroke="#61ffd4" stroke-width="2"/>
+    </g>
+
+    <text x="1255" y="300" text-anchor="middle" class="mono" font-size="13.2" font-weight="800" fill="#f4fbff">pck_login_fix</text>
+    <circle cx="1235" cy="315" r="5.5" fill="#55ffc7"/>
+    <text x="1245" y="320" class="body" font-size="13.5" fill="#a8bacb">ready</text>
+  </g>
+
+  <!-- Top card: api cleanup -->
+  <g id="pack-card-api">
+    <rect x="1328" y="267" width="178" height="76" rx="16" fill="#071a22" stroke="#16bfa2" stroke-width="1.6"/>
+    <!-- Cube -->
+    <g transform="translate(1363 300)">
+      <path d="M0 -20L24 -7V17L0 30L-24 17V-7Z" stroke="#61ffd4" stroke-width="3" fill="none"/>
+      <path d="M-24 -7L0 6L24 -7M0 6V30" stroke="#61ffd4" stroke-width="2"/>
+    </g>
+
+    <text x="1448" y="300" text-anchor="middle" class="mono" font-size="13.2" font-weight="800" fill="#f4fbff">pck_api_cleanup</text>
+    <circle cx="1408" cy="315" r="5.5" fill="#55ffc7"/>
+    <text x="1418" y="320" class="body" font-size="13.5" fill="#a8bacb">needs review</text>
+  </g>
+
+    <!-- Active pack card: selected pack -->
+  <g id="pack-card-active" class="active">
+    <rect x="1134" y="374" width="372" height="186" rx="22" fill="#0a1021" stroke="#ae70ff" stroke-width="3" filter="url(#deepGlow)"/>
+
+    <!-- Consistent cube -->
+    <g transform="translate(1196 425)">
+      <path d="M0 -20L24 -7V17L0 30L-24 17V-7Z" stroke="#a978ff" stroke-width="4" fill="none"/>
+      <path d="M-24 -7L0 6L24 -7M0 6V30" stroke="#a978ff" stroke-width="2.5"/>
+    </g>
+
+    <text x="1244" y="420" class="mono" font-size="21" font-weight="800" fill="#fff">pck_agent_refactor</text>
+    <text x="1244" y="450" class="body" font-size="15" fill="#b9c7dc">selected verified pack</text>
+
+    <!-- Badge row -->
+    <g class="badge">
+      <rect x="1156" y="480" width="105" height="30" rx="15" fill="#083a27" stroke="#46ffd0" stroke-width="1.5"/>
+      <circle cx="1173" cy="497" r="10" fill="#47f6c8"/>
+      <path d="M1168 503L1172 508L1180 497" stroke="#073a2c" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1192" y="500" class="body" font-size="14" font-weight="800" fill="#dffff7">verified</text>
+    </g>
+
+    <g class="badge" style="animation-delay:-.5s">
+      <rect x="1266" y="480" width="105" height="30" rx="15" fill="#092e50" stroke="#42b7ff" stroke-width="1.5"/>
+      <circle cx="1283" cy="497" r="10" fill="#42b7ff"/>
+      <path d="M1278 503L1282 508L1290 497" stroke="#092e50" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1302" y="500" class="body" font-size="14" font-weight="800" fill="#e1f5ff">reviewed</text>
+    </g>
+
+    <g class="badge" style="animation-delay:-1s">
+      <rect x="1384" y="480" width="105" height="30" rx="15" fill="#2a1248" stroke="#b47bff" stroke-width="1.5"/>
+      <path d="M1398 488H1409L1414 493V502H1398Z" stroke="#dfc4ff" stroke-width="1.8" fill="none" stroke-linejoin="round"/>
+      <path d="M1409 488V493H1414" stroke="#dfc4ff" stroke-width="1.8" fill="none" stroke-linejoin="round"/>
+      <text x="1424" y="496" class="body" font-size="14" font-weight="800" fill="#f3e8ff">receipt</text>
+    </g>
+
+    <line x1="1156" y1="527" x2="1484" y2="527" stroke="#334263"/>
+
+    <text x="1190" y="550" class="body" font-size="16" fill="#c7d2e6">risk:</text>
+    <text x="1242" y="550" class="body" font-size="18" font-weight="800" fill="#47f6c8">low</text>
+
+    <text x="1344" y="550" class="body" font-size="16" fill="#c7d2e6">approval:</text>
+    <text x="1442" y="550" class="body" font-size="18" font-weight="800" fill="#47f6c8">2/2</text>
+  </g>
+
+  <!-- Receipt / rollback safety strip -->
+  <g id="pack-card-receipt">
+    <rect x="1134" y="586" width="372" height="56" rx="16" fill="#091823" stroke="#5a7cff" stroke-width="1.6"/>
+
+    <!-- Receipt icon -->
+    <g transform="translate(1174 613)">
+      <path d="M-11 -15H6L15 -6V15H-11Z" stroke="#d7e3ff" stroke-width="2.2" fill="none" stroke-linejoin="round"/>
+      <path d="M5 -15V-6H15" stroke="#d7e3ff" stroke-width="2.2" fill="none"/>
+      <path d="M-5 0H8M-5 7H8" stroke="#7fa0ff" stroke-width="2" stroke-linecap="round"/>
+    </g>
+
+    <text x="1214" y="611" class="mono" font-size="19" font-weight="800" fill="#f4fbff">rcp_agent_refactor</text>
+    <g transform="translate(1254, 630)">
+         <circle cx="-25" cy="-4" r="4.5" fill="#55ffc7"/>
+         <text x="-12" y="1" text-anchor="start" class="body" font-size="14" fill="#a8bacb">ready</text>
+    </g>
+    
+    <!-- Rollback Receipt -->
+    <g transform="translate(1355, 635)">
+      <!-- Text Element: Reset to (0,0) relative to the parent -->
+      <text x="0" y="0" class="mono" font-size="13.4" font-weight="800" fill="#47f6c8">chk_before_refactor</text>
+      <!-- Icon: Positioning is offset locally relative to the text block (+125px right, -21px up) -->
+      <g transform="translate(125, -21) scale(-1, -1) rotate(-90)">
+        <path d="M8 -8C2 -12 -7 -9 -7 0C-7 7 -1 12 7 10"
+              stroke="#47f6c8" stroke-width="2.1" fill="none"
+              stroke-linecap="round"/>
+        <path d="M-10 -8L-7 0L0 -5"
+              stroke="#47f6c8" stroke-width="2.1" fill="none"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- Bottom docs card -->
+  <g id="pack-card-docs">
+      <rect x="1134" y="666" width="372" height="56" rx="16" fill="#071a22" stroke="#16bfa2" stroke-width="1.6"/>
+      <!-- Left Section -->
+      <g transform="translate(1175, 690) scale(0.52)">
+         <path d="M0 -20L24 -7V17L0 30L-24 17V-7Z" stroke="#61ffd4" stroke-width="5" fill="none"/>
+         <path d="M-24 -7L0 6L24 -7M0 6V30" stroke="#61ffd4" stroke-width="3.5"/>
+      </g>
+      <!-- Middle Section -->
+      <text x="1310" y="690" text-anchor="middle" class="mono" font-size="19" font-weight="800" fill="#f4fbff">pck_docs_update</text>
+      <g transform="translate(1310, 712)">
+         <circle cx="-25" cy="-4" r="4.5" fill="#55ffc7"/>
+         <text x="-12" y="1" text-anchor="start" class="body" font-size="14" fill="#a8bacb">ready</text>
+      </g>
+      <!-- Right Section -->
+      <text x="1455" y="700" text-anchor="middle" class="body" font-size="16" font-weight="800" fill="#47f6c8">saved</text>
+   </g>
+</g>
+
+<g id="message">
+  <text x="800" y="822" text-anchor="middle" class="title" font-size="40" fill="#f6faff">Draft turns messy human and AI workspace changes</text>
+  <text x="800" y="870" text-anchor="middle" class="title" font-size="40" fill="url(#trust)">into verified, reviewable packs.</text>
+</g>
+
+<g id="footer-flow" opacity=".95" transform="translate(1000 928)">
+  <text x="-560" y="0" class="body" font-size="18" fill="#f0f7ff">Capture changes.</text>
+  <text x="-398" y="0" class="body" font-size="26" fill="#b6c9df">›</text>
+  <text x="-350" y="0" class="body" font-size="18" fill="#f0f7ff">Verify evidence.</text>
+  <text x="-190" y="0" class="body" font-size="26" fill="#b6c9df">›</text>
+  <text x="-142" y="0" class="body" font-size="18" fill="#f0f7ff">Review packs.</text>
+  <text x="10" y="0" class="body" font-size="26" fill="#b6c9df">›</text>
+  <text x="58" y="0" class="body" font-size="18" fill="#f0f7ff">Save with receipts.</text>
+</g>
+</svg>

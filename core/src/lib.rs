@@ -1,9 +1,10 @@
-//! `draft-core` — Draft-native v0.3.0 change-control primitives.
+//! `draft-core` — Draft-native v0.3.1 change-control primitives.
 //!
-//! v0.3.0 is local-first and stores verified changepacks in `.draft/`.
+//! v0.3.1 is local-first and stores verified changepacks in `.draft/`.
 //! Core owns local `.draft/` storage, scanning, snapshots, changepacks,
 //! evidence, verification, review, approval, save receipts, and rollback.
 
+pub mod adapters;
 mod app;
 pub mod common;
 pub mod error;
@@ -12,6 +13,6 @@ pub mod identity;
 pub mod lock;
 
 /// The Draft version string used in metadata, receipts, and `--version`.
-pub const DRAFT_VERSION: &str = "0.3.0";
+pub const DRAFT_VERSION: &str = "0.3.1";
 
 pub use app::*;

@@ -4,7 +4,7 @@ Policy controls whether a changepack can be saved.
 
 ## Default Gates
 
-The default v0.3.0 policy requires:
+The default v0.3.1 policy requires:
 
 - verification before save;
 - approval before save;

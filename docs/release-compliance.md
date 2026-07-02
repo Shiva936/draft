@@ -1,11 +1,11 @@
-# v0.3.0 Release Compliance
+# v0.3.1 Release Compliance
 
-This document is the public release checklist for Draft v0.3.0. It maps the planning intent to implementation, tests, and documentation so maintainers can
+This document is the public release checklist for Draft v0.3.1. It maps the planning intent to implementation, tests, and documentation so maintainers can
 decide whether a build is ready to publish.
 
 ## Current Verdict
 
-The current tree satisfies the v0.3.0 local production-readiness gates tracked by this document. The core flows are Draft-native, daemon IPC coverage includes
+The current tree satisfies the v0.3.1 local production-readiness gates tracked by this document. The core flows are Draft-native, daemon IPC coverage includes
 the control plane and durable service jobs, the TUI exposes review cockpit sections, and the release test/audit commands pass locally.
 
 ## Requirement Matrix
@@ -28,7 +28,7 @@ the control plane and durable service jobs, the TUI exposes review cockpit secti
 | Compare and compose | Implemented | Text patches include stable hunk records; compare reports file and hunk overlaps; compose rejects incompatible changes and creates a new pack from source patch data. |
 | Save and receipts | Implemented | Draft saves approved changepacks into `.draft/` and records save receipts. |
 | Rollback | Implemented | Rollback plans avoid Draft metadata; apply validates normalized paths and symlink parent escapes; regression tests cover unsafe restore paths. |
-| Services control plane | Implemented | IPC dispatch covers v0.3.0 methods; durable job records support scan, verify, risk, compose, save, rollback-plan, and index rebuild. |
+| Services control plane | Implemented | IPC dispatch covers v0.3.1 methods; durable job records support scan, verify, risk, compose, save, rollback, and index rebuild. |
 | CLI without daemon | Implemented | CLI invokes core directly and does not require `draftd`. |
 | TUI cockpit | Implemented | TUI renders workspace, changepacks, files, blockers, receipt count, service mode, and action affordances through a testable terminal renderer. |
 | Public documentation | Implemented | The docs cover user, operator, security, contributor, architecture, command, service, and release-compliance topics. |
@@ -36,7 +36,7 @@ the control plane and durable service jobs, the TUI exposes review cockpit secti
 
 ## Release Gates
 
-A v0.3.0 release candidate must pass:
+A v0.3.1 release candidate must pass:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -50,4 +50,4 @@ audits.
 
 ## Maintainer Notes
 
-Draft must remain local-only in v0.3.0. Hooks are opaque commands run only when the owning Draft command reaches the configured hook phase. They are captured as receipt evidence with `native_save_status`, `hook_status`, and `overall_status`; they are not parsed, detected, or modeled.
+Draft must remain local-only in v0.3.1. Hooks are opaque commands run only when the owning Draft command reaches the configured hook phase. They are captured as receipt evidence with `native_save_status`, `hook_status`, and `overall_status`; they are not parsed, detected, or modeled.

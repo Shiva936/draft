@@ -1,6 +1,6 @@
 # Contributing To Draft
 
-Draft is a local-first change-control tool. Contributions should preserve the v0.3.0 boundary: Draft owns `.draft/`, verifies and saves changepacks locally, and treats `hooks.*` as opaque command strings.
+Draft is a local-first change-control tool. Contributions should preserve the v0.3.1 boundary: Draft owns `.draft/`, verifies and saves changepacks locally, and treats `hooks.*` as opaque command strings.
 
 ## Development Setup
 

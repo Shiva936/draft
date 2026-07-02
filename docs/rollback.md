@@ -1,22 +1,12 @@
 # Rollback
 
-Rollback restores workspace files toward a prior Draft snapshot or receipt.
-
-## Preview First
+Rollback restores workspace files toward a prior Draft checkpoint, pack boundary, or reversible receipt.
 
 ```bash
-draft rollback <snapshot-or-receipt> --plan
+draft rollback <chk-id|pck-id|rcp-id>
 ```
 
-The plan lists affected files and warnings. Review the plan before applying.
-
-## Apply
-
-```bash
-draft rollback <snapshot-or-receipt> --yes
-```
-
-Applying rollback is explicit because it can overwrite workspace files.
+Draft infers the rollback target type from the ID prefix. `chk_` rolls back to a checkpoint snapshot, `pck_` rolls back to the pack boundary, and `rcp_` rolls back only when the receipt is reversible. Non-reversible receipts fail clearly.
 
 ## Safety Rules
 
@@ -26,8 +16,8 @@ Rollback must:
 - reject paths that escape the workspace root;
 - record a rollback event;
 - write a receipt;
-- make destructive behavior visible before apply.
+- make destructive behavior visible in the receipt and events.
 
 ## Operational Guidance
 
-Create a checkpoint before risky work. If an agent run produces an unwanted result, inspect status, review the latest checkpoint, preview rollback, then apply only after confirming the affected files.
+Create a checkpoint before risky work. If an agent run produces an unwanted result, inspect status and rollback with the relevant `chk_`, `pck_`, or reversible `rcp_` ID.

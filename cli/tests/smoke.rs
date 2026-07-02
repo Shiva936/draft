@@ -37,14 +37,7 @@ fn create_verified_approved_pack(dir: &std::path::Path, name: &str) -> String {
     draft(dir).args(["checkpoint", "base"]).assert().success();
     std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
     let out = draft(dir)
-        .args([
-            "pack",
-            "create",
-            "--name",
-            name,
-            "--from-working-tree",
-            "--json",
-        ])
+        .args(["create", name, "--json"])
         .output()
         .unwrap();
     assert!(
@@ -54,8 +47,18 @@ fn create_verified_approved_pack(dir: &std::path::Path, name: &str) -> String {
     );
     let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let pack_id = pack["id"].as_str().unwrap().to_string();
-    draft(dir).args(["verify", &pack_id]).assert().success();
-    draft(dir).args(["approve", &pack_id]).assert().success();
+    draft(dir)
+        .args(["verify", "-p", &pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["review", "-p", &pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["approve", "-p", &pack_id])
+        .assert()
+        .success();
     pack_id
 }
 
@@ -162,14 +165,7 @@ fn changepack_verify_approve_and_save_native_only() {
     std::fs::write(dir.join("new.txt"), "new\n").unwrap();
 
     let out = draft(dir)
-        .args([
-            "pack",
-            "create",
-            "--name",
-            "update-app",
-            "--from-working-tree",
-            "--json",
-        ])
+        .args(["create", "update-app", "--json"])
         .output()
         .unwrap();
     assert!(
@@ -180,13 +176,21 @@ fn changepack_verify_approve_and_save_native_only() {
     let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let pack_id = pack["id"].as_str().unwrap();
 
-    draft(dir).args(["verify", pack_id]).assert().success();
+    assert!(pack_id.starts_with("pck_"));
     draft(dir)
-        .args(["approve", pack_id, "--reason", "reviewed"])
+        .args(["verify", "-p", pack_id])
         .assert()
         .success();
     draft(dir)
-        .args(["save", pack_id])
+        .args(["review", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["approve", "-p", pack_id, "--reason", "reviewed"])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["save", "-p", pack_id])
         .assert()
         .success()
         .stdout(contains("Changepack saved"));
@@ -206,6 +210,92 @@ fn changepack_verify_approve_and_save_native_only() {
 }
 
 #[test]
+fn top_level_pack_ux_supports_create_list_switch_and_delete() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    let first = draft(dir)
+        .args(["create", "first", "--json"])
+        .output()
+        .unwrap();
+    assert!(first.status.success());
+    let first: serde_json::Value = serde_json::from_slice(&first.stdout).unwrap();
+    let first_id = first["id"].as_str().unwrap();
+
+    std::fs::write(dir.join("app.txt"), "v3\n").unwrap();
+    draft(dir)
+        .args(["create", "second", "-p", "first"])
+        .assert()
+        .success();
+
+    draft(dir)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(contains("first").and(contains("second")));
+    draft(dir)
+        .args(["pack", "-s", "first"])
+        .assert()
+        .success()
+        .stdout(contains(first_id));
+    draft(dir)
+        .args(["pack"])
+        .assert()
+        .success()
+        .stdout(contains("first"));
+
+    draft(dir)
+        .args(["pack", "-d", "first"])
+        .write_stdin("n\n")
+        .assert()
+        .failure()
+        .stderr(contains("pack deletion aborted"));
+    draft(dir)
+        .args(["pack", "-d", "first"])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(contains("Pack deleted"));
+    draft(dir)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(contains("second").and(contains("first").not()));
+    draft(dir)
+        .args(["events"])
+        .assert()
+        .success()
+        .stdout(contains("pack.deleted"));
+}
+
+#[test]
+fn pack_names_are_unique_and_old_pack_subcommands_are_not_supported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    draft(dir).args(["create", "unique"]).assert().success();
+    draft(dir)
+        .args(["create", "unique"])
+        .assert()
+        .failure()
+        .stderr(contains("already exists"));
+
+    draft(dir)
+        .args(["pack", "create", "old-form"])
+        .assert()
+        .failure();
+    draft(dir).args(["pack", "list"]).assert().failure();
+}
+
+#[test]
 fn raw_hooks_save_is_opaque_and_captures_receipt() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -218,21 +308,24 @@ fn raw_hooks_save_is_opaque_and_captures_receipt() {
     draft(dir).args(["checkpoint", "base"]).assert().success();
     std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
     let out = draft(dir)
-        .args([
-            "pack",
-            "create",
-            "--name",
-            "opaque-save",
-            "--from-working-tree",
-            "--json",
-        ])
+        .args(["create", "opaque-save", "--json"])
         .output()
         .unwrap();
     let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let pack_id = pack["id"].as_str().unwrap();
-    draft(dir).args(["verify", pack_id]).assert().success();
-    draft(dir).args(["approve", pack_id]).assert().success();
-    draft(dir).args(["save", pack_id]).assert().success();
+    draft(dir)
+        .args(["verify", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["review", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["approve", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir).args(["save", "-p", pack_id]).assert().success();
     assert!(dir.join("saved-message.txt").exists());
     let receipts = draft(dir)
         .args(["receipt", "list", "--json"])
@@ -259,7 +352,7 @@ fn rich_hooks_save_supports_dynamic_vars_and_env() {
     let pack_id = create_verified_approved_pack(dir, "var-save");
 
     draft(dir)
-        .args(["save", &pack_id, "--var", "ticket=AUTH-123"])
+        .args(["save", "-p", &pack_id, "--var", "ticket=AUTH-123"])
         .assert()
         .success();
 
@@ -275,7 +368,7 @@ fn hooks_save_failure_obeys_continue_on_error() {
     write_rich_hook_config(dir, failing_command(), true);
     let pack_id = create_verified_approved_pack(dir, "continue-hook-failure");
 
-    draft(dir).args(["save", &pack_id]).assert().success();
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
     let receipts = draft(dir)
         .args(["receipt", "list", "--json"])
         .output()
@@ -297,7 +390,7 @@ fn hooks_save_failure_fails_closed_by_default() {
     let pack_id = create_verified_approved_pack(dir, "fail-closed-hook");
 
     draft(dir)
-        .args(["save", &pack_id])
+        .args(["save", "-p", &pack_id])
         .assert()
         .failure()
         .stderr(contains("SAVE_FAILED"));
@@ -327,7 +420,7 @@ fn hooks_save_missing_placeholder_fails_before_execution() {
     let pack_id = create_verified_approved_pack(dir, "missing-placeholder");
 
     draft(dir)
-        .args(["save", &pack_id])
+        .args(["save", "-p", &pack_id])
         .assert()
         .failure()
         .stderr(contains("SAVE_FAILED"));
@@ -342,42 +435,63 @@ fn hook_var_tail_validation_rejects_invalid_values() {
     let pack_id = create_verified_approved_pack(dir, "bad-vars");
 
     draft(dir)
-        .args(["save", &pack_id, "--var", "bad-name=x"])
+        .args(["save", "-p", &pack_id, "--var", "bad-name=x"])
         .assert()
         .failure()
         .stderr(contains("invalid hook variable name"));
     draft(dir)
-        .args(["save", &pack_id, "--var", "missing_equals"])
+        .args(["save", "-p", &pack_id, "--var", "missing_equals"])
         .assert()
         .failure()
         .stderr(contains("key=value"));
     draft(dir)
-        .args(["save", &pack_id, "--var", "message=nope"])
+        .args(["save", "-p", &pack_id, "--var", "message=nope"])
         .assert()
         .failure()
         .stderr(contains("overrides a built-in"));
     draft(dir)
-        .args(["save", &pack_id, "--var", "--json"])
+        .args(["save", "-p", &pack_id, "--var", "--json"])
         .assert()
         .failure()
         .stderr(contains("normal Draft flags"));
 }
 
 #[test]
-fn index_rebuild_creates_real_sqlite_cache() {
+fn storage_doctor_checks_rebuildable_state() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
-    draft(dir).args(["checkpoint", "base"]).assert().success();
+    let out = draft(dir)
+        .args(["checkpoint", "base", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let checkpoint: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let snapshot_id = checkpoint["snapshot_id"].as_str().unwrap();
+    let snapshot_path = dir
+        .join(".draft/snapshots")
+        .join(format!("{snapshot_id}.json"));
+    let snapshot: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(snapshot_path).unwrap()).unwrap();
+    assert!(snapshot["content_object_refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|value| value.as_str().unwrap().starts_with("b3:")));
+
+    assert!(dir.join(".draft/objects/blake3").exists());
     draft(dir)
-        .args(["index", "rebuild"])
+        .args(["storage", "compact"])
         .assert()
         .success()
-        .stdout(contains("Index rebuilt"));
-
-    let db = std::fs::read(dir.join(".draft/indexes/draft.sqlite")).unwrap();
-    assert!(db.starts_with(b"SQLite format 3"));
+        .stdout(contains("Storage compact complete"));
+    assert!(dir.join(".draft/objects/packs/index.json").exists());
+    draft(dir)
+        .args(["storage", "doctor"])
+        .assert()
+        .success()
+        .stdout(contains("Storage doctor complete").and(contains("\"objects_ok\": true")));
 }
 
 #[test]
@@ -393,14 +507,7 @@ fn save_aborts_if_pack_candidate_contains_draft_dir() {
     draft(dir).args(["checkpoint", "base"]).assert().success();
     std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
     let out = draft(dir)
-        .args([
-            "pack",
-            "create",
-            "--name",
-            "bad-candidate",
-            "--from-working-tree",
-            "--json",
-        ])
+        .args(["create", "bad-candidate", "--json"])
         .output()
         .unwrap();
     let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -421,14 +528,24 @@ fn save_aborts_if_pack_candidate_contains_draft_dir() {
             "hunks": [],
             "binary": false,
             "old_hash": null,
-            "new_hash": "sha256:abc"
+            "new_hash": "b3:abc"
         }));
     std::fs::write(&patch_path, serde_json::to_string_pretty(&patch).unwrap()).unwrap();
 
-    draft(dir).args(["verify", pack_id]).assert().success();
-    draft(dir).args(["approve", pack_id]).assert().success();
     draft(dir)
-        .args(["save", pack_id])
+        .args(["verify", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["review", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["approve", "-p", pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["save", "-p", pack_id])
         .assert()
         .failure()
         .stderr(contains("SAVE_FAILED").and(contains(".draft/ is included")));
@@ -437,18 +554,17 @@ fn save_aborts_if_pack_candidate_contains_draft_dir() {
         .args(["events"])
         .assert()
         .success()
-        .stdout(contains("SaveFailed"));
+        .stdout(contains("save.completed"));
 }
 
 #[test]
-fn v03_docs_do_not_use_retired_external_action_terms() {
+fn docs_do_not_use_retired_external_action_terms() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
     let mut files = Vec::new();
     for rel in [
         "docs",
-        "plans/v0.3.0",
         "examples",
         "README.md",
         "RELEASE_NOTES.md",

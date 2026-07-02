@@ -102,7 +102,7 @@ fn event_replay_summarizes_and_verifies_chain() {
     let report = app.replay_events(dir.path()).unwrap();
     assert!(report.chain_ok);
     assert!(report.events >= 1);
-    assert_eq!(report.by_type["WorkspaceInitialized"], 1);
+    assert_eq!(report.by_type["repo.initialized"], 1);
 }
 
 #[cfg(unix)]
@@ -137,7 +137,7 @@ fn rollback_rejects_symlink_parent_escape() {
             "modified_time": null,
             "executable": null
         }));
-    snapshot.snapshot_id = "snap_escape".to_string();
+    snapshot.snapshot_id = "chk_escape".to_string();
     snap["id"] = serde_json::json!(snapshot.snapshot_id);
     std::fs::write(
         dir.path()

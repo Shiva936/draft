@@ -15,7 +15,7 @@ Changepacks let a user or agent collect a workspace delta, attach evidence, run 
 5. Run risk and policy checks.
 6. Review, comment, approve, or reject.
 7. Save after policy allows it.
-8. Use receipts and rollback plans for audit and recovery.
+8. Use receipts and rollback events for audit and recovery.
 
 ## Manifest Fields
 

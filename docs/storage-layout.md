@@ -1,6 +1,6 @@
 # Storage Layout
 
-Draft stores all private state below `.draft/`. The store is native to Draft v0.3.0 and is independent of external tools.
+Draft stores all private state below `.draft/`. The store is native to Draft v0.3.1 and is independent of external tools.
 
 ## Top-Level Files
 
@@ -53,7 +53,7 @@ The append path uses a local writer lock and syncs the file after append. `draft
 
 ## Object Store
 
-Objects are addressed by SHA-256. Callers store bytes and receive a hash reference. The object store is used for workspace file contents, command output, rendered messages, and evidence payloads.
+Objects are addressed by BLAKE3 (`b3:<hash>`). Object bytes are stored compressed with zstd, and `draft storage compact` can move loose compressed objects into zstd-compressed pack files with a rebuildable index. The object store is used for workspace file contents, command output, rendered messages, and evidence payloads.
 
 ## Privacy
 

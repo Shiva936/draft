@@ -120,7 +120,7 @@ pub fn render_text(model: &CockpitModel) -> String {
         out.push_str(&format!("  blocker: {blocker}\n"));
     }
     out.push_str("\nActions\n");
-    out.push_str("  refresh verify risk approve reject compare compose save rollback-plan quit\n");
+    out.push_str("  refresh verify risk approve reject compare compose save rollback quit\n");
     out
 }
 
@@ -188,7 +188,7 @@ mod tests {
             workspace_id: "ws_test".to_string(),
             changes: vec!["Modified app.txt".to_string()],
             packs: vec![CockpitPack {
-                id: "pack_1".to_string(),
+                id: "pck_1".to_string(),
                 status: ChangepackStatus::Draft,
                 name: "demo".to_string(),
                 files: vec![WorkspacePath::from("app.txt")],
@@ -197,13 +197,13 @@ mod tests {
                 receipt_count: 0,
             }],
             service_state: "direct".to_string(),
-            blockers: vec!["pack_1 requires verification before save".to_string()],
+            blockers: vec!["pck_1 requires verification before save".to_string()],
             receipts: 0,
         };
         let text = render_text(&model);
         assert!(text.contains("Draft Review Cockpit"));
-        assert!(text.contains("blocker: pack_1"));
-        assert!(text.contains("compare compose save rollback-plan"));
+        assert!(text.contains("blocker: pck_1"));
+        assert!(text.contains("compare compose save rollback"));
         assert!(render_test_frame(&model)
             .unwrap()
             .contains("Draft Review Cockpit"));

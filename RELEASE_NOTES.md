@@ -1,8 +1,8 @@
 # Release Notes
 
-## v0.3.0
+## v0.3.1
 
-Draft v0.3.0 introduces the local Verified Changepacks + Review Cockpit model.
+Draft v0.3.1 introduces the local Verified Changepacks + Review Cockpit model.
 
 ### Added
 

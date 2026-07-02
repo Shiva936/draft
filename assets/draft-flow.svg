@@ -1,0 +1,72 @@
+<svg width="1280" height="280" viewBox="0 0 1280 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<title id="title">Draft workflow</title>
+<desc id="desc">Draft workflow from scan to checkpoint, create, verify, approve, save, receipt and rollback.</desc>
+<style>
+  .label { font: 700 26px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #eef8ff; }
+  .small { font: 500 16px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; fill: #8ea4b8; }
+  .dash { stroke-dasharray: 18 16; animation: move 2.8s linear infinite; }
+  .node { animation: glow 3s ease-in-out infinite; }
+  @keyframes move { to { stroke-dashoffset: -68; } }
+  @keyframes glow { 0%,100% { opacity: .82; } 50% { opacity: 1; } }
+</style>
+<defs>
+  <linearGradient id="g" x1="72" y1="0" x2="1208" y2="0" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#35ffd4"/>
+    <stop offset=".5" stop-color="#23a8ff"/>
+    <stop offset="1" stop-color="#8a5cff"/>
+  </linearGradient>
+  <filter id="glow" x="-40%" y="-80%" width="180%" height="260%">
+    <feGaussianBlur stdDeviation="6" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+<rect width="1280" height="280" rx="36" fill="#050912"/>
+<path d="M138 142H1144" stroke="url(#g)" stroke-width="6" stroke-linecap="round" opacity=".36"/>
+<path class="dash" d="M138 142H1144" stroke="url(#g)" stroke-width="6" stroke-linecap="round" filter="url(#glow)"/>
+<g class="node">
+  <circle cx="138" cy="142" r="45" fill="#07161b" stroke="url(#g)" stroke-width="4" filter="url(#glow)"/>
+  <path d="M118 137h40M118 151h32M118 123h26" stroke="#dffff8" stroke-width="5" stroke-linecap="round"/>
+  <text x="138" y="218" text-anchor="middle" class="label">scan</text>
+  <text x="138" y="242" text-anchor="middle" class="small">unknown files included</text>
+</g>
+<g class="node">
+  <circle cx="306" cy="142" r="45" fill="#07121f" stroke="url(#g)" stroke-width="4" filter="url(#glow)"/>
+  <path d="M286 156l20 14 30-53" stroke="#dffff8" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="306" y="218" text-anchor="middle" class="label">checkpoint</text>
+  <text x="306" y="242" text-anchor="middle" class="small">reproducible baseline</text>
+</g>
+<g class="node">
+  <circle cx="474" cy="142" r="45" fill="#07121f" stroke="url(#g)" stroke-width="4" filter="url(#glow)"/>
+  <rect x="452" y="114" width="42" height="56" rx="8" stroke="#dffff8" stroke-width="5"/>
+  <path d="M493 114v17h17" stroke="#dffff8" stroke-width="5" stroke-linecap="round"/>
+  <text x="474" y="218" text-anchor="middle" class="label">create</text>
+  <text x="474" y="242" text-anchor="middle" class="small">pack the change</text>
+</g>
+<g class="node">
+  <circle cx="642" cy="142" r="45" fill="#07121f" stroke="url(#g)" stroke-width="4" filter="url(#glow)"/>
+  <path d="M620 143h44M642 121v44" stroke="#dffff8" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="642" cy="142" r="25" stroke="#dffff8" stroke-width="5"/>
+  <text x="642" y="218" text-anchor="middle" class="label">verify</text>
+  <text x="642" y="242" text-anchor="middle" class="small">evidence + risk</text>
+</g>
+<g class="node">
+  <circle cx="810" cy="142" r="45" fill="#07121f" stroke="url(#g)" stroke-width="4" filter="url(#glow)"/>
+  <path d="M787 144l15 16 33-38" stroke="#dffff8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="810" y="218" text-anchor="middle" class="label">approve</text>
+  <text x="810" y="242" text-anchor="middle" class="small">human review gate</text>
+</g>
+<g class="node">
+  <circle cx="978" cy="142" r="45" fill="#07121f" stroke="url(#g)" stroke-width="4" filter="url(#glow)"/>
+  <path d="M958 116h40l18 18v34a8 8 0 0 1-8 8h-50a8 8 0 0 1-8-8v-44a8 8 0 0 1 8-8Z" stroke="#dffff8" stroke-width="5"/>
+  <path d="M966 154h34" stroke="#dffff8" stroke-width="5" stroke-linecap="round"/>
+  <text x="978" y="218" text-anchor="middle" class="label">save</text>
+  <text x="978" y="242" text-anchor="middle" class="small">receipt-backed hook</text>
+</g>
+<g class="node">
+  <circle cx="1146" cy="142" r="45" fill="#07121f" stroke="url(#g)" stroke-width="4" filter="url(#glow)"/>
+  <path d="M1168 129c-8-12-22-20-38-17-21 4-34 25-29 46" stroke="#dffff8" stroke-width="6" stroke-linecap="round"/>
+  <path d="M1169 129l-3-23M1169 129l-22 2" stroke="#dffff8" stroke-width="6" stroke-linecap="round"/>
+  <text x="1146" y="218" text-anchor="middle" class="label">rollback</text>
+  <text x="1146" y="242" text-anchor="middle" class="small">safe recovery</text>
+</g>
+</svg>
