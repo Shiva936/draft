@@ -10,7 +10,7 @@ fn draft(dir: &std::path::Path) -> Assert {
 
 fn write_saved_message_command() -> &'static str {
     if cfg!(windows) {
-        "echo \"{{message}}\"> saved-message.txt"
+        "echo {{message}}> saved-message.txt"
     } else {
         "printf %s \"{{message}}\" > saved-message.txt"
     }
@@ -30,6 +30,12 @@ fn hook_var_command() -> &'static str {
     } else {
         "printf %s \"{{ticket}}:$DRAFT_VAR_TICKET\" > hook-vars.txt"
     }
+}
+
+fn same_canonical_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
 }
 
 fn create_verified_approved_pack(dir: &std::path::Path, name: &str) -> String {
@@ -351,6 +357,10 @@ fn raw_hooks_save_is_opaque_and_captures_receipt() {
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
     draft(dir)
+        .args(["config", "set", "save.message_template", "{{title}}"])
+        .assert()
+        .success();
+    draft(dir)
         .args(["config", "set", "hooks.save", write_saved_message_command()])
         .assert()
         .success();
@@ -377,20 +387,25 @@ fn raw_hooks_save_is_opaque_and_captures_receipt() {
         .success();
     draft(dir).args(["save", "-p", pack_id]).assert().success();
     assert!(dir.join("saved-message.txt").exists());
+    let saved_message = std::fs::read_to_string(dir.join("saved-message.txt")).unwrap();
+    assert!(saved_message.contains("opaque-save"));
     let receipts = draft(dir)
         .args(["receipt", "list", "--json"])
         .output()
         .unwrap();
     let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
-    assert!(receipts
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["hook_results"][0]["command_hash"].is_string()
+    assert!(receipts.as_array().unwrap().iter().any(|r| {
+        let Some(working_dir) = r["hook_results"][0]["working_dir"].as_str() else {
+            return false;
+        };
+        r["hook_results"][0]["command_hash"].is_string()
             && r["hook_results"][0]["exit_code"] == 0
+            && same_canonical_path(std::path::Path::new(working_dir), dir)
             && r["hook_results"][0]["stdout_ref"].is_string()
             && r["hook_results"][0]["stderr_ref"].is_string()
-            && r["overall_status"] == "saved"));
+            && r["hook_status"] == "succeeded"
+            && r["overall_status"] == "saved"
+    }));
 }
 
 #[test]

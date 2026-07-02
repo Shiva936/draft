@@ -999,6 +999,7 @@ impl App {
             .filter(|c| c.enabled && !c.command.trim().is_empty())
         {
             let start = Instant::now();
+            let shell = default_hook_shell_runtime();
             let out = shell_with_env_timeout(
                 &check.command,
                 &ws.root,
@@ -1006,6 +1007,7 @@ impl App {
                 check
                     .timeout_seconds
                     .map(|seconds| seconds.saturating_mul(1000)),
+                &shell,
             );
             let (exit_code, stdout, stderr) = match out {
                 Ok(o) => (o.status.code().unwrap_or(-1), o.stdout, o.stderr),
@@ -4992,20 +4994,21 @@ fn run_hook(
         values.insert(k.clone(), v.clone());
     }
     let command = interpolate_strict(&hook.command, &values)?;
-    let shell_name = default_shell();
-    let cwd = match hook.cwd.as_str() {
+    let resolved_cwd = match hook.cwd.as_str() {
         "workspace" | "" => ws.root.clone(),
         other => ws.root.join(other),
     };
+    let cwd = resolved_cwd.canonicalize().unwrap_or(resolved_cwd);
     let mut env = hook_env(ctx);
     for (k, v) in &hook.env {
         env.insert(k.clone(), v.clone());
     }
     let mut env_keys: Vec<String> = env.keys().cloned().collect();
     env_keys.sort();
-    let hash = command_hash(&shell_name, &cwd, &command, &ctx.message);
+    let shell = resolve_hook_shell(&hook.shell)?;
+    let hash = command_hash(&shell.name, &cwd, &command, &ctx.message);
     let started_at = now();
-    let out = shell_with_env_timeout(&command, &cwd, &env, hook.timeout_ms);
+    let out = shell_with_env_timeout(&command, &cwd, &env, hook.timeout_ms, &shell);
     let ended_at = now();
     let (exit_code, stdout, stderr) = match out {
         Ok(o) => (o.status.code().unwrap_or(-1), o.stdout, o.stderr),
@@ -5022,7 +5025,7 @@ fn run_hook(
     Ok(HookResult {
         hook_name: hook_name.to_string(),
         hook_phase: hook.phase.clone(),
-        shell: shell_name,
+        shell: shell.name,
         working_dir: cwd.display().to_string(),
         command_hash: hash,
         exit_code,
@@ -5168,11 +5171,12 @@ fn shell_with_env_timeout(
     cwd: &Path,
     env: &BTreeMap<String, String>,
     timeout_ms: Option<u64>,
+    shell: &HookShell,
 ) -> std::io::Result<std::process::Output> {
     if timeout_ms.is_none() {
-        return shell_with_env_unbounded(command, cwd, env);
+        return shell_with_env_unbounded(command, cwd, env, shell);
     }
-    let mut cmd = shell_command(command);
+    let mut cmd = shell.command(command);
     let mut child = cmd
         .current_dir(cwd)
         .envs(env)
@@ -5201,20 +5205,55 @@ fn shell_with_env_unbounded(
     command: &str,
     cwd: &Path,
     env: &BTreeMap<String, String>,
+    shell: &HookShell,
 ) -> std::io::Result<std::process::Output> {
-    let mut cmd = shell_command(command);
+    let mut cmd = shell.command(command);
     cmd.current_dir(cwd).envs(env).output()
 }
 
-fn shell_command(command: &str) -> Command {
-    if cfg!(windows) {
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/C", command]);
+#[derive(Debug, Clone)]
+struct HookShell {
+    name: String,
+    program: String,
+    args_before_command: Vec<String>,
+}
+
+impl HookShell {
+    fn command(&self, command: &str) -> Command {
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&self.args_before_command).arg(command);
         cmd
-    } else {
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", command]);
-        cmd
+    }
+}
+
+fn resolve_hook_shell(name: &str) -> Result<HookShell, HookFailure> {
+    let normalized = name.trim().to_ascii_lowercase();
+    let normalized = normalized.as_str();
+    if normalized.is_empty() || normalized == "default" {
+        return Ok(default_hook_shell_runtime());
+    }
+    match normalized {
+        "cmd" | "cmd.exe" => {
+            if cfg!(windows) {
+                Ok(HookShell {
+                    name: "cmd.exe /S /C".to_string(),
+                    program: "cmd".to_string(),
+                    args_before_command: vec!["/S".to_string(), "/C".to_string()],
+                })
+            } else {
+                Err(HookFailure {
+                    message: "hook shell 'cmd' is only supported on Windows".to_string(),
+                })
+            }
+        }
+        "sh" => Ok(HookShell {
+            name: "sh -c".to_string(),
+            program: "sh".to_string(),
+            args_before_command: vec!["-c".to_string()],
+        }),
+        other => Err(HookFailure {
+            message: format!("unsupported hook shell '{other}'"),
+        }),
     }
 }
 
@@ -5229,10 +5268,22 @@ fn sanitize_output_bytes(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn default_shell() -> String {
+    default_hook_shell_runtime().name
+}
+
+fn default_hook_shell_runtime() -> HookShell {
     if cfg!(windows) {
-        "cmd.exe /C".to_string()
+        HookShell {
+            name: "cmd.exe /S /C".to_string(),
+            program: "cmd".to_string(),
+            args_before_command: vec!["/S".to_string(), "/C".to_string()],
+        }
     } else {
-        "sh -c".to_string()
+        HookShell {
+            name: "sh -c".to_string(),
+            program: "sh".to_string(),
+            args_before_command: vec!["-c".to_string()],
+        }
     }
 }
 
