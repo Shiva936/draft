@@ -1,12 +1,12 @@
 # Rollback
 
-Rollback restores workspace files toward a prior Draft checkpoint, pack boundary, or reversible receipt.
+Rollback restores workspace files toward a prior Draft checkpoint, ChangePack boundary, or reversible receipt.
 
 ```bash
 draft rollback <chk-id|pck-id|rcp-id>
 ```
 
-Draft infers the rollback target type from the ID prefix. `chk_` rolls back to a checkpoint snapshot, `pck_` rolls back to the pack boundary, and `rcp_` rolls back only when the receipt is reversible. Non-reversible receipts fail clearly.
+Draft infers the rollback target type from the ID prefix. `chk_` rolls back to a checkpoint snapshot, `pck_` rolls back to the ChangePack boundary, and `rcp_` rolls back only when the receipt is reversible. Non-reversible receipts fail clearly.
 
 ## Safety Rules
 

@@ -1,6 +1,6 @@
 # Draft Configuration Rules
 
-Draft configuration lives in `.draft/config.toml`. The CLI supports `draft config set`, `get`, `unset`, and `list`.
+Draft configuration lives in `.draft/config.toml`. The CLI supports listing config with `draft config`, reading a key with `draft config -k <key>`, and changing values with `draft config set` and `draft config unset`.
 
 ## Identity
 
@@ -16,7 +16,7 @@ Optional actor email used only as Draft metadata.
 
 `hooks.save`
 
-An optional opaque command hook. It may be a raw command string or a rich hook entry. Draft runs it after a changepack is verified, approved, policy-allowed, and confirmed to have no `.draft/` save-candidate violation.
+An optional opaque command hook. It may be a raw command string or a rich hook entry. Draft runs it after a ChangePack is verified, approved, policy-allowed, and confirmed to have no `.draft/` save-candidate violation.
 
 `hooks.verify`
 

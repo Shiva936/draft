@@ -61,7 +61,7 @@ fn plain_directory_end_to_end_with_rollback() {
         .success();
     draft(dir).args(["save", "-p", pack_id]).assert().success();
     draft(dir)
-        .args(["events"])
+        .args(["event"])
         .assert()
         .success()
         .stdout(contains("save.completed"));

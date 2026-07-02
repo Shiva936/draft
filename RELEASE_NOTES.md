@@ -1,8 +1,10 @@
 # Release Notes
 
+See [CHANGELOG.md](CHANGELOG.md) for the public changelog. This file keeps the v0.3.1 release note summary.
+
 ## v0.3.1
 
-Draft v0.3.1 introduces the local Verified Changepacks + Review Cockpit model.
+Draft v0.3.1 introduces the local Verified ChangePacks + Review Cockpit model.
 
 ### Added
 

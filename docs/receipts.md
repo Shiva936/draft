@@ -19,7 +19,7 @@ Draft writes receipts for:
 A save receipt records:
 
 - receipt id;
-- changepack id;
+- ChangePack id;
 - actor;
 - native save status;
 - hook status;

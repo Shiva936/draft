@@ -1,6 +1,6 @@
 # Policy
 
-Policy controls whether a changepack can be saved.
+Policy controls whether a ChangePack can be saved.
 
 ## Default Gates
 
@@ -15,7 +15,7 @@ The default v0.3.1 policy requires:
 
 Policy uses:
 
-- changepack status;
+- ChangePack status;
 - verification results;
 - risk findings;
 - review decisions;

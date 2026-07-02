@@ -1,12 +1,12 @@
 # Evidence
 
-Evidence is durable context attached to tasks, runs, verification, and changepacks.
+Evidence is durable context attached to tasks, runs, verification, and ChangePacks.
 
 ## Evidence Sources
 
 Draft records evidence from:
 
-- `draft spawn` command executions;
+- `draft task spawn` task provenance;
 - `draft verify` command executions;
 - generated verification summaries;
 - risk and policy outputs;
@@ -23,7 +23,7 @@ Command evidence captures:
 - exit code;
 - stdout object reference;
 - stderr object reference;
-- related changepack or run id.
+- related ChangePack or run id.
 
 Large payloads are stored as objects and referenced by hash.
 

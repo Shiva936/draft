@@ -18,7 +18,7 @@ draft save -p <pck-id>
 
 ## Why Spawn Through Draft
 
-`draft spawn` captures command output, exit code, timing, and evidence references. This gives reviewers context for what the agent attempted and whether it completed cleanly.
+`draft task spawn` records task intent, candidate links, optional ChangePack links, and instruction text. This gives reviewers context for what the agent was asked to do before changes are packaged and reviewed.
 
 ## Review Checklist For Agent Changes
 
@@ -31,4 +31,4 @@ draft save -p <pck-id>
 
 ## Failed Runs
 
-A failed agent command can still produce useful evidence. Keep the run record, inspect the workspace, and decide whether to create a changepack or roll back.
+A failed agent command can still produce useful evidence. Keep the run record, inspect the workspace, and decide whether to create a ChangePack or roll back.

@@ -1,6 +1,6 @@
 # Event Model
 
-Draft records important state transitions as append-only events. Events are for auditability, debugging, service updates, and tamper evidence.
+Draft records important state transitions as append-only events. Events are for auditability, debugging, service updates, replay, tooling, and tamper evidence. Draft stores only the raw event stream; `draft event` renders a human-readable timeline from those stored records.
 
 ## Event Shape
 
@@ -29,7 +29,7 @@ The chain is linear. Every appended event points at the previous event hash. Ver
 Run:
 
 ```bash
-draft events --verify-chain
+draft event --verify-chain
 ```
 
 The core API and daemon also expose event replay summaries, which count events

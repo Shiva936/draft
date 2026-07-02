@@ -1,6 +1,6 @@
 # Tasks And Runs
 
-Tasks and runs help connect user intent, agent execution, evidence, and changepacks.
+Tasks and runs help connect user intent, agent execution, evidence, and ChangePacks.
 
 ## Tasks
 
@@ -18,12 +18,12 @@ A task is a local record with:
 Create and inspect tasks with:
 
 ```bash
-draft task create "refactor parser" --description "clean up parse errors"
+draft task spawn "refactor parser" -- "clean up parse errors"
 draft task list
-draft task show <task-id>
+draft task
 ```
 
-Tasks can be linked to changepacks when the change is created.
+Tasks can be linked to ChangePacks when spawned with `-p <ChangePack>` or through later review context.
 
 ## Runs
 
@@ -38,16 +38,16 @@ Run records include:
 - timestamps;
 - stdout and stderr object references;
 - exit code;
-- linked task or changepack when available.
+- linked task or ChangePack when available.
 
 ## Spawn
 
 ```bash
-draft spawn --name "agent edit" -- <command>
+draft task spawn "agent edit" -c <candidate-name> -- <instruction>
 ```
 
-`spawn` captures command evidence. It does not decide whether the resulting workspace changes are acceptable; that decision happens through changepack review, verification, risk, policy, and approval.
+`draft task spawn` records task intent, candidate links, optional ChangePack links, and instruction text. It does not decide whether resulting workspace changes are acceptable; that decision happens through ChangePack review, verification, risk, policy, and approval.
 
-## Relationship To Changepacks
+## Relationship To ChangePacks
 
-A run may produce file changes. A changepack captures those changes later. Keeping both lets reviewers see both the final delta and the process that produced it.
+A run may produce file changes. A ChangePack captures those changes later. Keeping both lets reviewers see both the final delta and the process that produced it.

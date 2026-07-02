@@ -26,4 +26,4 @@ Use forward slashes in rules. Draft normalizes platform path separators before m
 
 ## Review Guidance
 
-Keep ignore rules narrow. Ignoring broad paths can hide files from changepacks, verification, and rollback planning. When in doubt, leave files visible and let review or policy decide whether they belong in a changepack.
+Keep ignore rules narrow. Ignoring broad paths can hide files from ChangePacks, verification, and rollback planning. When in doubt, leave files visible and let review or policy decide whether they belong in a ChangePack.

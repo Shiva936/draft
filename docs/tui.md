@@ -1,17 +1,17 @@
 # Review Cockpit TUI
 
-The TUI is the interactive Review Cockpit for Draft changepacks. It is designed for repeated review work where a user needs to inspect status, evidence, risk, policy, approvals, receipts, and rollback options without leaving Draft.
+The TUI is the interactive Review Cockpit for Draft ChangePacks. It is designed for repeated review work where a user needs to inspect status, evidence, risk, policy, approvals, receipts, and rollback options without leaving Draft.
 
 ## Current Capabilities
 
-The TUI layer renders changepack-oriented review cockpit sections and can be launched from CLI review flows. It uses the same core state as the CLI and has a testable terminal renderer.
+The TUI layer renders ChangePack-oriented review cockpit sections and can be launched from CLI review flows. It uses the same core state as the CLI and has a testable terminal renderer.
 
 ## Intended Cockpit Panels
 
 The cockpit exposes:
 
 - workspace status and latest scan time;
-- changepack list and selected changepack details;
+- ChangePack list and selected ChangePack details;
 - file changes and overlap indicators;
 - verification and save-readiness counts;
 - policy blockers;

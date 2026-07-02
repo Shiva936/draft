@@ -30,7 +30,7 @@ draft status
 
 Status compares the current workspace to the latest snapshot and reports added, modified, deleted, renamed, type-changed, and permission-changed files.
 
-## Create A Changepack
+## Create A ChangePack
 
 ```bash
 draft create "parser cleanup"
@@ -38,15 +38,15 @@ draft list
 draft pack
 ```
 
-A changepack is Draft’s reviewable unit. It contains a patch reference, evidence references, task links, review decisions, approvals, risk results, verification results, save receipts, and provenance hashes.
+A ChangePack is Draft’s reviewable unit. It contains a patch reference, evidence references, task links, review decisions, approvals, risk results, verification results, save receipts, and provenance hashes.
 
 ## Verify And Review
 
 ```bash
-draft verify <pack-id>
-draft risk <pack-id>
-draft review <pack-id>
-draft approve <pack-id> --reason "verified locally"
+draft verify -p <ChangePack-id-or-name>
+draft risk -p <ChangePack-id-or-name>
+draft review -p <ChangePack-id-or-name>
+draft approve -p <ChangePack-id-or-name> --reason "verified locally"
 ```
 
 Verification runs configured commands and stores stdout, stderr, exit code, and timing as evidence. Risk analysis records findings that policy can use. Approval is required before save when the default policy is active.
@@ -54,12 +54,12 @@ Verification runs configured commands and stores stdout, stderr, exit code, and 
 ## Save
 
 ```bash
-draft save <pack-id>
+draft save -p <ChangePack-id-or-name>
 draft receipt list
 draft receipt show <receipt-id>
 ```
 
-Save persists the approved changepack into `.draft/` and writes a receipt. If `hooks.save` is configured, Draft runs it only after approval and safety checks. If `.draft/` appears in the save candidate, Draft aborts, records a failed receipt, emits `save.completed` with failure status, and does not execute `hooks.save`.
+Save persists the approved ChangePack into `.draft/` and writes a receipt. If `hooks.save` is configured, Draft runs it only after approval and safety checks. If `.draft/` appears in the save candidate, Draft aborts, records a failed receipt, emits `save.completed` with failure status, and does not execute `hooks.save`.
 
 ## Roll Back
 
@@ -69,12 +69,16 @@ draft rollback <chk-id|pck-id|rcp-id>
 
 Rollback infers the target type from the ID prefix. Rollback never restores `.draft/`.
 
-## Use The Daemon Optionaly
+## Inspect Events
 
 ```bash
-draft service status
-draft service start
-draft service stop
+draft event
+draft event --raw
+draft event --verify-chain
 ```
 
-The CLI does not need the daemon. `draftd` exists for local live/background flows such as long-running review cockpit sessions and background indexing.
+`draft event` is a readable timeline derived from the stored event stream. `draft event --raw` prints the underlying JSONL records for audit, debugging, replay, and tooling.
+
+## Optional Local Services
+
+The CLI does not need a daemon. `draftd` exists for optional local live/background flows; it is not a hosted service and does not add remote synchronization.

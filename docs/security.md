@@ -20,7 +20,7 @@ Untrusted or sensitive:
 
 ## Hard `.draft/` Exclusion
 
-`.draft/` is private metadata. Draft excludes it from scans, snapshots, changepacks, save candidates, rollback plans, and hook candidate checks.
+`.draft/` is private metadata. Draft excludes it from scans, snapshots, ChangePacks, save candidates, rollback plans, and hook candidate checks.
 
 If `.draft/` appears in a save candidate, Draft:
 
@@ -35,7 +35,7 @@ If `.draft/` appears in a save candidate, Draft:
 Events are hash-chained. Run:
 
 ```bash
-draft events --verify-chain
+draft event --verify-chain
 ```
 
 This detects edits, missing links, and parse failures. Event hashing is tamper-evident, not a substitute for backups or cryptographic signing.

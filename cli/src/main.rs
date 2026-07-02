@@ -55,28 +55,23 @@ enum Command {
         json: bool,
     },
     /// Show append-only events.
-    Events {
-        #[arg(long)]
-        json: bool,
-        #[arg(long)]
-        verify_chain: bool,
-    },
-    /// Alias for events.
-    Log {
+    Event {
         #[arg(long)]
         top: bool,
         #[arg(long)]
         bottom: bool,
-        #[arg(short = 'p')]
+        #[arg(long)]
         page: Option<usize>,
-        #[arg(short = 'l')]
+        #[arg(long)]
         limit: Option<usize>,
-        #[arg(short = 'f')]
+        #[arg(short = 'f', long)]
         filter: Option<String>,
         #[arg(long)]
         raw: bool,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        verify_chain: bool,
     },
     /// Manage tasks.
     Task {
@@ -89,7 +84,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Create a pack.
+    /// Create a ChangePack.
     Create {
         name: String,
         #[arg(short = 'p')]
@@ -97,7 +92,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Show, switch, or delete the selected pack.
+    /// Show, switch, or delete the selected ChangePack.
     Pack {
         #[arg(short = 's')]
         select: Option<String>,
@@ -106,7 +101,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// List available packs.
+    /// List available ChangePacks.
     List {
         #[arg(long)]
         json: bool,
@@ -183,7 +178,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Split a changepack into two output packs.
+    /// Split a ChangePack into two output ChangePacks.
     Disperse {
         pack: String,
         #[arg(long, num_args = 2)]
@@ -448,25 +443,26 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             app.status_v031(&cwd, pack.as_deref(), component.as_deref(), full)?,
             json,
         ),
-        Command::Events { json, verify_chain } => {
-            if verify_chain {
-                render_json_or_text(app.verify_events(&cwd)?, json, "Event chain verified")
-            } else {
-                render_events(app.events(&cwd)?, json)
-            }
-        }
-        Command::Log {
+        Command::Event {
             top,
             bottom,
             page,
             limit,
             filter,
-            raw: _raw,
+            raw,
             json,
-        } => render_events(
-            app.events_page(&cwd, top, bottom, page, limit, filter.as_deref())?,
-            json,
-        ),
+            verify_chain,
+        } => {
+            if verify_chain {
+                render_json_or_text(app.verify_events(&cwd)?, json, "Event chain verified")
+            } else {
+                render_events(
+                    app.events_page(&cwd, top, bottom, page, limit, filter.as_deref())?,
+                    json,
+                    raw,
+                )
+            }
+        }
         Command::Task { action } => match action {
             Some(TaskAction::Spawn {
                 name,
@@ -501,7 +497,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
         } => render_json_or_text(
             app.pack_create_from_base(&cwd, name, base_pack)?,
             json,
-            "Pack created",
+            "ChangePack created",
         ),
         Command::Pack {
             select,
@@ -517,19 +513,23 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 render_json_or_text(
                     app.pack_select_ref(&cwd, &reference)?,
                     json,
-                    "Pack selected",
+                    "ChangePack selected",
                 )
             } else if let Some(reference) = delete {
                 let report = app.pack_show(&cwd, &reference)?;
                 if !confirm_pack_delete(&report.pack)? {
-                    return Err(DraftError::invalid_config("pack deletion aborted"));
+                    return Err(DraftError::invalid_config("ChangePack deletion aborted"));
                 }
-                render_json_or_text(app.pack_delete_ref(&cwd, &reference)?, json, "Pack deleted")
+                render_json_or_text(
+                    app.pack_delete_ref(&cwd, &reference)?,
+                    json,
+                    "ChangePack deleted",
+                )
             } else {
-                render_json_or_text(app.pack_show_selected(&cwd)?, json, "Pack")
+                render_json_or_text(app.pack_show_selected(&cwd)?, json, "ChangePack")
             }
         }
-        Command::List { json } => render_json_or_text(app.pack_list(&cwd)?, json, "Packs"),
+        Command::List { json } => render_json_or_text(app.pack_list(&cwd)?, json, "ChangePacks"),
         Command::Candidate { action } => match action {
             CandidateAction::List { json } => {
                 render_json_or_text(app.candidate_list(&cwd)?, json, "Candidates")
@@ -614,12 +614,12 @@ fn run(cli: Cli) -> Result<(), DraftError> {
         Command::Approve { pack, reason, json } => render_json_or_text(
             app.decide_selected(&cwd, pack.as_deref(), DecisionKind::Approve, reason)?,
             json,
-            "Changepack approved",
+            "ChangePack approved",
         ),
         Command::Reject { pack, reason, json } => render_json_or_text(
             app.decide_selected(&cwd, pack.as_deref(), DecisionKind::Reject, reason)?,
             json,
-            "Changepack rejected",
+            "ChangePack rejected",
         ),
         Command::Compare {
             left,
@@ -671,7 +671,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             render_json_or_text(
                 app.save_selected(&cwd, pack.as_deref(), vars)?,
                 json,
-                "Changepack saved",
+                "ChangePack saved",
             )
         }
         Command::Rollback { reference, json } => render_json_or_text(
@@ -759,9 +759,19 @@ fn render_status(report: draft_core::WorkspaceStatus, json: bool) -> Result<(), 
     Ok(())
 }
 
-fn render_events(events: Vec<draft_core::EventEnvelope>, json: bool) -> Result<(), DraftError> {
+fn render_events(
+    events: Vec<draft_core::EventEnvelope>,
+    json: bool,
+    raw: bool,
+) -> Result<(), DraftError> {
     if json {
         output::print_json(&events);
+        return Ok(());
+    }
+    if raw {
+        for e in events {
+            println!("{}", serde_json::to_string(&e).map_err(DraftError::from)?);
+        }
         return Ok(());
     }
     for e in events {
@@ -791,7 +801,7 @@ fn render_json_or_text<T: serde::Serialize>(
 
 fn confirm_pack_delete(pack: &draft_core::Changepack) -> Result<bool, DraftError> {
     let name = pack.name.as_deref().unwrap_or("<unnamed>");
-    print!("Delete pack {name} ({})? [y/N]: ", pack.id);
+    print!("Delete ChangePack {name} ({})? [y/N]: ", pack.id);
     io::stdout().flush().map_err(DraftError::from)?;
     let mut input = String::new();
     io::stdin()

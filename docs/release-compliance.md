@@ -12,25 +12,25 @@ the control plane and durable service jobs, the TUI exposes review cockpit secti
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Native `.draft/` store | Implemented | Workspace metadata, config, object store, event log, receipts, index, snapshots, tasks, runs, changepacks, evidence, and policies are stored below `.draft/`. |
+| Native `.draft/` store | Implemented | Workspace metadata, config, object store, event log, receipts, index, snapshots, tasks, runs, ChangePacks, evidence, and policies are stored below `.draft/`. |
 | Hard `.draft/` exclusion | Implemented | Scanner, snapshots, save candidates, rollback plans, watcher paths, and hook execution guards exclude Draft metadata. |
 | `.draft/.ignore` | Implemented | Draft has a dedicated ignore command and file. It is separate from any external tool configuration. |
 | Native scanner | Implemented | Status and snapshots walk the workspace directly and include files that are not known to any external system. |
 | Snapshots and checkpoints | Implemented | Checkpoint creates a snapshot plus receipt and event. |
 | Tasks and runs | Implemented | Tasks persist under the store; spawn/run commands capture command evidence. |
-| Changepacks | Implemented | Packs persist manifests, patch references, evidence references, decisions, receipts, and status. |
+| ChangePacks | Implemented | ChangePacks persist manifests, patch references, evidence references, decisions, receipts, and status. |
 | Evidence | Implemented | Verification and spawn commands attach durable evidence objects and references. |
 | Append-only events | Implemented with hardening | Events are hash-chained and appended under a local writer lock with durable sync. |
 | Provenance hashes | Implemented | Snapshots, patches, evidence, receipts, and events include content hashes. |
 | Verification | Implemented | Configured commands run locally with stdout, stderr, status, and receipts. |
 | Risk and policy | Implemented | Risk findings and policy gates block unsafe save paths. |
 | Review and approval | Implemented | Review, approve, and reject state transitions are persisted. |
-| Compare and compose | Implemented | Text patches include stable hunk records; compare reports file and hunk overlaps; compose rejects incompatible changes and creates a new pack from source patch data. |
-| Save and receipts | Implemented | Draft saves approved changepacks into `.draft/` and records save receipts. |
+| Compare and compose | Implemented | Text patches include stable hunk records; compare reports file and hunk overlaps; compose rejects incompatible changes and creates a new ChangePack from source patch data. |
+| Save and receipts | Implemented | Draft saves approved ChangePacks into `.draft/` and records save receipts. |
 | Rollback | Implemented | Rollback plans avoid Draft metadata; apply validates normalized paths and symlink parent escapes; regression tests cover unsafe restore paths. |
-| Services control plane | Implemented | IPC dispatch covers v0.3.1 methods; durable job records support scan, verify, risk, compose, save, rollback, and index rebuild. |
+| Services control plane | Implemented | IPC dispatch covers v0.3.1 methods; durable job records support local scan, verify, risk, compose, save, rollback, and storage-maintenance flows. |
 | CLI without daemon | Implemented | CLI invokes core directly and does not require `draftd`. |
-| TUI cockpit | Implemented | TUI renders workspace, changepacks, files, blockers, receipt count, service mode, and action affordances through a testable terminal renderer. |
+| TUI cockpit | Implemented | TUI renders workspace, ChangePacks, files, blockers, receipt count, service mode, and action affordances through a testable terminal renderer. |
 | Public documentation | Implemented | The docs cover user, operator, security, contributor, architecture, command, service, and release-compliance topics. |
 | Command hooks | Implemented | `hooks.save` is opaque hook execution after save approval and safety checks; raw and rich hooks use `{{name}}` placeholders, `--var` dynamic variables, and receipt hook status fields. |
 

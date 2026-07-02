@@ -8,11 +8,11 @@ Most read commands support `--json`. Human output is intended for terminals; JSO
 
 ### `draft init [-b <base-pack-name>]`
 
-Initializes `.draft/`, creates `.draft/events/events.jsonl`, writes default config files, creates the base pack, and selects it. The default base pack name is `base`.
+Initializes `.draft/`, creates `.draft/events/events.jsonl`, writes default config files, creates the base ChangePack, and selects it. The default base ChangePack name is `base`.
 
 ### `draft status [-p <pck-id>] [-c repo|tasks|candidates|changes|hooks] [--full]`
 
-Shows workspace or pack status. `.draft/` is always hard-excluded.
+Shows workspace or ChangePack status. `.draft/` is always hard-excluded.
 
 ### `draft checkpoint <message>`
 
@@ -37,17 +37,13 @@ Manages hook configuration. `hooks.save` is the save hook; Draft has no native c
 
 Manages `.draft/.ignore`. `.draft/` remains hard-excluded even if ignore rules are changed.
 
-## Events And Logs
+## Events
 
-### `draft log [--top|--bottom] [-p <page>] [-l <entries>] [-f <filter>] [--raw]`
+### `draft event [--top|--bottom] [--page <page>] [--limit <entries>] [-f|--filter <filter>] [--raw] [--json] [--verify-chain]`
 
-Renders a timeline derived from `.draft/events/events.jsonl`. `--raw` prints the raw stream.
+Renders a clean human-readable timeline derived from `.draft/events/events.jsonl`. `--raw` prints the underlying compact JSONL event envelopes for audit, debugging, replay, and tooling. `--verify-chain` verifies the append-only hash chain.
 
-### `draft events`
-
-Prints the raw append-only event stream.
-
-## Packs
+## ChangePacks
 
 ### `draft create <name> [-p <base-pck-id/name>]`
 ### `draft pack`
@@ -55,7 +51,7 @@ Prints the raw append-only event stream.
 ### `draft pack -d <pck-id/name>`
 ### `draft list`
 
-Creates, shows, switches, deletes, and lists packs. Pack IDs use `pck_`. Pack names must be unique among available packs. `draft pack -d` asks for final `y/N` confirmation and emits `pack.deleted`.
+Creates, shows, switches, deletes, and lists ChangePacks. ChangePack IDs use `pck_`. ChangePack names must be unique among available ChangePacks. `draft pack -d` asks for final `y/N` confirmation and emits `pack.deleted`.
 
 ## Candidates And Tasks
 
@@ -70,21 +66,21 @@ Manages host-agnostic candidate execution profiles. Missing candidates reference
 ### `draft task list`
 ### `draft task`
 
-Spawns tasks and records task/candidate/pack provenance. `draft task` shows the latest task or reports that no task is running.
+Spawns tasks and records task/candidate/ChangePack provenance. `draft task` shows the latest task or reports that no task is running.
 
 ## Verify, Risk, Review, And Decisions
 
 ### `draft verify [-p <pck-id>]`
 
-Verifies a pack, defaulting to the selected pack.
+Verifies a ChangePack, defaulting to the selected ChangePack.
 
 ### `draft risk [-p <pck-id>] [--explain] [--include-evidence]`
 
-Runs deterministic local risk analysis, defaulting to the selected pack.
+Runs deterministic local risk analysis, defaulting to the selected ChangePack.
 
 ### `draft review [-p <pck-id>] [--tui]`
 
-Starts review and locks the pack for final human decision. `--tui` opens the Review Cockpit.
+Starts review and locks the ChangePack for final human decision. `--tui` opens the Review Cockpit.
 
 ### `draft approve [-p <pck-id>]`
 ### `draft reject [-p <pck-id>]`
@@ -97,11 +93,11 @@ Records a mandatory human final decision. Review is required before approve/reje
 ### `draft compose <pck-a> <pck-b> --output <name> [--tui]`
 ### `draft disperse <pck-id> --output <pack-a-name> <pack-b-name> [--tui]`
 
-Compares, combines, or splits packs with receipt-backed provenance.
+Compares, combines, or splits ChangePacks with receipt-backed provenance.
 
 ### `draft save [-p <pck-id>] [--var key=value ...]`
 
-Saves an approved, verified pack and optionally runs `hooks.save`. `--var` values become hook placeholders and `DRAFT_VAR_*` environment variables; built-ins cannot be overridden.
+Saves an approved, verified ChangePack and optionally runs `hooks.save`. `--var` values become hook placeholders and `DRAFT_VAR_*` environment variables; built-ins cannot be overridden.
 
 ### `draft rollback <chk-id|pck-id|rcp-id>`
 

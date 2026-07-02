@@ -10,14 +10,14 @@ Raw string form:
 
 ```toml
 [hooks]
-save = "git add . && git commit -m \"{{message}}\""
+save = "printf %s \"{{message}}\" > .last-draft-save"
 ```
 
 Rich entry form:
 
 ```toml
 [hooks.save]
-command = "git add . && git commit -m \"{{message}}\""
+command = "./scripts/after-draft-save.sh \"{{message}}\""
 enabled = true
 phase = "after_success"
 shell = "default"
@@ -51,7 +51,7 @@ Built-in placeholders:
 {{description}}
 {{task_id}}
 {{run_id}}
-{{changepack_id}}
+{{ChangePack_id}}
 {{receipt_id}}
 {{actor_name}}
 {{actor_email}}
@@ -107,18 +107,11 @@ If a required hook exits non-zero and `continue_on_error = false`, `overall_stat
 
 ## Examples
 
-Commit to Git:
+Write a local save marker:
 
 ```toml
 [hooks.save]
-command = "git add . && git commit -m \"{{message}}\""
-```
-
-Update another local VCS:
-
-```toml
-[hooks.save]
-command = "jj describe -m \"{{message}}\""
+command = "printf %s \"{{message}}\" > .last-draft-save"
 ```
 
 Run a local script:
@@ -129,14 +122,14 @@ command = "./scripts/after-draft-save.sh \"{{message}}\" \"{{ticket}}\""
 timeout_ms = 120000
 ```
 
-Trigger a user-owned remote command:
+Run a user-owned external command:
 
 ```toml
 [hooks.save]
-command = "git add . && git commit -m \"{{message}}\" && git push origin main"
+command = "./scripts/publish-after-review.sh \"{{message}}\""
 ```
 
-That behavior is only user-scripted hook execution. Draft v0.3.1 has no native push, forge, PR, integration adapter, or GitHub feature.
+That behavior is only user-scripted hook execution. Draft v0.3.1 has no native push, forge, PR, integration adapter, hosted review, or GitHub feature.
 
 ## Safety
 

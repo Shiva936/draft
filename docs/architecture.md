@@ -14,7 +14,7 @@ draft-core::App
 
 ## Crate Boundaries
 
-`core/` owns the domain model and durable store. It implements config, scanning, snapshots, tasks, runs, changepacks, evidence, verification, risk, policy, review, approval, compare, compose, save, receipts, rollback, events, object storage, and indexing.
+`core/` owns the domain model and durable store. It implements config, scanning, snapshots, tasks, runs, ChangePacks, evidence, verification, risk, policy, review, approval, compare, compose, save, receipts, rollback, events, object storage, and indexing.
 
 `cli/` exposes the command-line interface. It invokes `draft-core` directly so the CLI stays usable without a daemon.
 
@@ -35,10 +35,10 @@ draft-core::App
 1. A user or agent changes workspace files.
 2. Draft scans the workspace directly, excluding `.draft/`.
 3. A checkpoint records a baseline snapshot.
-4. A changepack captures the delta against a snapshot.
+4. A ChangePack captures the delta against a snapshot.
 5. Verification and risk attach evidence and policy inputs.
-6. Review decisions approve or reject the changepack.
-7. Save records the verified changepack and receipt in `.draft/`.
+6. Review decisions approve or reject the ChangePack.
+7. Save records the verified ChangePack and receipt in `.draft/`.
 8. Optional `hooks.save` execution is captured as receipt evidence.
 9. Every important transition appends a hash-chained event.
 
@@ -48,4 +48,4 @@ JSON and JSONL records are the durable source of truth. SQLite indexes are rebui
 
 ## Safety Boundary
 
-`.draft/` is private Draft metadata. It is not a workspace change candidate. Any implementation that introduces `.draft/` into status, snapshots, changepacks, save, rollback, or external command execution is a release blocker.
+`.draft/` is private Draft metadata. It is not a workspace change candidate. Any implementation that introduces `.draft/` into status, snapshots, ChangePacks, save, rollback, or external command execution is a release blocker.

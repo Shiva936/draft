@@ -148,7 +148,7 @@ fn init_status_ignore_and_events_work_without_vcs() {
         .success()
         .stdout(contains("notes/"));
     draft(dir)
-        .args(["events", "--verify-chain"])
+        .args(["event", "--verify-chain"])
         .assert()
         .success()
         .stdout(contains("Event chain verified"));
@@ -193,7 +193,7 @@ fn changepack_verify_approve_and_save_native_only() {
         .args(["save", "-p", pack_id])
         .assert()
         .success()
-        .stdout(contains("Changepack saved"));
+        .stdout(contains("ChangePack saved"));
 
     let receipts = draft(dir)
         .args(["receipt", "list", "--json"])
@@ -253,23 +253,73 @@ fn top_level_pack_ux_supports_create_list_switch_and_delete() {
         .write_stdin("n\n")
         .assert()
         .failure()
-        .stderr(contains("pack deletion aborted"));
+        .stderr(contains("ChangePack deletion aborted"));
     draft(dir)
         .args(["pack", "-d", "first"])
         .write_stdin("y\n")
         .assert()
         .success()
-        .stdout(contains("Pack deleted"));
+        .stdout(contains("ChangePack deleted"));
     draft(dir)
         .args(["list"])
         .assert()
         .success()
         .stdout(contains("second").and(contains("first").not()));
     draft(dir)
-        .args(["events"])
+        .args(["event"])
         .assert()
         .success()
         .stdout(contains("pack.deleted"));
+}
+
+#[test]
+fn event_command_supports_log_options_and_old_names_are_not_supported() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    draft(dir).args(["create", "event-pack"]).assert().success();
+
+    draft(dir)
+        .args(["event", "--top", "--limit", "1"])
+        .assert()
+        .success()
+        .stdout(contains("repo.initialized"));
+    draft(dir)
+        .args(["event", "--page", "1", "--limit", "1"])
+        .assert()
+        .success()
+        .stdout(contains("pack.selected"));
+    draft(dir)
+        .args(["event", "--bottom", "--limit", "1"])
+        .assert()
+        .success()
+        .stdout(contains("pack.selected"));
+    draft(dir)
+        .args(["event", "-f", "checkpoint"])
+        .assert()
+        .success()
+        .stdout(contains("checkpoint.created").and(contains("pack.created").not()));
+
+    let raw = draft(dir)
+        .args(["event", "--raw", "--bottom", "--limit", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        raw.status.success(),
+        "{}",
+        String::from_utf8_lossy(&raw.stderr)
+    );
+    let raw_stdout = String::from_utf8(raw.stdout).unwrap();
+    let raw_event: serde_json::Value = serde_json::from_str(raw_stdout.trim()).unwrap();
+    assert_eq!(raw_event["type"], "pack.selected");
+
+    draft(dir).args(["log"]).assert().failure();
+    draft(dir).args(["events"]).assert().failure();
+    draft(dir).args(["event", "-p", "1"]).assert().failure();
+    draft(dir).args(["event", "-l", "1"]).assert().failure();
 }
 
 #[test]
@@ -551,7 +601,7 @@ fn save_aborts_if_pack_candidate_contains_draft_dir() {
         .stderr(contains("SAVE_FAILED").and(contains(".draft/ is included")));
     assert!(!dir.join("should-not-exist").exists());
     draft(dir)
-        .args(["events"])
+        .args(["event"])
         .assert()
         .success()
         .stdout(contains("save.completed"));

@@ -5,7 +5,7 @@ Verification runs local commands and records results as Draft evidence.
 ## Running Verification
 
 ```bash
-draft verify <pack-id>
+draft verify -p <ChangePack-id-or-name>
 ```
 
 Draft loads verification configuration, runs the selected checks from the workspace root, captures stdout, stderr, exit code, timing, and stores a verification receipt.
@@ -27,7 +27,7 @@ Verification profile selection is configured through Draft config and verificati
 
 ## Evidence Links
 
-Verification results attach to the changepack. Save receipts include enough references to reconstruct why a changepack was allowed or blocked.
+Verification results attach to the ChangePack. Save receipts include enough references to reconstruct why a ChangePack was allowed or blocked.
 
 ## Good Checks
 
@@ -40,5 +40,5 @@ When verification fails:
 1. inspect the verification receipt;
 2. inspect stdout and stderr objects if needed;
 3. fix the workspace;
-4. create or update the changepack;
+4. create or update the ChangePack;
 5. run verification again.

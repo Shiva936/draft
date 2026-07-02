@@ -86,7 +86,7 @@ pub fn render_text(model: &CockpitModel) -> String {
     out.push_str(&format!("Workspace: {}\n", model.workspace_id));
     out.push_str(&format!("Service: {}\n", model.service_state));
     out.push_str(&format!("Receipts: {}\n\n", model.receipts));
-    out.push_str("Changepacks\n");
+    out.push_str("ChangePacks\n");
     if model.packs.is_empty() {
         out.push_str("  none\n");
     }
@@ -159,7 +159,7 @@ pub fn render_test_frame(model: &CockpitModel) -> Result<String, String> {
                 })
                 .collect::<Vec<_>>();
             frame.render_widget(
-                List::new(packs).block(Block::default().borders(Borders::ALL).title("Packs")),
+                List::new(packs).block(Block::default().borders(Borders::ALL).title("ChangePacks")),
                 chunks[1],
             );
 

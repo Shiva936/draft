@@ -17,7 +17,7 @@ Draft stores all private state below `.draft/`. The store is native to Draft v0.
 - `.draft/snapshots/`: workspace manifests created by checkpoints and rollback-sensitive operations.
 - `.draft/tasks/`: local task records.
 - `.draft/runs/`: opaque command run records.
-- `.draft/changepacks/`: changepack manifests, patches, reviews, and linked metadata.
+- `.draft/changepacks/`: ChangePack manifests, patches, reviews, and linked metadata.
 - `.draft/evidence/`: verification and run evidence.
 - `.draft/receipts/`: durable action receipts.
 - `.draft/indexes/`: rebuildable SQLite indexes.
@@ -26,11 +26,7 @@ Draft stores all private state below `.draft/`. The store is native to Draft v0.
 
 ## Authority And Caches
 
-The JSON and JSONL store is authoritative. The SQLite database is an index cache and can be rebuilt with:
-
-```bash
-draft index rebuild
-```
+The JSON and JSONL store is authoritative. The SQLite database is an index cache and is treated as rebuildable implementation state. Use `draft storage doctor` to inspect storage health.
 
 Losing the index should not lose Draft history. Losing objects or JSON records may corrupt snapshots, evidence, or receipts.
 
@@ -49,7 +45,7 @@ Events are stored as JSON Lines. Each event includes:
 - current event hash;
 - schema version.
 
-The append path uses a local writer lock and syncs the file after append. `draft events --verify-chain` verifies the chain.
+The append path uses a local writer lock and syncs the file after append. `draft event --verify-chain` verifies the chain.
 
 ## Object Store
 
