@@ -33,6 +33,8 @@ the control plane and durable service jobs, the TUI exposes review cockpit secti
 | TUI cockpit | Implemented | TUI renders workspace, ChangePacks, files, blockers, receipt count, service mode, and action affordances through a testable terminal renderer. |
 | Public documentation | Implemented | The docs cover user, operator, security, contributor, architecture, command, service, and release-compliance topics. |
 | Command hooks | Implemented | `hooks.save` is opaque hook execution after save approval and safety checks; raw and rich hooks use `{{name}}` placeholders, `--var` dynamic variables, and receipt hook status fields. |
+| Release workflow | Implemented | Tag-driven GitHub Actions release workflow validates versions, builds supported targets, packages `draft` and `draftd`, publishes versioned GitHub Release assets with GitHub artifact attestations, and marks the newest successful release as latest. |
+| Installers | Implemented | `install.sh` and `install.ps1` fetch GitHub Releases from `Shiva936/draft`, verify `SHA256SUMS`, install into user-local directories by default, handle upgrades, and fail clearly on unsupported systems. |
 
 ## Release Gates
 
@@ -41,9 +43,15 @@ A v0.3.1 release candidate must pass:
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
+- `cargo test --workspace --doc`
+- `scripts/validate-version.sh`
+- shell syntax validation for `install.sh`
+- PowerShell parser validation for `install.ps1` when PowerShell is available
 - a text audit for prohibited external-product UX in command help and public docs;
 - a text audit confirming no tracked file documents repo ignore-list entries;
 - cross-platform smoke testing on Linux, macOS, Windows, and WSL.
+
+The release workflow must publish immutable versioned archives and `SHA256SUMS` to GitHub Releases, plus GitHub artifact attestations for provenance. Installers must use GitHub Releases, not expiring workflow artifacts, as their source of truth.
 
 The local verification run for this tree passes formatting, linting, workspace tests, daemon IPC tests, TUI render tests, core production tests, and both text
 audits.

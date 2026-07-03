@@ -104,19 +104,19 @@ Draft is designed around a few strict rules:
 
 ## Quick Start
 
-Build the workspace:
+Install the latest Draft release on Linux, macOS, or WSL:
 
 ```bash
-cargo build --workspace
+curl -fsSL https://raw.githubusercontent.com/Shiva936/draft/master/install.sh | sh
 ```
 
-Run the CLI during development:
+Install the latest Draft release on native Windows PowerShell:
 
-```bash
-cargo run -p draft-cli -- init
+```powershell
+irm https://raw.githubusercontent.com/Shiva936/draft/master/install.ps1 | iex
 ```
 
-Or, once installed as `draft`:
+Then initialize Draft in a workspace:
 
 ```bash
 draft init
@@ -149,6 +149,13 @@ draft approve -p <pck-id-or-name> --reason "reviewed"
 draft save -p <pck-id-or-name>
 
 draft receipt list
+```
+
+Developers can also build from source:
+
+```bash
+cargo build --workspace
+cargo run -p draft-cli -- init
 ```
 
 <p align="center">

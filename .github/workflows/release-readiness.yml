@@ -32,6 +32,26 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
+      - name: Version consistency
+        shell: bash
+        run: scripts/validate-version.sh
+
+      - name: Installer syntax
+        shell: bash
+        run: bash -n scripts/validate-version.sh scripts/package-release.sh install.sh && sh -n install.sh
+
+      - name: PowerShell installer syntax
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          $tokens = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw install.ps1), [ref]$errors)
+          if ($null -ne $errors -and $errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
