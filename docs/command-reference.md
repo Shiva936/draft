@@ -51,7 +51,7 @@ Renders a clean human-readable timeline derived from `.draft/events/events.jsonl
 ### `draft pack -d <pck-id/name>`
 ### `draft list`
 
-Creates, shows, switches, deletes, and lists ChangePacks. ChangePack IDs use `pck_`. ChangePack names must be unique among available ChangePacks. `draft pack -d` asks for final `y/N` confirmation and emits `pack.deleted`.
+Creates, shows, switches, deletes, and lists ChangePacks. ChangePack IDs use `pck_`. ChangePack names must be unique among available ChangePacks. `draft pack -d` asks for final `y/N` confirmation, removes the pack directory, removes task/run records owned only by that pack, garbage-collects unreachable objects, preserves events and receipts, selects a replacement pack when needed, and emits `pack.deleted`.
 
 ## Candidates And Tasks
 

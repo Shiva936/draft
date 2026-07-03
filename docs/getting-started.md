@@ -10,7 +10,7 @@ draft config set identity.username "Ada"
 draft config set identity.email "ada@example.com"
 ```
 
-`draft init` creates `.draft/`, writes default configuration, creates the event log, prepares the object store, and builds the local index. Running it again is safe; Draft reports the existing workspace.
+`draft init` creates `.draft/`, writes default configuration, creates the event stream, prepares the object store, and builds the local index. Running it again fails safely so accidental reinitialization cannot rewrite workspace state.
 
 ## Capture A Baseline
 

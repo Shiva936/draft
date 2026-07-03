@@ -12,6 +12,14 @@ draft review -p <ChangePack> --tui
 
 Review records that the ChangePack entered the human review boundary. The optional TUI opens the Review Cockpit.
 
+# Review Cockpit
+
+`draft review --tui` opens the local Review Cockpit. The first view is summary-first: overview, hotspots, evidence gaps, provenance, readiness, and available actions.
+
+The cockpit exposes semantic-diff placeholders with raw diff fallback. Large raw details are treated as later-loaded review detail, not the first screen.
+
+Approve and reject use the below human-final core checks as the CLI.
+
 ## Approval And Rejection
 
 ```bash

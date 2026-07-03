@@ -68,6 +68,32 @@ fn create_verified_approved_pack(dir: &std::path::Path, name: &str) -> String {
     pack_id
 }
 
+fn create_verified_reviewed_pack(dir: &std::path::Path, name: &str) -> String {
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    let out = draft(dir)
+        .args(["create", name, "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pack_id = pack["id"].as_str().unwrap().to_string();
+    draft(dir)
+        .args(["verify", "-p", &pack_id])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["review", "-p", &pack_id])
+        .assert()
+        .success();
+    pack_id
+}
+
 fn write_rich_hook_config(dir: &std::path::Path, command: &str, continue_on_error: bool) {
     let content = format!(
         r#"[identity]
@@ -279,6 +305,57 @@ fn top_level_pack_ux_supports_create_list_switch_and_delete() {
 }
 
 #[test]
+fn pack_delete_keeps_current_cleanup_semantics_for_pack_owned_task_and_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    draft(dir)
+        .args(["candidate", "add", "writer", "--", "cargo --version"])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["task", "spawn", "write file", "-c", "writer", "--", "write"])
+        .assert()
+        .success();
+
+    let packs = draft(dir).args(["list", "--json"]).output().unwrap();
+    assert!(packs.status.success());
+    let packs: serde_json::Value = serde_json::from_slice(&packs.stdout).unwrap();
+    let pack = packs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pack| pack["name"] == "writer")
+        .unwrap();
+    let pack_id = pack["id"].as_str().unwrap();
+    let task_id = pack["task_id"].as_str().unwrap();
+    let run_id = pack["run_id"].as_str().unwrap();
+
+    assert!(dir.join(format!(".draft/tasks/{task_id}.json")).exists());
+    assert!(dir.join(format!(".draft/runs/{run_id}.json")).exists());
+    draft(dir)
+        .args(["pack", "-d", pack_id])
+        .write_stdin("y\n")
+        .assert()
+        .success();
+    assert!(!dir.join(format!(".draft/changepacks/{pack_id}")).exists());
+    assert!(!dir.join(format!(".draft/tasks/{task_id}.json")).exists());
+    assert!(!dir.join(format!(".draft/runs/{run_id}.json")).exists());
+}
+
+#[test]
+fn init_fails_when_workspace_already_initialized() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    draft(dir)
+        .args(["init"])
+        .assert()
+        .failure()
+        .stderr(contains("already initialized"));
+}
+
+#[test]
 fn event_command_supports_log_options_and_old_names_are_not_supported() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -329,6 +406,38 @@ fn event_command_supports_log_options_and_old_names_are_not_supported() {
 }
 
 #[test]
+fn docs_and_plans_use_only_singular_event_command() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut files = Vec::new();
+    for rel in ["docs", "plans/v0.3.1", "examples", "README.md"] {
+        let path = root.join(rel);
+        if path.exists() {
+            collect_files(&path, &mut files);
+        }
+    }
+
+    let mut violations = Vec::new();
+    for file in files {
+        let Ok(content) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let lower = content.to_lowercase();
+        for term in ["draft log", "draft events"] {
+            if lower.contains(term) {
+                violations.push(format!("{} contains {term}", file.display()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "plural/log event commands remain:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn pack_names_are_unique_and_old_pack_subcommands_are_not_supported() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -349,6 +458,191 @@ fn pack_names_are_unique_and_old_pack_subcommands_are_not_supported() {
         .assert()
         .failure();
     draft(dir).args(["pack", "list"]).assert().failure();
+}
+
+#[test]
+fn risk_flags_security_sensitive_paths_with_explainable_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::create_dir_all(dir.join("src/auth")).unwrap();
+    std::fs::write(dir.join("src/auth/session.rs"), "pub fn check() {}\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(
+        dir.join("src/auth/session.rs"),
+        "pub fn check_payment_token() {}\n",
+    )
+    .unwrap();
+    let out = draft(dir)
+        .args(["create", "auth-risk", "--json"])
+        .output()
+        .unwrap();
+    let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pack_id = pack["id"].as_str().unwrap();
+    let risk = draft(dir)
+        .args([
+            "risk",
+            "-p",
+            pack_id,
+            "--explain",
+            "--include-evidence",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(risk.status.success());
+    let risk: serde_json::Value = serde_json::from_slice(&risk.stdout).unwrap();
+    assert!(risk["reason_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|code| code == "auth_or_security_surface"));
+    assert!(risk["evidence_summary"].is_array());
+    assert!(risk["evidence_gaps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|gap| gap == "verification receipt missing"));
+}
+
+#[test]
+fn risk_options_control_explanation_and_evidence_fields() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    let out = draft(dir)
+        .args(["create", "risk-options", "--json"])
+        .output()
+        .unwrap();
+    let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pack_id = pack["id"].as_str().unwrap();
+
+    let compact = draft(dir)
+        .args(["risk", "-p", pack_id, "--json"])
+        .output()
+        .unwrap();
+    let compact: serde_json::Value = serde_json::from_slice(&compact.stdout).unwrap();
+    assert!(compact["factors"].as_array().unwrap().is_empty());
+    assert!(compact["evidence_summary"].as_array().unwrap().is_empty());
+
+    let expanded = draft(dir)
+        .args([
+            "risk",
+            "-p",
+            pack_id,
+            "--explain",
+            "--include-evidence",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    let expanded: serde_json::Value = serde_json::from_slice(&expanded.stdout).unwrap();
+    assert!(!expanded["factors"].as_array().unwrap().is_empty());
+    assert!(!expanded["evidence_summary"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn compose_output_is_not_final_until_verified_and_reviewed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("left.txt"), "base\n").unwrap();
+    std::fs::write(dir.join("right.txt"), "base\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    draft(dir)
+        .args(["create", "common", "-p", "base"])
+        .assert()
+        .success();
+
+    std::fs::write(dir.join("left.txt"), "left\n").unwrap();
+    let left = draft(dir)
+        .args(["create", "left", "-p", "common", "--json"])
+        .output()
+        .unwrap();
+    let left: serde_json::Value = serde_json::from_slice(&left.stdout).unwrap();
+    let left_id = left["id"].as_str().unwrap();
+
+    std::fs::write(dir.join("left.txt"), "base\n").unwrap();
+    draft(dir).args(["checkpoint", "base2"]).assert().success();
+    std::fs::write(dir.join("right.txt"), "right\n").unwrap();
+    let right = draft(dir)
+        .args(["create", "right", "-p", "common", "--json"])
+        .output()
+        .unwrap();
+    let right: serde_json::Value = serde_json::from_slice(&right.stdout).unwrap();
+    let right_id = right["id"].as_str().unwrap();
+
+    let composed = draft(dir)
+        .args([
+            "compose", left_id, right_id, "--output", "combined", "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        composed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&composed.stderr)
+    );
+    let composed: serde_json::Value = serde_json::from_slice(&composed.stdout).unwrap();
+    assert_eq!(composed["requires_verification"], true);
+    assert_eq!(composed["requires_review"], true);
+    assert_eq!(composed["final_success"], false);
+}
+
+#[test]
+fn disperse_splits_patch_files_into_review_required_outputs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("a.txt"), "a0\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "b0\n").unwrap();
+    std::fs::write(dir.join("c.txt"), "c0\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("a.txt"), "a1\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "b1\n").unwrap();
+    std::fs::write(dir.join("c.txt"), "c1\n").unwrap();
+    let out = draft(dir)
+        .args(["create", "multi", "--json"])
+        .output()
+        .unwrap();
+    let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pack_id = pack["id"].as_str().unwrap();
+    let dispersed = draft(dir)
+        .args([
+            "disperse", pack_id, "--output", "part-a", "part-b", "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        dispersed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dispersed.stderr)
+    );
+    let dispersed: serde_json::Value = serde_json::from_slice(&dispersed.stdout).unwrap();
+    assert_eq!(dispersed["requires_verification"], true);
+    assert_eq!(dispersed["requires_review"], true);
+    assert_eq!(dispersed["final_success"], false);
+    let outputs = dispersed["output_pack_ids"].as_array().unwrap();
+    let first = outputs[0].as_str().unwrap();
+    let second = outputs[1].as_str().unwrap();
+    let first_patch: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join(format!(".draft/changepacks/{first}/patch.json")))
+            .unwrap(),
+    )
+    .unwrap();
+    let second_patch: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join(format!(".draft/changepacks/{second}/patch.json")))
+            .unwrap(),
+    )
+    .unwrap();
+    let first_len = first_patch["files"].as_array().unwrap().len();
+    let second_len = second_patch["files"].as_array().unwrap().len();
+    assert_eq!(first_len + second_len, 3);
+    assert!(first_len < 3);
+    assert!(second_len < 3);
 }
 
 #[test]
@@ -405,7 +699,59 @@ fn raw_hooks_save_is_opaque_and_captures_receipt() {
             && r["hook_results"][0]["stderr_ref"].is_string()
             && r["hook_status"] == "succeeded"
             && r["overall_status"] == "saved"
+            && r["risk_level"] != "unknown"
+            && r["event_refs"]
+                .as_array()
+                .map(|refs| !refs.is_empty())
+                .unwrap_or(false)
     }));
+    assert!(receipts
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["kind"] == "hook" && r["status"] == "succeeded"));
+}
+
+#[test]
+fn final_decision_requires_human_actor() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(
+        dir.join(".draft/identity.json"),
+        r#"{"id":"act_agent","kind":"agent","display_name":"agent"}"#,
+    )
+    .unwrap();
+    let pack_id = create_verified_reviewed_pack(dir, "agent-blocked");
+    draft(dir)
+        .args(["approve", "-p", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("human actor"));
+}
+
+#[test]
+fn review_lock_blocks_mutating_pack_actions_until_decision() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let pack_id = create_verified_reviewed_pack(dir, "locked");
+    draft(dir)
+        .args(["pack", "-d", &pack_id])
+        .write_stdin("y\n")
+        .assert()
+        .failure()
+        .stderr(contains("locked for review"));
+    draft(dir)
+        .args(["save", "-p", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("locked for review"));
+    draft(dir)
+        .args(["approve", "-p", &pack_id])
+        .assert()
+        .success();
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
 }
 
 #[test]
@@ -522,6 +868,97 @@ fn hook_var_tail_validation_rejects_invalid_values() {
 }
 
 #[test]
+fn save_requires_current_passed_verification_receipt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let pack_id = create_verified_approved_pack(dir, "stale-verification");
+    let patch_path = dir
+        .join(".draft/changepacks")
+        .join(&pack_id)
+        .join("patch.json");
+    let mut patch: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&patch_path).unwrap()).unwrap();
+    patch["patch_graph_hash"] = serde_json::json!("sha256:changed-after-verification");
+    std::fs::write(&patch_path, serde_json::to_string_pretty(&patch).unwrap()).unwrap();
+
+    draft(dir)
+        .args(["save", "-p", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("current passed verification receipt"));
+}
+
+#[test]
+fn hooks_save_rejects_workspace_escape_and_draft_env_override() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(
+        dir.join(".draft/config.toml"),
+        r#"[identity]
+username = "Ada"
+email = "ada@example.com"
+
+[save]
+message_template = "{{title}}"
+
+[hooks.save]
+command = "echo should-not-run"
+cwd = ".."
+
+[verification]
+default_profile = "standard"
+
+[policy]
+require_verification = true
+require_approval = true
+require_human_approval_for_high_risk = true
+block_if_tests_fail = true
+"#,
+    )
+    .unwrap();
+    let pack_id = create_verified_approved_pack(dir, "escape-hook");
+    draft(dir)
+        .args(["save", "-p", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("hook cwd"));
+
+    std::fs::write(
+        dir.join(".draft/config.toml"),
+        r#"[identity]
+username = "Ada"
+email = "ada@example.com"
+
+[save]
+message_template = "{{title}}"
+
+[hooks.save]
+command = "echo should-not-run"
+
+[hooks.save.env]
+DRAFT_RECEIPT_ID = "fake"
+
+[verification]
+default_profile = "standard"
+
+[policy]
+require_verification = true
+require_approval = true
+require_human_approval_for_high_risk = true
+block_if_tests_fail = true
+"#,
+    )
+    .unwrap();
+    draft(dir)
+        .args(["save", "-p", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("cannot override Draft-managed variables"));
+}
+
+#[test]
 fn storage_doctor_checks_rebuildable_state() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -557,6 +994,183 @@ fn storage_doctor_checks_rebuildable_state() {
         .assert()
         .success()
         .stdout(contains("Storage doctor complete").and(contains("\"objects_ok\": true")));
+}
+
+#[test]
+fn storage_doctor_checks_receipt_references_and_draft_exclusion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    draft(dir)
+        .args(["config", "set", "hooks.save", write_saved_message_command()])
+        .assert()
+        .success();
+    let pack_id = create_verified_approved_pack(dir, "doctor-refs");
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
+    let receipts = draft(dir)
+        .args(["receipt", "list", "--json"])
+        .output()
+        .unwrap();
+    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
+    let save_receipt_id = receipts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|receipt| {
+            receipt["changepack_id"] == pack_id && receipt["hook_receipt_refs"].is_array()
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let receipt_path = dir
+        .join(".draft/receipts")
+        .join(format!("{save_receipt_id}.json"));
+    let mut receipt: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&receipt_path).unwrap()).unwrap();
+    receipt["hook_receipt_refs"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!("rcp_missing"));
+    std::fs::write(
+        &receipt_path,
+        serde_json::to_string_pretty(&receipt).unwrap(),
+    )
+    .unwrap();
+    draft(dir)
+        .args(["storage", "doctor"])
+        .assert()
+        .success()
+        .stdout(contains("missing hook receipt ref rcp_missing"));
+
+    let patch_path = dir
+        .join(".draft/changepacks")
+        .join(&pack_id)
+        .join("patch.json");
+    let mut patch: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&patch_path).unwrap()).unwrap();
+    patch["files"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "path": ".draft/leak",
+            "old_path": null,
+            "change_kind": "added",
+            "hunks": [],
+            "binary": false,
+            "old_hash": null,
+            "new_hash": "b3:abc"
+        }));
+    std::fs::write(&patch_path, serde_json::to_string_pretty(&patch).unwrap()).unwrap();
+    draft(dir)
+        .args(["storage", "doctor"])
+        .assert()
+        .success()
+        .stdout(contains("\"draft_hard_excluded\": false"));
+}
+
+#[test]
+fn tui_review_cockpit_shows_required_review_sections() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("auth.rs"), "fn auth() {}\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("auth.rs"), "fn auth_token() {}\n").unwrap();
+    draft(dir).args(["create", "tui-risk"]).assert().success();
+    draft(dir)
+        .args(["review", "--tui"])
+        .assert()
+        .success()
+        .stdout(
+            contains("Overview")
+                .and(contains("Hotspots"))
+                .and(contains("Evidence Gaps"))
+                .and(contains("Provenance"))
+                .and(contains("Semantic Diff"))
+                .and(contains("Raw Diff"))
+                .and(contains("Timeline"))
+                .and(contains("Decision"))
+                .and(contains("Help")),
+        );
+}
+
+#[test]
+fn policy_failures_use_documented_exit_codes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    let out = draft(dir)
+        .args(["create", "exit-codes", "--json"])
+        .output()
+        .unwrap();
+    let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pack_id = pack["id"].as_str().unwrap();
+    let save = draft(dir).args(["save", "-p", pack_id]).output().unwrap();
+    assert_eq!(save.status.code(), Some(5));
+
+    draft(dir)
+        .args(["verify", "-p", pack_id])
+        .assert()
+        .success();
+    let save = draft(dir).args(["save", "-p", pack_id]).output().unwrap();
+    assert_eq!(save.status.code(), Some(7));
+}
+
+#[test]
+fn rollback_receipts_must_be_explicitly_reversible() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    let checkpoint = draft(dir)
+        .args(["checkpoint", "base", "--json"])
+        .output()
+        .unwrap();
+    let checkpoint: serde_json::Value = serde_json::from_slice(&checkpoint.stdout).unwrap();
+    let checkpoint_id = checkpoint["snapshot_id"].as_str().unwrap();
+    let checkpoint_receipt = checkpoint["receipt_id"].as_str().unwrap();
+
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    draft(dir)
+        .args(["rollback", checkpoint_receipt])
+        .assert()
+        .success();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("app.txt")).unwrap(),
+        "v1\n"
+    );
+
+    std::fs::write(dir.join("app.txt"), "v3\n").unwrap();
+    let pack_id = create_verified_approved_pack(dir, "non-reversible-save");
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
+    let receipts = draft(dir)
+        .args(["receipt", "list", "--json"])
+        .output()
+        .unwrap();
+    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
+    let save_receipt = receipts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["changepack_id"] == pack_id)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    draft(dir)
+        .args(["rollback", &save_receipt])
+        .assert()
+        .failure()
+        .stderr(contains("not reversible"));
+
+    draft(dir)
+        .args(["rollback", checkpoint_id])
+        .assert()
+        .success();
 }
 
 #[test]

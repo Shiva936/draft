@@ -46,7 +46,7 @@ draft pack -s <ChangePack>
 draft pack -d <ChangePack>
 ```
 
-Deleting a ChangePack does not delete the event stream, receipts, or other unrelated provenance.
+Deleting a ChangePack preserves the event stream and receipts. Draft removes the pack directory, removes task/run records owned only by that pack, and garbage-collects unreachable objects.
 
 ## Manifest Fields
 

@@ -12,7 +12,7 @@ the control plane and durable service jobs, the TUI exposes review cockpit secti
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Native `.draft/` store | Implemented | Workspace metadata, config, object store, event log, receipts, index, snapshots, tasks, runs, ChangePacks, evidence, and policies are stored below `.draft/`. |
+| Native `.draft/` store | Implemented | Workspace metadata, config, object store, event stream, receipts, index, snapshots, tasks, runs, ChangePacks, evidence, and policies are stored below `.draft/`. |
 | Hard `.draft/` exclusion | Implemented | Scanner, snapshots, save candidates, rollback plans, watcher paths, and hook execution guards exclude Draft metadata. |
 | `.draft/.ignore` | Implemented | Draft has a dedicated ignore command and file. It is separate from any external tool configuration. |
 | Native scanner | Implemented | Status and snapshots walk the workspace directly and include files that are not known to any external system. |

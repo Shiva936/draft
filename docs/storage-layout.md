@@ -12,7 +12,7 @@ Draft stores all private state below `.draft/`. The store is native to Draft v0.
 
 ## Durable Directories
 
-- `.draft/events/`: append-only hash-chained event log.
+- `.draft/events/`: append-only hash-chained event stream.
 - `.draft/objects/`: content-addressed blobs for file contents, stdout, stderr, messages, and evidence.
 - `.draft/snapshots/`: workspace manifests created by checkpoints and rollback-sensitive operations.
 - `.draft/tasks/`: local task records.

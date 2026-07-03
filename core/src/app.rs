@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -48,6 +48,11 @@ impl App {
     pub fn init_with_base(&self, root: &Path, base_pack_name: &str) -> DraftResult<InitReport> {
         let layout = DraftLayout::for_root(root);
         let created = !layout.draft_dir.exists();
+        if !created {
+            return Err(DraftError::invalid_config(
+                "Draft workspace is already initialized; refusing to reinitialize without an explicit repair mode",
+            ));
+        }
         layout.create_all()?;
         if !layout.config_toml().exists() {
             write_toml(&layout.config_toml(), &DraftConfig::default())?;
@@ -57,6 +62,9 @@ impl App {
         }
         if !layout.verify_toml().exists() {
             write_toml(&layout.verify_toml(), &VerifyFile::default())?;
+        }
+        if !layout.risk_toml().exists() {
+            write_toml(&layout.risk_toml(), &RiskConfig::default())?;
         }
         if !layout.policy_toml().exists() {
             write_toml(&layout.policy_toml(), &PolicyConfig::default())?;
@@ -317,7 +325,8 @@ impl App {
             "completed",
             Some(snapshot.id.to_string()),
             serde_json::json!({ "message": message }),
-        );
+        )
+        .reversible_to(snapshot.id.to_string());
         write_receipt(&ws, &receipt)?;
         ws.events()?.append(
             "checkpoint.created",
@@ -722,6 +731,7 @@ impl App {
     pub fn pack_delete_ref(&self, cwd: &Path, reference: &str) -> DraftResult<PackDeleteReport> {
         let ws = self.open(cwd)?;
         let pack = self.resolve_pack_ref(&ws, reference)?;
+        ensure_pack_not_locked(&ws, &pack)?;
         if pack.base_snapshot_id.as_str() == "chk_empty"
             && pack.result_snapshot_id.as_str() == "chk_empty"
         {
@@ -810,7 +820,10 @@ impl App {
 
     fn resolve_pack_arg(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<String> {
         match pack_id {
-            Some(id) if !id.trim().is_empty() => Ok(id.to_string()),
+            Some(id) if !id.trim().is_empty() => {
+                let ws = self.open(cwd)?;
+                Ok(self.resolve_pack_ref(&ws, id)?.id.to_string())
+            }
             _ => self.selected_pack_id(cwd),
         }
     }
@@ -867,6 +880,7 @@ impl App {
 
     fn resolve_pack_ref(&self, ws: &Workspace, reference: &str) -> DraftResult<Changepack> {
         if reference.starts_with("pck_") {
+            validate_pack_id(reference)?;
             let pack = load_pack(ws, reference)?;
             if !pack.active {
                 return Err(DraftError::not_found(format!(
@@ -985,6 +999,7 @@ impl App {
 
     pub fn verify(&self, cwd: &Path, pack_id: &str) -> DraftResult<VerificationReport> {
         let ws = self.open(cwd)?;
+        validate_pack_id(pack_id)?;
         let mut pack = load_pack(&ws, pack_id)?;
         let checks = read_or_default::<VerifyFile>(&ws.layout.verify_toml()).checks;
         ws.events()?.append(
@@ -1037,11 +1052,16 @@ impl App {
         let failed = results
             .iter()
             .any(|r| r.status == VerificationStatus::Failed);
+        let patch = load_patch(&ws, &pack)?;
         let receipt = Receipt::new(
             "verification",
             if failed { "failed" } else { "passed" },
             Some(pack.id.to_string()),
-            serde_json::to_value(&results).unwrap_or(Value::Null),
+            serde_json::json!({
+                "patch_graph_hash": patch.patch_graph_hash,
+                "result_snapshot_id": pack.result_snapshot_id,
+                "results": results.clone()
+            }),
         );
         write_receipt(&ws, &receipt)?;
         let report = VerificationReport {
@@ -1072,14 +1092,25 @@ impl App {
     }
 
     pub fn risk(&self, cwd: &Path, pack_id: &str) -> DraftResult<RiskSummary> {
+        self.risk_inner(cwd, pack_id, true)
+    }
+
+    fn risk_preview(&self, cwd: &Path, pack_id: &str) -> DraftResult<RiskSummary> {
+        self.risk_inner(cwd, pack_id, false)
+    }
+
+    fn risk_inner(&self, cwd: &Path, pack_id: &str, persist: bool) -> DraftResult<RiskSummary> {
         let ws = self.open(cwd)?;
+        validate_pack_id(pack_id)?;
         let pack = load_pack(&ws, pack_id)?;
         let patch = load_patch(&ws, &pack)?;
+        let risk_config = read_or_default::<RiskConfig>(&ws.layout.risk_toml());
         let mut score = patch.files.len() as u32;
         let mut factors = Vec::new();
         let mut reason_codes = Vec::new();
         let mut hotspots = Vec::new();
         let mut evidence_gaps = Vec::new();
+        let mut evidence_summary = Vec::new();
         if patch.files.iter().any(|f| f.binary) {
             score += 3;
             factors.push("binary files".to_string());
@@ -1124,6 +1155,40 @@ impl App {
                     .map(|f| f.path.clone()),
             );
         }
+        for rule in risk_config.path_rules.iter() {
+            let matched: Vec<_> = patch
+                .files
+                .iter()
+                .filter(|f| {
+                    let lower = f.path.0.to_ascii_lowercase();
+                    rule.patterns
+                        .iter()
+                        .any(|needle| lower.contains(&needle.to_ascii_lowercase()))
+                })
+                .map(|f| f.path.clone())
+                .collect();
+            if !matched.is_empty() {
+                score += rule.weight;
+                factors.push(rule.code.replace('_', " "));
+                reason_codes.push(rule.code.clone());
+                hotspots.extend(matched);
+            }
+        }
+        let deleted_tests: Vec<_> = patch
+            .files
+            .iter()
+            .filter(|f| {
+                matches!(f.change_kind, FileChangeKind::Deleted)
+                    && f.path.0.to_ascii_lowercase().contains("test")
+            })
+            .map(|f| f.path.clone())
+            .collect();
+        if !deleted_tests.is_empty() {
+            score += 5;
+            factors.push("deleted tests".to_string());
+            reason_codes.push("deleted_tests".to_string());
+            hotspots.extend(deleted_tests);
+        }
         if patch.files.len() >= 20 {
             score += 4;
             factors.push("large change set".to_string());
@@ -1134,16 +1199,24 @@ impl App {
             factors.push("missing verification".to_string());
             reason_codes.push("missing_verification".to_string());
             evidence_gaps.push("verification receipt missing".to_string());
+        } else {
+            evidence_summary.push(format!(
+                "{} verification receipt(s)",
+                pack.verification_refs.len()
+            ));
+        }
+        if evidence_summary.is_empty() {
+            evidence_summary.push("no verification evidence recorded".to_string());
         }
         if factors.is_empty() {
             factors.push("small text-only change".to_string());
             reason_codes.push("low_complexity".to_string());
         }
-        let level = if score >= 10 {
+        let level = if score >= risk_config.critical_threshold {
             RiskLevel::Critical
-        } else if score >= 6 {
+        } else if score >= risk_config.high_threshold {
             RiskLevel::High
-        } else if score >= 3 {
+        } else if score >= risk_config.medium_threshold {
             RiskLevel::Medium
         } else {
             RiskLevel::Low
@@ -1157,39 +1230,81 @@ impl App {
         } else {
             "allowed_for_review".to_string()
         };
+        let mut receipt_id = "preview".to_string();
         let mut receipt = Receipt::new(
             "risk",
             level.label(),
             Some(pack.id.to_string()),
             Value::Null,
         );
+        if persist {
+            receipt_id = receipt.id.to_string();
+        }
         let summary = RiskSummary {
             changepack_id: pack.id.to_string(),
-            receipt_id: receipt.id.to_string(),
+            receipt_id,
             level,
             score,
             factors,
             reason_codes,
             hotspots,
             evidence_gaps,
+            evidence_summary,
             policy_decision,
             files_changed: patch.files.len(),
         };
-        receipt.payload = serde_json::to_value(&summary).unwrap_or(Value::Null);
-        receipt.receipt_hash.clear();
-        receipt.receipt_hash = hash_json(&receipt)?;
-        write_receipt(&ws, &receipt)?;
-        ws.events()?.append(
-            "risk.completed",
-            Some(pack.id.to_string()),
-            serde_json::to_value(&summary).unwrap_or(Value::Null),
-        )?;
+        if persist {
+            receipt.payload = serde_json::to_value(&summary).unwrap_or(Value::Null);
+            receipt.receipt_hash.clear();
+            receipt.receipt_hash = hash_json(&receipt)?;
+            write_receipt(&ws, &receipt)?;
+            ws.events()?.append(
+                "risk.completed",
+                Some(pack.id.to_string()),
+                serde_json::to_value(&summary).unwrap_or(Value::Null),
+            )?;
+        }
         Ok(summary)
     }
 
     pub fn risk_selected(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<RiskSummary> {
         let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
         self.risk(cwd, &pack_id)
+    }
+
+    pub fn risk_selected_with_options(
+        &self,
+        cwd: &Path,
+        pack_id: Option<&str>,
+        explain: bool,
+        include_evidence: bool,
+    ) -> DraftResult<RiskSummary> {
+        let mut summary = self.risk_selected(cwd, pack_id)?;
+        if !explain {
+            summary.factors.clear();
+        }
+        if !include_evidence {
+            summary.evidence_summary.clear();
+        }
+        Ok(summary)
+    }
+
+    pub fn risk_preview_selected_with_options(
+        &self,
+        cwd: &Path,
+        pack_id: Option<&str>,
+        explain: bool,
+        include_evidence: bool,
+    ) -> DraftResult<RiskSummary> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        let mut summary = self.risk_preview(cwd, &pack_id)?;
+        if !explain {
+            summary.factors.clear();
+        }
+        if !include_evidence {
+            summary.evidence_summary.clear();
+        }
+        Ok(summary)
     }
 
     pub fn review(
@@ -1199,8 +1314,10 @@ impl App {
         comment: Option<String>,
     ) -> DraftResult<ReviewReport> {
         let ws = self.open(cwd)?;
+        validate_pack_id(pack_id)?;
         let mut pack = load_pack(&ws, pack_id)?;
         let mut comments = load_review_file(&ws, &pack.id).unwrap_or_default();
+        let risk = self.risk_preview(cwd, pack_id).ok();
         if let Some(body) = comment {
             comments.comments.push(ReviewComment {
                 id: ReviewCommentId::generate(),
@@ -1239,11 +1356,32 @@ impl App {
             }),
         )?;
         save_review_file(&ws, &pack.id, &comments)?;
+        let review_units = build_review_units(&ws, &pack, risk.as_ref())?;
+        let risk_receipt_id = risk
+            .as_ref()
+            .and_then(|risk| (risk.receipt_id != "preview").then(|| risk.receipt_id.clone()));
+        let receipt = Receipt::new(
+            "review",
+            "completed",
+            Some(pack.id.to_string()),
+            serde_json::json!({
+                "review_units": review_units,
+                "risk_receipt_id": risk_receipt_id,
+                "comments": comments.comments.len()
+            }),
+        );
+        let receipt_id = receipt.id.to_string();
+        write_receipt(&ws, &receipt)?;
+        pack.review_refs.push(receipt_id.clone());
+        save_pack_manifest(&ws, &mut pack)?;
         Ok(ReviewReport {
             changepack_id: pack.id.to_string(),
+            review_receipt_id: Some(receipt_id),
             comments: comments.comments.len(),
             decisions: comments.decisions.len(),
             status: pack.status,
+            review_units,
+            risk_receipt_id,
         })
     }
 
@@ -1265,6 +1403,7 @@ impl App {
         reason: Option<String>,
     ) -> DraftResult<Decision> {
         let ws = self.open(cwd)?;
+        validate_pack_id(pack_id)?;
         let mut pack = load_pack(&ws, pack_id)?;
         if matches!(kind, DecisionKind::Approve | DecisionKind::Reject)
             && !matches!(
@@ -1279,10 +1418,19 @@ impl App {
                 "review is required before approve/reject",
             ));
         }
+        let actor = resolve_actor(&ws.layout.draft_dir);
+        if matches!(kind, DecisionKind::Approve | DecisionKind::Reject)
+            && actor.kind != ActorKind::Human
+        {
+            return Err(DraftError::new(
+                DraftErrorKind::ReviewRequired,
+                "final approve/reject requires a human actor",
+            ));
+        }
         let decision = Decision {
             id: DecisionId::generate(),
             changepack_id: pack.id.clone(),
-            actor: resolve_actor(&ws.layout.draft_dir),
+            actor,
             kind,
             reason,
             created_at: now(),
@@ -1319,7 +1467,11 @@ impl App {
             receipt_kind,
             decision.kind.label(),
             Some(pack.id.to_string()),
-            serde_json::to_value(&decision).unwrap_or(Value::Null),
+            serde_json::json!({
+                "decision": decision,
+                "review_refs": pack.review_refs,
+                "verification_refs": pack.verification_refs,
+            }),
         );
         write_receipt(&ws, &receipt)?;
         ws.events()?.append(
@@ -1343,8 +1495,8 @@ impl App {
 
     pub fn compare(&self, cwd: &Path, left: &str, right: &str) -> DraftResult<CompareReport> {
         let ws = self.open(cwd)?;
-        let l = load_pack(&ws, left)?;
-        let r = load_pack(&ws, right)?;
+        let l = self.resolve_pack_ref(&ws, left)?;
+        let r = self.resolve_pack_ref(&ws, right)?;
         let lp = load_patch(&ws, &l)?;
         let rp = load_patch(&ws, &r)?;
         let lf: BTreeSet<_> = lp.files.iter().map(|f| f.path.clone()).collect();
@@ -1400,8 +1552,10 @@ impl App {
         output: &str,
     ) -> DraftResult<ComposeResult> {
         let ws = self.open(cwd)?;
-        let l = load_pack(&ws, left)?;
-        let r = load_pack(&ws, right)?;
+        let l = self.resolve_pack_ref(&ws, left)?;
+        let r = self.resolve_pack_ref(&ws, right)?;
+        ensure_pack_not_locked(&ws, &l)?;
+        ensure_pack_not_locked(&ws, &r)?;
         let l_base = load_snapshot(&ws, &l.base_snapshot_id)?;
         let r_base = load_snapshot(&ws, &r.base_snapshot_id)?;
         if snapshot_file_fingerprint(&l_base) != snapshot_file_fingerprint(&r_base) {
@@ -1487,6 +1641,9 @@ impl App {
             receipt_id: receipt.id.to_string(),
             files: patch.files.len(),
             compatible: true,
+            requires_verification: true,
+            requires_review: true,
+            final_success: false,
         })
     }
 
@@ -1498,31 +1655,67 @@ impl App {
         output_b: &str,
     ) -> DraftResult<DisperseResult> {
         let ws = self.open(cwd)?;
-        let source = load_pack(&ws, pack_id)?;
-        let mut left = source.clone();
-        left.id = ChangepackId::generate();
-        left.name = Some(output_a.to_string());
+        let source = self.resolve_pack_ref(&ws, pack_id)?;
+        ensure_pack_not_locked(&ws, &source)?;
+        let mut left = Changepack::new(
+            ws.id.clone(),
+            source.task_id.clone(),
+            source.run_id.clone(),
+            source.base_snapshot_id.clone(),
+            source.result_snapshot_id.clone(),
+            Some(output_a.to_string()),
+        );
         left.source_pack_ids = vec![source.id.to_string()];
-        let mut right = source.clone();
-        right.id = ChangepackId::generate();
-        right.name = Some(output_b.to_string());
+        let mut right = Changepack::new(
+            ws.id.clone(),
+            source.task_id.clone(),
+            source.run_id.clone(),
+            source.base_snapshot_id.clone(),
+            source.result_snapshot_id.clone(),
+            Some(output_b.to_string()),
+        );
         right.source_pack_ids = vec![source.id.to_string()];
         ensure_dir(&ws.layout.pack_dir(&left.id))?;
         ensure_dir(&ws.layout.pack_dir(&right.id))?;
         let patch = load_patch(&ws, &source)?;
-        let evidence = load_evidence(&ws, &source).ok();
-        write_json(&ws.layout.pack_dir(&left.id).join("patch.json"), &patch)?;
-        write_json(&ws.layout.pack_dir(&right.id).join("patch.json"), &patch)?;
-        if let Some(evidence) = evidence {
-            write_json(
-                &ws.layout.pack_dir(&left.id).join("evidence.json"),
-                &evidence,
-            )?;
-            write_json(
-                &ws.layout.pack_dir(&right.id).join("evidence.json"),
-                &evidence,
-            )?;
+        let mut left_files = Vec::new();
+        let mut right_files = Vec::new();
+        for (idx, file) in patch.files.into_iter().enumerate() {
+            if idx % 2 == 0 {
+                left_files.push(file);
+            } else {
+                right_files.push(file);
+            }
         }
+        if right_files.is_empty() && left_files.len() > 1 {
+            if let Some(file) = left_files.pop() {
+                right_files.push(file);
+            }
+        }
+        let left_patch = split_patch(&source, left_files)?;
+        let right_patch = split_patch(&source, right_files)?;
+        let left_evidence = split_evidence(&left, &left_patch, "dispersed output A");
+        let right_evidence = split_evidence(&right, &right_patch, "dispersed output B");
+        left.patch_refs.push(left_patch.id.to_string());
+        right.patch_refs.push(right_patch.id.to_string());
+        left.evidence_refs.push(left_evidence.id.to_string());
+        right.evidence_refs.push(right_evidence.id.to_string());
+        write_json(
+            &ws.layout.pack_dir(&left.id).join("patch.json"),
+            &left_patch,
+        )?;
+        write_json(
+            &ws.layout.pack_dir(&right.id).join("patch.json"),
+            &right_patch,
+        )?;
+        write_json(
+            &ws.layout.pack_dir(&left.id).join("evidence.json"),
+            &left_evidence,
+        )?;
+        write_json(
+            &ws.layout.pack_dir(&right.id).join("evidence.json"),
+            &right_evidence,
+        )?;
         save_pack_manifest(&ws, &mut left)?;
         save_pack_manifest(&ws, &mut right)?;
         let receipt = Receipt::new(
@@ -1541,6 +1734,9 @@ impl App {
             source_pack_id: source.id.to_string(),
             output_pack_ids: vec![left.id.to_string(), right.id.to_string()],
             receipt_id: receipt.id.to_string(),
+            requires_verification: true,
+            requires_review: true,
+            final_success: false,
         })
     }
 
@@ -1551,9 +1747,11 @@ impl App {
         vars: BTreeMap<String, String>,
     ) -> DraftResult<SaveReceipt> {
         let ws = self.open(cwd)?;
+        validate_pack_id(pack_id)?;
         let mut pack = load_pack(&ws, pack_id)?;
+        ensure_pack_not_locked(&ws, &pack)?;
         let started = now();
-        ws.events()?.append(
+        let save_started_event_id = ws.events()?.append(
             "save.started",
             Some(pack.id.to_string()),
             serde_json::json!({}),
@@ -1575,30 +1773,56 @@ impl App {
             )?;
             return Err(DraftError::new(DraftErrorKind::SaveFailed, "Warning: .draft/ is included in the save candidate.\n\nDraft metadata must never be saved into an external repository or external system.\n\nSave aborted."));
         }
-        if policy.save.block_if_tests_fail && pack.verification_refs.is_empty() {
-            let receipt = failed_save(&ws, &pack, started, "verification is required before save")?;
+        let readiness = save_readiness(&ws, &pack, &patch, &policy)?;
+        if policy.save.block_if_tests_fail && readiness.verification_receipt_id.is_none() {
+            let reason = readiness
+                .blockers
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "verification is required before save".to_string());
+            let receipt = failed_save(&ws, &pack, started, &reason)?;
             ws.events()?.append(
                 "save.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                "verification is required before save",
-            ));
+            return Err(DraftError::new(DraftErrorKind::VerificationFailed, reason));
         }
-        if policy.save.block_if_unreviewed_high_risk
-            && !matches!(pack.status, ChangepackStatus::Approved)
+        if policy.save.block_if_unreviewed_high_risk && readiness.approval_ref.is_none() {
+            let reason = readiness
+                .blockers
+                .iter()
+                .find(|blocker| blocker.contains("approval") || blocker.contains("review"))
+                .cloned()
+                .unwrap_or_else(|| "approval is required before save".to_string());
+            let receipt = failed_save(&ws, &pack, started, &reason)?;
+            ws.events()?.append(
+                "save.completed",
+                Some(pack.id.to_string()),
+                serde_json::to_value(&receipt).unwrap_or(Value::Null),
+            )?;
+            return Err(DraftError::new(DraftErrorKind::ReviewRequired, reason));
+        }
+        let risk_summary = Some(self.risk(cwd, pack_id).map_err(|e| {
+            DraftError::new(
+                DraftErrorKind::RiskPolicyBlocked,
+                format!("risk evaluation failed before save: {e}"),
+            )
+        })?);
+        if risk_summary
+            .as_ref()
+            .map(|risk| risk.policy_decision.starts_with("blocked"))
+            .unwrap_or(false)
         {
-            let receipt = failed_save(&ws, &pack, started, "approval is required before save")?;
+            let receipt = failed_save(&ws, &pack, started, "risk policy blocks save")?;
             ws.events()?.append(
                 "save.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
             return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "approval is required before save",
+                DraftErrorKind::RiskPolicyBlocked,
+                "risk policy blocks save",
             ));
         }
         let receipt_id = ReceiptId::generate();
@@ -1613,8 +1837,16 @@ impl App {
             native_save_status: NativeSaveStatus::Saved,
             hook_status: HookStatus::NotConfigured,
             overall_status: SaveOverallStatus::Saved,
-            message_ref,
+            message_ref: message_ref.clone(),
             hook_results: Vec::new(),
+            hook_receipt_refs: Vec::new(),
+            object_refs: vec![message_ref.clone()],
+            event_refs: vec![save_started_event_id.to_string()],
+            risk_level: risk_summary
+                .as_ref()
+                .map(|risk| risk.level.label().to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            risk_receipt_id: risk_summary.as_ref().map(|risk| risk.receipt_id.clone()),
             started_at: started,
             ended_at: now(),
             receipt_hash: String::new(),
@@ -1643,7 +1875,10 @@ impl App {
                 actor_email: cfg.identity_email.clone(),
                 timestamp: now().to_rfc3339(),
                 verified: (!pack.verification_refs.is_empty()).to_string(),
-                risk_level: "unknown".to_string(),
+                risk_level: risk_summary
+                    .as_ref()
+                    .map(|risk| risk.level.label().to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
                 files_changed: patch.files.len().to_string(),
                 workspace_root: ws.root.display().to_string(),
                 hook_name: "save".to_string(),
@@ -1653,6 +1888,15 @@ impl App {
             match run_hook(&ws, &store, "save", &hook, &ctx) {
                 Ok(result) => {
                     let failed = result.exit_code != 0;
+                    let hook_receipt = Receipt::new(
+                        "hook",
+                        if failed { "failed" } else { "succeeded" },
+                        Some(pack.id.to_string()),
+                        serde_json::to_value(&result).unwrap_or(Value::Null),
+                    );
+                    let hook_receipt_id = hook_receipt.id.to_string();
+                    write_receipt(&ws, &hook_receipt)?;
+                    receipt.hook_receipt_refs.push(hook_receipt_id);
                     receipt.hook_results.push(result);
                     if failed {
                         receipt.hook_status = HookStatus::Failed;
@@ -1680,6 +1924,19 @@ impl App {
                 }
                 Err(e) => {
                     receipt.hook_status = HookStatus::Failed;
+                    let hook_receipt = Receipt::new(
+                        "hook",
+                        "failed",
+                        Some(pack.id.to_string()),
+                        serde_json::json!({
+                            "hook_name": "save",
+                            "hook_phase": hook.phase,
+                            "error": e.message
+                        }),
+                    );
+                    let hook_receipt_id = hook_receipt.id.to_string();
+                    write_receipt(&ws, &hook_receipt)?;
+                    receipt.hook_receipt_refs.push(hook_receipt_id);
                     if hook.continue_on_error {
                         receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
                         receipt.failure_reason = Some(e.message);
@@ -1721,6 +1978,19 @@ impl App {
     ) -> DraftResult<SaveReceipt> {
         let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
         self.save(cwd, &pack_id, vars)
+    }
+
+    pub fn save_readiness_selected(
+        &self,
+        cwd: &Path,
+        pack_id: Option<&str>,
+    ) -> DraftResult<SaveReadinessReport> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        let ws = self.open(cwd)?;
+        let pack = load_pack(&ws, &pack_id)?;
+        let patch = load_patch(&ws, &pack)?;
+        let policy = read_or_default::<PolicyConfig>(&ws.layout.policy_toml());
+        save_readiness(&ws, &pack, &patch, &policy)
     }
 
     pub fn rollback_plan(&self, cwd: &Path, reference: &str) -> DraftResult<RollbackPlan> {
@@ -1869,10 +2139,12 @@ impl App {
         let chain = ws.events()?.verify_chain()?;
         let object_errors = verify_objects(&ws)?;
         let receipt_errors = verify_receipts(&ws)?;
+        let draft_exclusion_errors = verify_draft_hard_exclusion(&ws)?;
         Ok(StorageDoctorReport {
             event_chain_ok: chain.ok,
             event_chain_error: chain.error,
-            draft_hard_excluded: true,
+            draft_hard_excluded: draft_exclusion_errors.is_empty(),
+            draft_exclusion_errors,
             objects_ok: object_errors.is_empty(),
             object_errors,
             receipts_ok: receipt_errors.is_empty(),
@@ -1883,6 +2155,7 @@ impl App {
     }
 
     pub fn receipt_show(&self, cwd: &Path, id: &str) -> DraftResult<Value> {
+        validate_receipt_id(id)?;
         let ws = self.open(cwd)?;
         let p = ws.layout.receipts_dir().join(format!("{}.json", id));
         Ok(serde_json::from_str(&fs::read_to_string(&p).map_err(
@@ -2003,6 +2276,9 @@ impl DraftLayout {
     }
     pub fn policy_toml(&self) -> PathBuf {
         self.draft_dir.join("policy.toml")
+    }
+    pub fn risk_toml(&self) -> PathBuf {
+        self.draft_dir.join("risk.toml")
     }
     pub fn workspace_json(&self) -> PathBuf {
         self.draft_dir.join("workspace.json")
@@ -2392,7 +2668,7 @@ impl EventStore {
             &self.layout.locks_dir().join("events.lock"),
             Duration::from_secs(10),
         )?;
-        let prev = self.read_all()?.last().map(|e| e.event_hash.clone());
+        let prev = self.read_last()?.map(|e| e.event_hash);
         let mut env = EventEnvelope {
             id: EventId::generate(),
             event_type: event_type.to_string(),
@@ -2426,6 +2702,21 @@ impl EventStore {
             })?);
         }
         Ok(out)
+    }
+    fn read_last(&self) -> DraftResult<Option<EventEnvelope>> {
+        let file = fs::File::open(self.layout.events_file())?;
+        let reader = BufReader::new(file);
+        let mut last = None;
+        for (idx, line) in reader.lines().enumerate() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            last = Some(serde_json::from_str(&line).map_err(|e| {
+                DraftError::storage(format!("event log parse failed at line {}: {e}", idx + 1))
+            })?);
+        }
+        Ok(last)
     }
     fn read_page(
         &self,
@@ -2561,6 +2852,8 @@ pub struct StorageDoctorReport {
     pub event_chain_ok: bool,
     pub event_chain_error: Option<String>,
     pub draft_hard_excluded: bool,
+    #[serde(default)]
+    pub draft_exclusion_errors: Vec<String>,
     pub objects_ok: bool,
     pub object_errors: Vec<String>,
     pub receipts_ok: bool,
@@ -3244,8 +3537,95 @@ pub struct RiskSummary {
     pub reason_codes: Vec<String>,
     pub hotspots: Vec<WorkspacePath>,
     pub evidence_gaps: Vec<String>,
+    #[serde(default)]
+    pub evidence_summary: Vec<String>,
     pub policy_decision: String,
     pub files_changed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveReadinessReport {
+    pub ok: bool,
+    pub blockers: Vec<String>,
+    #[serde(default)]
+    pub verification_receipt_id: Option<String>,
+    #[serde(default)]
+    pub review_receipt_id: Option<String>,
+    #[serde(default)]
+    pub approval_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskConfig {
+    pub medium_threshold: u32,
+    pub high_threshold: u32,
+    pub critical_threshold: u32,
+    pub path_rules: Vec<RiskPathRule>,
+}
+
+impl Default for RiskConfig {
+    fn default() -> Self {
+        Self {
+            medium_threshold: 3,
+            high_threshold: 6,
+            critical_threshold: 10,
+            path_rules: vec![
+                RiskPathRule::new(
+                    "auth_or_security_surface",
+                    6,
+                    ["auth", "oauth", "jwt", "session", "security"],
+                ),
+                RiskPathRule::new(
+                    "payment_surface",
+                    6,
+                    ["payment", "billing", "stripe", "invoice"],
+                ),
+                RiskPathRule::new(
+                    "database_migration",
+                    5,
+                    ["migration", "schema.sql", "database", "db/"],
+                ),
+                RiskPathRule::new(
+                    "dependency_lockfile",
+                    4,
+                    [
+                        "package-lock.json",
+                        "pnpm-lock.yaml",
+                        "yarn.lock",
+                        "cargo.lock",
+                        "go.sum",
+                    ],
+                ),
+                RiskPathRule::new(
+                    "ci_cd_change",
+                    4,
+                    [".github/", ".gitlab-ci", "circleci", "jenkins", "ci/"],
+                ),
+                RiskPathRule::new(
+                    "container_change",
+                    3,
+                    ["dockerfile", "compose.yaml", "compose.yml"],
+                ),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskPathRule {
+    pub code: String,
+    pub weight: u32,
+    pub patterns: Vec<String>,
+}
+
+impl RiskPathRule {
+    fn new<const N: usize>(code: &str, weight: u32, patterns: [&str; N]) -> Self {
+        Self {
+            code: code.to_string(),
+            weight,
+            patterns: patterns.into_iter().map(ToString::to_string).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3350,9 +3730,26 @@ pub struct Decision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewReport {
     pub changepack_id: String,
+    #[serde(default)]
+    pub review_receipt_id: Option<String>,
     pub comments: usize,
     pub decisions: usize,
     pub status: ChangepackStatus,
+    #[serde(default)]
+    pub review_units: Vec<ReviewUnit>,
+    #[serde(default)]
+    pub risk_receipt_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewUnit {
+    pub id: String,
+    pub path: WorkspacePath,
+    pub change_kind: String,
+    pub risk_contribution: u32,
+    pub evidence_refs: Vec<String>,
+    pub provenance_refs: Vec<String>,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3380,6 +3777,12 @@ pub struct ComposeResult {
     pub files: usize,
     #[serde(default)]
     pub compatible: bool,
+    #[serde(default)]
+    pub requires_verification: bool,
+    #[serde(default)]
+    pub requires_review: bool,
+    #[serde(default)]
+    pub final_success: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3387,6 +3790,12 @@ pub struct DisperseResult {
     pub source_pack_id: String,
     pub output_pack_ids: Vec<String>,
     pub receipt_id: String,
+    #[serde(default)]
+    pub requires_verification: bool,
+    #[serde(default)]
+    pub requires_review: bool,
+    #[serde(default)]
+    pub final_success: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3400,6 +3809,16 @@ pub struct SaveReceipt {
     pub overall_status: SaveOverallStatus,
     pub message_ref: String,
     pub hook_results: Vec<HookResult>,
+    #[serde(default)]
+    pub hook_receipt_refs: Vec<String>,
+    #[serde(default)]
+    pub object_refs: Vec<String>,
+    #[serde(default)]
+    pub event_refs: Vec<String>,
+    #[serde(default)]
+    pub risk_level: String,
+    #[serde(default)]
+    pub risk_receipt_id: Option<String>,
     pub started_at: DateTime<Utc>,
     pub ended_at: DateTime<Utc>,
     pub receipt_hash: String,
@@ -3484,6 +3903,14 @@ struct Receipt {
     kind: String,
     status: String,
     subject_id: Option<String>,
+    #[serde(default)]
+    event_refs: Vec<String>,
+    #[serde(default)]
+    object_refs: Vec<String>,
+    #[serde(default)]
+    reversible: bool,
+    #[serde(default)]
+    rollback_target: Option<String>,
     payload: Value,
     created_at: DateTime<Utc>,
     receipt_hash: String,
@@ -3497,12 +3924,24 @@ impl Receipt {
             kind: kind.to_string(),
             status: status.to_string(),
             subject_id,
+            event_refs: vec![],
+            object_refs: vec![],
+            reversible: false,
+            rollback_target: None,
             payload,
             created_at: now(),
             receipt_hash: String::new(),
         };
         r.receipt_hash = hash_json(&r).unwrap_or_default();
         r
+    }
+
+    fn reversible_to(mut self, target: impl Into<String>) -> Self {
+        self.reversible = true;
+        self.rollback_target = Some(target.into());
+        self.receipt_hash.clear();
+        self.receipt_hash = hash_json(&self).unwrap_or_default();
+        self
     }
 }
 
@@ -4071,6 +4510,148 @@ fn load_evidence(ws: &Workspace, pack: &Changepack) -> DraftResult<Evidence> {
     read_json(&ws.layout.pack_dir(&pack.id).join("evidence.json"))
 }
 
+fn save_readiness(
+    ws: &Workspace,
+    pack: &Changepack,
+    patch: &PatchSet,
+    policy: &PolicyConfig,
+) -> DraftResult<SaveReadinessReport> {
+    let mut blockers = Vec::new();
+    let verification = latest_current_passed_verification(ws, pack, patch)?;
+    if policy.save.block_if_tests_fail && verification.is_none() {
+        blockers.push("current passed verification receipt is required before save".to_string());
+    }
+    let review =
+        latest_completed_review_after(ws, pack, verification.as_ref().map(|v| v.created_at))?;
+    let approval = latest_human_approval_after(ws, pack, review.as_ref().map(|r| r.created_at))?;
+    if policy.save.block_if_unreviewed_high_risk {
+        if review.is_none() {
+            blockers.push("current review receipt is required before save".to_string());
+        }
+        if approval.is_none() || !matches!(pack.status, ChangepackStatus::Approved) {
+            blockers
+                .push("human approval is required after current review before save".to_string());
+        }
+    }
+    Ok(SaveReadinessReport {
+        ok: blockers.is_empty(),
+        blockers,
+        verification_receipt_id: verification.map(|v| v.id),
+        review_receipt_id: review.map(|r| r.id),
+        approval_ref: approval,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct ReceiptRef {
+    id: String,
+    created_at: DateTime<Utc>,
+}
+
+fn latest_current_passed_verification(
+    ws: &Workspace,
+    pack: &Changepack,
+    patch: &PatchSet,
+) -> DraftResult<Option<ReceiptRef>> {
+    let mut latest = None;
+    for receipt_id in &pack.verification_refs {
+        let value = read_receipt_value(ws, receipt_id)?;
+        if value.get("kind").and_then(Value::as_str) != Some("verification")
+            || value.get("status").and_then(Value::as_str) != Some("passed")
+            || value.get("subject_id").and_then(Value::as_str) != Some(pack.id.as_str())
+        {
+            continue;
+        }
+        let payload = value.get("payload").unwrap_or(&Value::Null);
+        if payload.get("patch_graph_hash").and_then(Value::as_str)
+            != Some(patch.patch_graph_hash.as_str())
+        {
+            continue;
+        }
+        let Some(created_at) = receipt_created_at(&value) else {
+            continue;
+        };
+        if latest
+            .as_ref()
+            .map(|current: &ReceiptRef| created_at > current.created_at)
+            .unwrap_or(true)
+        {
+            latest = Some(ReceiptRef {
+                id: receipt_id.clone(),
+                created_at,
+            });
+        }
+    }
+    Ok(latest)
+}
+
+fn latest_completed_review_after(
+    ws: &Workspace,
+    pack: &Changepack,
+    after: Option<DateTime<Utc>>,
+) -> DraftResult<Option<ReceiptRef>> {
+    let mut latest = None;
+    for receipt_id in &pack.review_refs {
+        let value = read_receipt_value(ws, receipt_id)?;
+        if value.get("kind").and_then(Value::as_str) != Some("review")
+            || value.get("status").and_then(Value::as_str) != Some("completed")
+            || value.get("subject_id").and_then(Value::as_str) != Some(pack.id.as_str())
+        {
+            continue;
+        }
+        let Some(created_at) = receipt_created_at(&value) else {
+            continue;
+        };
+        if after.map(|minimum| created_at < minimum).unwrap_or(false) {
+            continue;
+        }
+        if latest
+            .as_ref()
+            .map(|current: &ReceiptRef| created_at > current.created_at)
+            .unwrap_or(true)
+        {
+            latest = Some(ReceiptRef {
+                id: receipt_id.clone(),
+                created_at,
+            });
+        }
+    }
+    Ok(latest)
+}
+
+fn latest_human_approval_after(
+    ws: &Workspace,
+    pack: &Changepack,
+    after: Option<DateTime<Utc>>,
+) -> DraftResult<Option<String>> {
+    let review = load_review_file(ws, &pack.id).unwrap_or_default();
+    Ok(review
+        .decisions
+        .into_iter()
+        .filter(|decision| {
+            decision.kind == DecisionKind::Approve
+                && decision.actor.kind == ActorKind::Human
+                && after
+                    .map(|minimum| decision.created_at >= minimum)
+                    .unwrap_or(true)
+        })
+        .max_by_key(|decision| decision.created_at)
+        .map(|decision| decision.id.to_string()))
+}
+
+fn read_receipt_value(ws: &Workspace, id: &str) -> DraftResult<Value> {
+    validate_receipt_id(id)?;
+    read_json(&ws.layout.receipts_dir().join(format!("{id}.json")))
+}
+
+fn receipt_created_at(value: &Value) -> Option<DateTime<Utc>> {
+    value
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
 fn load_review_file(ws: &Workspace, id: &ChangepackId) -> DraftResult<ReviewFile> {
     read_json(&ws.layout.pack_dir(id).join("review.json"))
 }
@@ -4079,9 +4660,89 @@ fn save_review_file(ws: &Workspace, id: &ChangepackId, file: &ReviewFile) -> Dra
     write_json(&ws.layout.pack_dir(id).join("review.json"), file)
 }
 
+fn build_review_units(
+    ws: &Workspace,
+    pack: &Changepack,
+    risk: Option<&RiskSummary>,
+) -> DraftResult<Vec<ReviewUnit>> {
+    let patch = load_patch(ws, pack)?;
+    let hotspots: HashSet<_> = risk
+        .map(|summary| summary.hotspots.iter().cloned().collect())
+        .unwrap_or_default();
+    Ok(patch
+        .files
+        .into_iter()
+        .enumerate()
+        .map(|(idx, file)| {
+            let risk_contribution = if hotspots.contains(&file.path) { 10 } else { 1 };
+            ReviewUnit {
+                id: format!("rvu_{:04}", idx + 1),
+                path: file.path,
+                change_kind: format!("{:?}", file.change_kind),
+                risk_contribution,
+                evidence_refs: pack.evidence_refs.clone(),
+                provenance_refs: pack
+                    .task_id
+                    .as_ref()
+                    .map(|id| vec![id.to_string()])
+                    .unwrap_or_default(),
+                status: "pending".to_string(),
+            }
+        })
+        .collect())
+}
+
+fn split_patch(source: &Changepack, files: Vec<FilePatch>) -> DraftResult<PatchSet> {
+    let mut patch = PatchSet {
+        schema_version: SCHEMA_VERSION,
+        id: PatchSetId::generate(),
+        base_snapshot_id: source.base_snapshot_id.clone(),
+        result_snapshot_id: source.result_snapshot_id.clone(),
+        files,
+        patch_graph_hash: String::new(),
+    };
+    patch.patch_graph_hash = hash_json(&patch)?;
+    Ok(patch)
+}
+
+fn split_evidence(pack: &Changepack, patch: &PatchSet, warning: &str) -> Evidence {
+    Evidence {
+        schema_version: SCHEMA_VERSION,
+        id: EvidenceId::generate(),
+        changepack_id: pack.id.clone(),
+        command_logs: vec![],
+        files_touched: patch.files.iter().map(|f| f.path.clone()).collect(),
+        generated_diff_ref: None,
+        test_results: vec![],
+        lint_results: vec![],
+        risk_summary_ref: None,
+        agent_plan_ref: None,
+        agent_transcript_ref: None,
+        warnings: vec![warning.to_string()],
+        created_at: now(),
+    }
+}
+
 fn write_receipt(ws: &Workspace, receipt: &Receipt) -> DraftResult<()> {
     let mut receipt = receipt.clone();
     receipt.payload = redact_value(receipt.payload);
+    collect_object_refs_into_vec(&receipt.payload, &mut receipt.object_refs);
+    receipt.object_refs.sort();
+    receipt.object_refs.dedup();
+    let event_id = ws.events()?.append(
+        "receipt.created",
+        Some(receipt.id.to_string()),
+        serde_json::json!({
+            "kind": receipt.kind,
+            "status": receipt.status,
+            "subject_id": receipt.subject_id,
+            "reversible": receipt.reversible,
+            "rollback_target": receipt.rollback_target
+        }),
+    )?;
+    receipt.event_refs.push(event_id.to_string());
+    receipt.event_refs.sort();
+    receipt.event_refs.dedup();
     receipt.receipt_hash.clear();
     receipt.receipt_hash = hash_json(&receipt)?;
     write_json(
@@ -4089,15 +4750,35 @@ fn write_receipt(ws: &Workspace, receipt: &Receipt) -> DraftResult<()> {
             .receipts_dir()
             .join(format!("{}.json", receipt.id)),
         &receipt,
-    )
+    )?;
+    Ok(())
 }
 
 fn write_save_receipt(ws: &Workspace, receipt: &SaveReceipt) -> DraftResult<()> {
     let mut receipt = receipt.clone();
+    collect_object_refs_into_vec(
+        &serde_json::to_value(&receipt.hook_results).unwrap_or(Value::Null),
+        &mut receipt.object_refs,
+    );
+    receipt.object_refs.sort();
+    receipt.object_refs.dedup();
     receipt.failure_reason = receipt
         .failure_reason
         .as_ref()
         .map(|reason| redact_secrets(reason));
+    let event_id = ws.events()?.append(
+        "receipt.created",
+        Some(receipt.id.to_string()),
+        serde_json::json!({
+            "kind": "save",
+            "status": receipt.overall_status,
+            "subject_id": receipt.changepack_id,
+            "hook_receipt_refs": receipt.hook_receipt_refs
+        }),
+    )?;
+    receipt.event_refs.push(event_id.to_string());
+    receipt.event_refs.sort();
+    receipt.event_refs.dedup();
     receipt.receipt_hash.clear();
     receipt.receipt_hash = hash_json(&receipt)?;
     write_json(
@@ -4115,6 +4796,15 @@ fn write_save_receipt(ws: &Workspace, receipt: &SaveReceipt) -> DraftResult<()> 
 }
 
 fn write_rollback_receipt(ws: &Workspace, receipt: &mut RollbackReceipt) -> DraftResult<()> {
+    ws.events()?.append(
+        "receipt.created",
+        Some(receipt.id.to_string()),
+        serde_json::json!({
+            "kind": "rollback",
+            "status": receipt.status,
+            "subject_id": receipt.rollback_plan_id
+        }),
+    )?;
     receipt.receipt_hash.clear();
     receipt.receipt_hash = hash_json(receipt)?;
     write_json(
@@ -4122,7 +4812,8 @@ fn write_rollback_receipt(ws: &Workspace, receipt: &mut RollbackReceipt) -> Draf
             .receipts_dir()
             .join(format!("{}.json", receipt.id)),
         receipt,
-    )
+    )?;
+    Ok(())
 }
 
 fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
@@ -4338,6 +5029,11 @@ fn failed_save(
         overall_status: SaveOverallStatus::Failed,
         message_ref: store.put_bytes(b"")?,
         hook_results: Vec::new(),
+        hook_receipt_refs: Vec::new(),
+        object_refs: Vec::new(),
+        event_refs: Vec::new(),
+        risk_level: "unknown".to_string(),
+        risk_receipt_id: None,
         started_at: started,
         ended_at: now(),
         receipt_hash: String::new(),
@@ -4391,13 +5087,16 @@ fn render_message(
 
 fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Snapshot> {
     if reference.starts_with("chk_") {
+        validate_checkpoint_id(reference)?;
         return load_snapshot(ws, &SnapshotId::new(reference));
     }
     if reference.starts_with("pck_") {
+        validate_pack_id(reference)?;
         let pack = load_pack(ws, reference)?;
         return load_snapshot(ws, &pack.base_snapshot_id);
     }
     if reference.starts_with("rcp_") {
+        validate_receipt_id(reference)?;
         let receipt_path = ws.layout.receipts_dir().join(format!("{reference}.json"));
         if !receipt_path.exists() {
             return Err(DraftError::not_found(format!(
@@ -4405,26 +5104,76 @@ fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Sn
             )));
         }
         let value: Value = read_json(&receipt_path)?;
-        if let Some(snapshot_id) = value.get("subject_id").and_then(Value::as_str) {
-            if snapshot_id.starts_with("chk_") {
-                return load_snapshot(ws, &SnapshotId::new(snapshot_id));
+        if !value
+            .get("reversible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(DraftError::invalid_config(format!(
+                "receipt '{reference}' is not reversible"
+            )));
+        }
+        if let Some(target) = value.get("rollback_target").and_then(Value::as_str) {
+            if target.starts_with("chk_") {
+                validate_checkpoint_id(target)?;
+                return load_snapshot(ws, &SnapshotId::new(target));
             }
-            if snapshot_id.starts_with("pck_") {
-                let pack = load_pack(ws, snapshot_id)?;
+            if target.starts_with("pck_") {
+                validate_pack_id(target)?;
+                let pack = load_pack(ws, target)?;
                 return load_snapshot(ws, &pack.base_snapshot_id);
             }
         }
-        if let Some(pack_id) = value.get("changepack_id").and_then(Value::as_str) {
-            let pack = load_pack(ws, pack_id)?;
-            return load_snapshot(ws, &pack.base_snapshot_id);
-        }
         return Err(DraftError::invalid_config(format!(
-            "receipt '{reference}' is not reversible"
+            "receipt '{reference}' does not describe a reversible rollback target"
         )));
     }
     Err(DraftError::invalid_config(format!(
         "rollback reference '{reference}' must start with chk_, pck_, or rcp_"
     )))
+}
+
+fn validate_checkpoint_id(id: &str) -> DraftResult<()> {
+    validate_prefixed_id(id, "chk_", "checkpoint")
+}
+
+fn validate_pack_id(id: &str) -> DraftResult<()> {
+    validate_prefixed_id(id, "pck_", "pack")
+}
+
+fn validate_receipt_id(id: &str) -> DraftResult<()> {
+    validate_prefixed_id(id, "rcp_", "receipt")
+}
+
+fn validate_prefixed_id(id: &str, prefix: &str, label: &str) -> DraftResult<()> {
+    let rest = id.strip_prefix(prefix).ok_or_else(|| {
+        DraftError::invalid_config(format!("{label} id '{id}' must start with {prefix}"))
+    })?;
+    if rest.len() >= 6
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Ok(())
+    } else {
+        Err(DraftError::invalid_config(format!(
+            "malformed {label} id '{id}'"
+        )))
+    }
+}
+
+fn ensure_pack_not_locked(ws: &Workspace, pack: &Changepack) -> DraftResult<()> {
+    let lock = ws.layout.pack_dir(&pack.id).join("review.lock.json");
+    if lock.exists() {
+        return Err(DraftError::new(
+            DraftErrorKind::ReviewRequired,
+            format!(
+                "ChangePack {} is locked for review; approve or reject it before mutating it",
+                pack.id
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn dir_size(path: &Path) -> DraftResult<u64> {
@@ -4596,9 +5345,16 @@ fn write_object_pack_index(layout: &DraftLayout, index: &ObjectPackIndex) -> Dra
 
 fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
     let mut errors = Vec::new();
+    let event_ids: HashSet<String> = ws
+        .events()?
+        .read_all()?
+        .into_iter()
+        .map(|event| event.id.to_string())
+        .collect();
+    let store = ObjectStore::new(ws.layout.clone());
     for path in list_with_extension(&ws.layout.receipts_dir(), "json")? {
         let text = fs::read_to_string(&path)?;
-        let mut value: Value = match serde_json::from_str(&text) {
+        let value: Value = match serde_json::from_str(&text) {
             Ok(value) => value,
             Err(e) => {
                 errors.push(format!("{}: invalid JSON: {e}", path.display()));
@@ -4613,18 +5369,90 @@ fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
             errors.push(format!("{}: missing receipt_hash", path.display()));
             continue;
         };
-        if let Value::Object(map) = &mut value {
+        let mut hash_value = value.clone();
+        if let Value::Object(map) = &mut hash_value {
             map.insert("receipt_hash".to_string(), Value::String(String::new()));
         }
-        let actual = hash_json(&value)?;
+        let actual = hash_json(&hash_value)?;
         if actual != expected {
             errors.push(format!(
                 "{}: receipt hash mismatch: expected {expected}, got {actual}",
                 path.display()
             ));
         }
+        for object_ref in explicit_string_array(&value, "object_refs") {
+            if let Err(e) = store.get_bytes(&object_ref) {
+                errors.push(format!(
+                    "{}: missing object ref {object_ref}: {e}",
+                    path.display()
+                ));
+            }
+        }
+        for event_ref in explicit_string_array(&value, "event_refs") {
+            if !event_ids.contains(&event_ref) {
+                errors.push(format!("{}: missing event ref {event_ref}", path.display()));
+            }
+        }
+        for receipt_ref in explicit_string_array(&value, "hook_receipt_refs") {
+            if !ws
+                .layout
+                .receipts_dir()
+                .join(format!("{receipt_ref}.json"))
+                .exists()
+            {
+                errors.push(format!(
+                    "{}: missing hook receipt ref {receipt_ref}",
+                    path.display()
+                ));
+            }
+        }
     }
     Ok(errors)
+}
+
+fn verify_draft_hard_exclusion(ws: &Workspace) -> DraftResult<Vec<String>> {
+    let mut errors = Vec::new();
+    if !ws.layout.changepacks_dir().exists() {
+        return Ok(errors);
+    }
+    for entry in fs::read_dir(ws.layout.changepacks_dir())? {
+        let manifest = entry?.path().join("manifest.json");
+        if !manifest.exists() {
+            continue;
+        }
+        let pack: Changepack = read_json(&manifest)?;
+        if let Ok(patch) = load_patch(ws, &pack) {
+            for file in patch.files {
+                if is_draft_path(file.path.as_str())
+                    || file
+                        .old_path
+                        .as_ref()
+                        .map(|p| is_draft_path(p.as_str()))
+                        .unwrap_or(false)
+                {
+                    errors.push(format!(
+                        "{} includes Draft metadata path {}",
+                        pack.id, file.path
+                    ));
+                }
+            }
+        }
+    }
+    Ok(errors)
+}
+
+fn explicit_string_array(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn collect_reachable_object_refs(ws: &Workspace) -> DraftResult<HashSet<String>> {
@@ -4690,6 +5518,12 @@ fn collect_object_refs_from_value(value: &Value, refs: &mut HashSet<String>) {
         }
         _ => {}
     }
+}
+
+fn collect_object_refs_into_vec(value: &Value, refs: &mut Vec<String>) {
+    let mut set: HashSet<String> = refs.iter().cloned().collect();
+    collect_object_refs_from_value(value, &mut set);
+    *refs = set.into_iter().collect();
 }
 
 fn is_object_ref(value: &str) -> bool {
@@ -4821,38 +5655,118 @@ fn render_candidate_command(template: &str, instruction: &str) -> Vec<String> {
 }
 
 fn redact_secrets(input: &str) -> String {
+    let input = redact_pem_blocks(input);
     input
-        .split_whitespace()
-        .map(|token| {
-            let lower = token.to_ascii_lowercase();
-            let sensitive = [
-                "password",
-                "passwd",
-                "pwd",
-                "token",
-                "secret",
-                "api_key",
-                "apikey",
-                "access_key",
-                "private_key",
-                "bearer",
-            ]
-            .iter()
-            .any(|key| lower.contains(key));
-            if sensitive {
-                if let Some((key, _)) = token.split_once('=') {
-                    format!("{key}=[REDACTED]")
-                } else if let Some((key, _)) = token.split_once(':') {
-                    format!("{key}:[REDACTED]")
-                } else {
-                    "[REDACTED]".to_string()
-                }
-            } else {
-                token.to_string()
-            }
-        })
+        .lines()
+        .map(redact_secret_line)
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("\n")
+}
+
+fn redact_secret_line(line: &str) -> String {
+    let mut out = Vec::new();
+    let mut redact_next = false;
+    for token in line.split_whitespace() {
+        if redact_next {
+            out.push("[REDACTED]".to_string());
+            redact_next = false;
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if looks_like_standalone_secret(token) {
+            out.push("[REDACTED]".to_string());
+        } else if let Some(redacted) = redact_assignment_token(token) {
+            out.push(redacted);
+        } else if sensitive_key_token(&lower) || lower == "bearer" {
+            out.push(redact_key_token(token));
+            redact_next = true;
+        } else {
+            out.push(redact_url_credentials(token));
+        }
+    }
+    out.join(" ")
+}
+
+fn redact_assignment_token(token: &str) -> Option<String> {
+    for sep in ['=', ':'] {
+        if let Some((key, _)) = token.split_once(sep) {
+            if sensitive_key_token(&key.to_ascii_lowercase()) {
+                return Some(format!("{key}{sep}[REDACTED]"));
+            }
+        }
+    }
+    None
+}
+
+fn redact_key_token(token: &str) -> String {
+    let trimmed = token.trim_end_matches([':', '=']);
+    if trimmed.len() != token.len() {
+        format!("{trimmed}:[REDACTED]")
+    } else {
+        "[REDACTED]".to_string()
+    }
+}
+
+fn sensitive_key_token(lower: &str) -> bool {
+    [
+        "password",
+        "passwd",
+        "pwd",
+        "token",
+        "secret",
+        "api_key",
+        "apikey",
+        "access_key",
+        "private_key",
+        "authorization",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+}
+
+fn looks_like_standalone_secret(token: &str) -> bool {
+    let trimmed = token.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_');
+    (trimmed.starts_with("eyJ") && trimmed.matches('.').count() >= 2)
+        || trimmed.starts_with("AKIA")
+        || trimmed.starts_with("ASIA")
+        || trimmed.starts_with("ghp_")
+        || trimmed.starts_with("xoxb-")
+}
+
+fn redact_url_credentials(token: &str) -> String {
+    let Some(scheme_idx) = token.find("://") else {
+        return token.to_string();
+    };
+    let authority_start = scheme_idx + 3;
+    let authority_end = token[authority_start..]
+        .find('/')
+        .map(|idx| authority_start + idx)
+        .unwrap_or(token.len());
+    let Some(at_offset) = token[authority_start..authority_end].find('@') else {
+        return token.to_string();
+    };
+    let at = authority_start + at_offset;
+    format!("{}[REDACTED]{}", &token[..authority_start], &token[at..])
+}
+
+fn redact_pem_blocks(input: &str) -> String {
+    let mut out = Vec::new();
+    let mut in_pem = false;
+    for line in input.lines() {
+        if line.contains("-----BEGIN ") && line.contains("PRIVATE KEY-----") {
+            out.push("[REDACTED PEM PRIVATE KEY]".to_string());
+            in_pem = true;
+            continue;
+        }
+        if in_pem {
+            if line.contains("-----END ") && line.contains("PRIVATE KEY-----") {
+                in_pem = false;
+            }
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    out.join("\n")
 }
 
 fn redact_value(value: Value) -> Value {
@@ -4996,11 +5910,17 @@ fn run_hook(
     let command = interpolate_strict(&hook.command, &values)?;
     let resolved_cwd = match hook.cwd.as_str() {
         "workspace" | "" => ws.root.clone(),
-        other => ws.root.join(other),
+        other => resolve_hook_cwd(&ws.root, other)?,
     };
     let cwd = resolved_cwd.canonicalize().unwrap_or(resolved_cwd);
+    ensure_workspace_child(&ws.root, &cwd)?;
     let mut env = hook_env(ctx);
     for (k, v) in &hook.env {
+        if k.starts_with("DRAFT_") {
+            return Err(HookFailure {
+                message: format!("hook env key '{k}' cannot override Draft-managed variables"),
+            });
+        }
         env.insert(k.clone(), v.clone());
     }
     let mut env_keys: Vec<String> = env.keys().cloned().collect();
@@ -5035,6 +5955,33 @@ fn run_hook(
         ended_at,
         env_keys,
     })
+}
+
+fn resolve_hook_cwd(root: &Path, configured: &str) -> Result<PathBuf, HookFailure> {
+    let relative = Path::new(configured);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(HookFailure {
+            message: "hook cwd must be a relative path inside the workspace".to_string(),
+        });
+    }
+    Ok(root.join(relative))
+}
+
+fn ensure_workspace_child(root: &Path, path: &Path) -> Result<(), HookFailure> {
+    let root = root.canonicalize().map_err(|e| HookFailure {
+        message: format!("cannot canonicalize workspace root: {e}"),
+    })?;
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !path.starts_with(&root) {
+        return Err(HookFailure {
+            message: "hook cwd escapes workspace".to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn hook_values(ctx: &HookContext) -> BTreeMap<String, String> {

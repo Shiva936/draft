@@ -245,7 +245,7 @@ Delete a ChangePack by ID or name:
 draft pack -d <pck-id-or-name>
 ```
 
-Deleting a ChangePack does not delete event history, logs, receipts, or provenance records.
+Deleting a ChangePack preserves event history and receipts. Draft removes the pack directory, removes task/run records owned only by that pack, and garbage-collects unreachable objects.
 
 List generated ChangePacks:
 
@@ -414,7 +414,7 @@ Draft is pre-1.0 software. The current focus is v0.3.1 production readiness:
 * CLI ergonomics;
 * ChangePack naming and selection;
 * review cockpit flows;
-* event log UX;
+* event stream UX;
 * rollback target semantics;
 * documentation alignment;
 * safety and release compliance.

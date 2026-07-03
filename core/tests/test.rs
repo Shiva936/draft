@@ -105,6 +105,37 @@ fn event_replay_summarizes_and_verifies_chain() {
     assert_eq!(report.by_type["repo.initialized"], 1);
 }
 
+#[test]
+fn durable_events_redact_common_secret_shapes() {
+    let (dir, app) = setup();
+    app.task_spawn(
+        dir.path(),
+        "secret-task",
+        None,
+        vec![],
+        None,
+        vec![
+            "token=abc123".to_string(),
+            "Authorization: Bearer eyJhbGciOi.fake.sig".to_string(),
+            "postgres://user:pass@example.com/db".to_string(),
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----".to_string(),
+        ],
+    )
+    .unwrap();
+
+    let events = app.events(dir.path()).unwrap();
+    let payload = events
+        .iter()
+        .find(|event| event.event_type == "task.spawned")
+        .unwrap()
+        .payload
+        .to_string();
+    assert!(!payload.contains("abc123"));
+    assert!(!payload.contains("eyJhbGciOi.fake.sig"));
+    assert!(!payload.contains("user:pass"));
+    assert!(!payload.contains("PRIVATE KEY-----"));
+}
+
 #[cfg(unix)]
 #[test]
 fn rollback_rejects_symlink_parent_escape() {

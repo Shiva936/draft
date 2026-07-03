@@ -373,11 +373,12 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("{}", output::format_error(&e));
             match e.kind {
-                DraftErrorKind::VerificationFailed
-                | DraftErrorKind::RiskPolicyBlocked
-                | DraftErrorKind::ReviewRequired
-                | DraftErrorKind::ConflictDetected
-                | DraftErrorKind::SaveFailed => ExitCode::from(2),
+                DraftErrorKind::VerificationFailed => ExitCode::from(5),
+                DraftErrorKind::RiskPolicyBlocked => ExitCode::from(6),
+                DraftErrorKind::ReviewRequired => ExitCode::from(7),
+                DraftErrorKind::SaveFailed => ExitCode::from(8),
+                DraftErrorKind::Storage => ExitCode::from(9),
+                DraftErrorKind::ConflictDetected => ExitCode::from(2),
                 _ => ExitCode::FAILURE,
             }
         }
@@ -587,11 +588,11 @@ fn run(cli: Cli) -> Result<(), DraftError> {
         ),
         Command::Risk {
             pack,
-            explain: _,
-            include_evidence: _,
+            explain,
+            include_evidence,
             json,
         } => render_json_or_text(
-            app.risk_selected(&cwd, pack.as_deref())?,
+            app.risk_selected_with_options(&cwd, pack.as_deref(), explain, include_evidence)?,
             json,
             "Risk assessed",
         ),
