@@ -3,7 +3,7 @@
 # The guaranteed, stable coverage lives in core/tests/security_fixtures.rs.
 [package]
 name = "draft-fuzz"
-version = "0.0.0"
+version = "0.3.2"
 edition = "2021"
 publish = false
 
