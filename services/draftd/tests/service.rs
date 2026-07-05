@@ -2,6 +2,7 @@ use draft_ipc::{socket_path, Request};
 use draft_sessions::SessionManager;
 use draft_store::ServiceStore;
 use serde_json::{json, Value};
+use std::sync::{Mutex, OnceLock};
 
 fn call(
     store: &ServiceStore,
@@ -13,10 +14,41 @@ fn call(
     draftd::dispatch(store, sessions, Request::new(id, method, params))
 }
 
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::path::Path>) -> Self {
+        let previous = std::env::var_os(key);
+        std::env::set_var(key, value.as_ref());
+        EnvVarGuard { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var(self.key, previous);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}
+
 #[test]
 fn daemon_dispatcher_covers_control_plane() {
+    let _env_lock = env_lock().lock().unwrap();
     let state = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
+    let global = tempfile::tempdir().unwrap();
+    let _global_home = EnvVarGuard::set("DRAFT_GLOBAL_HOME", global.path().join(".draft"));
     let store = ServiceStore::open(state.path().to_path_buf());
     let sessions = SessionManager::new();
     let path = workspace.path().display().to_string();
@@ -145,10 +177,21 @@ fn daemon_dispatcher_covers_control_plane() {
         "receipt.list",
         json!({ "path": workspace.path().display().to_string() }),
     );
-    let first_receipt = &receipts.result.as_ref().unwrap()[0];
-    let receipt_id = first_receipt["id"]
+    assert!(receipts.ok, "{:?}", receipts.error);
+    let receipt_values = receipts.result.as_ref().unwrap().as_array().unwrap();
+    for event_type in ["PackVerified", "PackApproved", "PackSaved"] {
+        assert!(
+            receipt_values.iter().any(|r| r["event_type"] == event_type),
+            "missing canonical {event_type} receipt in {receipt_values:?}"
+        );
+    }
+    let save_receipt = receipt_values
+        .iter()
+        .find(|r| r["event_type"] == "PackSaved")
+        .unwrap();
+    let receipt_id = save_receipt["id"]
         .as_str()
-        .or_else(|| first_receipt["receipt_id"].as_str())
+        .or_else(|| save_receipt["receipt_id"].as_str())
         .unwrap()
         .to_string();
     let resp = call(
@@ -208,6 +251,7 @@ fn daemon_dispatcher_covers_control_plane() {
 
 #[test]
 fn socket_path_is_local() {
+    let _env_lock = env_lock().lock().unwrap();
     std::env::remove_var("XDG_RUNTIME_DIR");
     let p = socket_path();
     assert!(p.to_string_lossy().ends_with("draftd.sock"));

@@ -60,33 +60,38 @@ pub struct IdentityStatus {
 /// Ensure the global actor + signing key exist, creating them on first use.
 /// Idempotent: returns the existing profile if already provisioned.
 pub fn ensure_actor(home: &GlobalHome) -> DraftResult<ActorProfile> {
-    if let Some(profile) = load_actor(home)? {
-        // Keep the key present; if it was deleted we regenerate below.
-        if home.signing_key().exists() {
-            return Ok(profile);
-        }
-    }
     home.create_all()?;
-    let keypair = Keypair::generate();
-    keypair.save(&home.signing_key())?;
+
+    let existing = load_actor(home)?;
+    let keypair = if home.signing_key().exists() {
+        Keypair::load(&home.signing_key())?
+    } else {
+        let keypair = Keypair::generate();
+        keypair.save(&home.signing_key())?;
+        keypair
+    };
     let public_key_id = keypair.public_key_id();
-    let profile = ActorProfile {
-        actor_id: crate::common::ActorId::generate().to_string(),
-        display_name: default_display_name(),
-        public_key_id: public_key_id.clone(),
-        created_at: crate::common::now().to_rfc3339(),
+
+    let profile = match existing {
+        Some(mut profile) => {
+            if profile.public_key_id != public_key_id {
+                profile.public_key_id = public_key_id.clone();
+                write_json(&home.actor_json(), &profile)?;
+            }
+            profile
+        }
+        None => {
+            let profile = ActorProfile {
+                actor_id: crate::common::ActorId::generate().to_string(),
+                display_name: default_display_name(),
+                public_key_id: public_key_id.clone(),
+                created_at: crate::common::now().to_rfc3339(),
+            };
+            write_json(&home.actor_json(), &profile)?;
+            profile
+        }
     };
-    write_json(&home.actor_json(), &profile)?;
-    let pub_record = PublicKeyRecord {
-        public_key_id: public_key_id.clone(),
-        public_key: keypair.public_key_b64(),
-        algorithm: crate::signing::SIGNATURE_ALGORITHM.to_string(),
-        actor_id: profile.actor_id.clone(),
-    };
-    write_json(
-        &home.public_keys_dir().join(format!("{public_key_id}.json")),
-        &pub_record,
-    )?;
+    publish_public_key(home, &profile, &keypair)?;
     Ok(profile)
 }
 
@@ -106,6 +111,38 @@ pub fn load_keypair(home: &GlobalHome) -> DraftResult<Keypair> {
         ));
     }
     Keypair::load(&home.signing_key())
+}
+
+/// Load the signing key and reconcile the active actor/public key metadata to
+/// the exact key that will be used for new signatures.
+pub fn active_signer(home: &GlobalHome) -> DraftResult<(ActorProfile, Keypair)> {
+    let mut actor = ensure_actor(home)?;
+    let keypair = load_keypair(home)?;
+    let public_key_id = keypair.public_key_id();
+    if actor.public_key_id != public_key_id {
+        actor.public_key_id = public_key_id;
+        write_json(&home.actor_json(), &actor)?;
+        publish_public_key(home, &actor, &keypair)?;
+    }
+    Ok((actor, keypair))
+}
+
+fn publish_public_key(
+    home: &GlobalHome,
+    profile: &ActorProfile,
+    keypair: &Keypair,
+) -> DraftResult<()> {
+    let public_key_id = keypair.public_key_id();
+    let pub_record = PublicKeyRecord {
+        public_key_id: public_key_id.clone(),
+        public_key: keypair.public_key_b64(),
+        algorithm: crate::signing::SIGNATURE_ALGORITHM.to_string(),
+        actor_id: profile.actor_id.clone(),
+    };
+    write_json(
+        &home.public_keys_dir().join(format!("{public_key_id}.json")),
+        &pub_record,
+    )
 }
 
 /// Resolve a `public_key_id` to its base64 public key from the published keys.
@@ -186,6 +223,26 @@ mod tests {
                           // Public key resolves back.
         let pk = resolve_public_key(&home, &a.public_key_id).unwrap();
         assert!(pk.is_some());
+    }
+
+    #[test]
+    fn ensure_actor_reconciles_replaced_signing_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = GlobalHome::at(tmp.path().join(".draft"));
+        let first = ensure_actor(&home).unwrap();
+        let old_key = first.public_key_id.clone();
+
+        let replacement = Keypair::generate();
+        replacement.save(&home.signing_key()).unwrap();
+        let reconciled = ensure_actor(&home).unwrap();
+
+        assert_eq!(reconciled.actor_id, first.actor_id);
+        assert_ne!(reconciled.public_key_id, old_key);
+        assert_eq!(reconciled.public_key_id, replacement.public_key_id());
+        assert!(resolve_public_key(&home, &old_key).unwrap().is_some());
+        assert!(resolve_public_key(&home, &replacement.public_key_id())
+            .unwrap()
+            .is_some());
     }
 
     #[test]

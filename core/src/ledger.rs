@@ -19,6 +19,7 @@ use crate::receipt::{self, ReceiptRecord, ReceiptStore, ReceiptVerification};
 use crate::signing::Keypair;
 use crate::transparency::TransparencyLog;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The artifacts produced by recording one trust action.
@@ -58,8 +59,7 @@ impl TrustLedger {
     /// Open the ledger against an explicit global store (used by tests and any
     /// caller that has already resolved the global home).
     pub fn open_at(root: &Path, workspace_id: &str, home: GlobalHome) -> DraftResult<Self> {
-        let actor = global::ensure_actor(&home)?;
-        let keypair = global::load_keypair(&home)?;
+        let (actor, keypair) = global::active_signer(&home)?;
         Ok(TrustLedger {
             paths: ProjectPaths::for_root(root),
             home,
@@ -110,7 +110,7 @@ impl TrustLedger {
                 receipt_id,
                 workspace_hash,
                 policy_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
-                public_key_id: self.actor.public_key_id.clone(),
+                public_key_id: self.keypair.public_key_id(),
             },
             &self.keypair,
         );
@@ -119,6 +119,7 @@ impl TrustLedger {
             &receipt.receipt_id,
             &event.event_hash,
             &self.actor.actor_id,
+            &receipt.public_key_id,
             &self.keypair,
         )?;
 
@@ -164,8 +165,11 @@ impl TrustLedger {
 
         let revoked = self.revoked_keys();
         let mut receipt_results = Vec::new();
-        for receipt in self.receipts().list()? {
+        let receipts = self.receipts().list()?;
+        let mut receipt_keys = BTreeMap::new();
+        for receipt in receipts {
             let public_key = self.resolve_key(&receipt.public_key_id);
+            receipt_keys.insert(receipt.receipt_id.clone(), receipt.public_key_id.clone());
             receipt_results.push(receipt::verify(
                 &receipt,
                 &events,
@@ -175,11 +179,12 @@ impl TrustLedger {
         }
 
         let transparency = self.transparency();
-        let (transparency_ok, transparency_count) =
-            match transparency.verify(|actor_id| self.resolve_actor_key(actor_id)) {
-                Ok(n) => (true, n),
-                Err(_) => (false, transparency.read_all().map(|v| v.len()).unwrap_or(0)),
-            };
+        let (transparency_ok, transparency_count) = match transparency
+            .verify(|entry| self.resolve_transparency_key(entry, &receipt_keys))
+        {
+            Ok(n) => (true, n),
+            Err(_) => (false, transparency.read_all().map(|v| v.len()).unwrap_or(0)),
+        };
 
         let all_ok = event_chain_ok && transparency_ok && receipt_results.iter().all(|r| r.ok);
         Ok(LedgerVerification {
@@ -192,10 +197,18 @@ impl TrustLedger {
         })
     }
 
-    /// Resolve the signing public key for a given actor id. In v0.3.2 the local
-    /// actor signs transparency entries, so we resolve via the active profile.
-    fn resolve_actor_key(&self, actor_id: &str) -> Option<String> {
-        if actor_id == self.actor.actor_id {
+    fn resolve_transparency_key(
+        &self,
+        entry: &crate::transparency::TransparencyEntry,
+        receipt_keys: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        if let Some(public_key_id) = &entry.public_key_id {
+            return self.resolve_key(public_key_id);
+        }
+        if let Some(public_key_id) = receipt_keys.get(&entry.receipt_id) {
+            return self.resolve_key(public_key_id);
+        }
+        if entry.actor_id == self.actor.actor_id {
             return self.resolve_key(&self.actor.public_key_id);
         }
         None
@@ -271,5 +284,78 @@ mod tests {
 
         let v = ledger.verify_all().unwrap();
         assert!(!v.all_ok);
+    }
+
+    #[test]
+    fn replaced_signing_key_records_verifiable_receipts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = GlobalHome::at(tmp.path().join("g/.draft"));
+        let root = tmp.path().join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        setup(&root);
+
+        let first_actor = global::ensure_actor(&home).unwrap();
+        let replacement = Keypair::generate();
+        replacement.save(&home.signing_key()).unwrap();
+
+        let ledger = TrustLedger::open_at(&root, "ws_x", home.clone()).unwrap();
+        let out = ledger
+            .record(
+                EventKind::PackCreated,
+                Some("pck_drift".into()),
+                None,
+                "sha256:1".into(),
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        assert_eq!(ledger.actor.actor_id, first_actor.actor_id);
+        assert_eq!(out.receipt.public_key_id, replacement.public_key_id());
+        let v = ledger.verify_all().unwrap();
+        assert!(v.all_ok, "ledger not ok: {v:?}");
+    }
+
+    #[test]
+    fn key_rotation_keeps_historical_entries_verifiable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = GlobalHome::at(tmp.path().join("g/.draft"));
+        let root = tmp.path().join("p");
+        std::fs::create_dir_all(&root).unwrap();
+        setup(&root);
+
+        let first = TrustLedger::open_at(&root, "ws_x", home.clone()).unwrap();
+        let first_out = first
+            .record(
+                EventKind::PackCreated,
+                Some("pck_rotate".into()),
+                None,
+                "sha256:1".into(),
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let first_key = first_out.receipt.public_key_id.clone();
+
+        let replacement = Keypair::generate();
+        replacement.save(&home.signing_key()).unwrap();
+        let second = TrustLedger::open_at(&root, "ws_x", home).unwrap();
+        let second_out = second
+            .record(
+                EventKind::PackVerified,
+                Some("pck_rotate".into()),
+                None,
+                "sha256:2".into(),
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        assert_ne!(first_key, second_out.receipt.public_key_id);
+        assert_eq!(
+            second_out.receipt.public_key_id,
+            replacement.public_key_id()
+        );
+        let v = second.verify_all().unwrap();
+        assert!(v.all_ok, "ledger not ok: {v:?}");
+        assert_eq!(v.receipts.len(), 2);
+        assert_eq!(v.transparency_count, 2);
     }
 }
