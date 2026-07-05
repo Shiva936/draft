@@ -6,16 +6,17 @@ Draft records important state transitions as append-only events. Events are for 
 
 Each event has:
 
-- `id`: unique event id;
+- `event_id`: unique event id;
 - `type`: event name;
 - `time`: UTC timestamp;
-- `actor`: resolved local actor;
+- `actor_id`: resolved local actor;
+- `candidate_id`: optional candidate id;
 - `workspace_id`: workspace identifier;
 - `subject_id`: optional related object id;
-- `payload`: event-specific JSON;
-- `prev_event_hash`: previous event hash or null;
-- `event_hash`: hash of the event envelope with this field empty;
-- `schema_version`: store schema version.
+- `previous_event_hash`: previous event hash, or the genesis hash for the first event;
+- `receipt_id`: linked receipt id for trust-ledger events;
+- `metadata`: event-specific JSON;
+- `event_hash`: hash of the canonical event envelope excluding only `event_hash`.
 
 ## Hash Chain
 
@@ -29,7 +30,8 @@ The chain is linear. Every appended event points at the previous event hash. Ver
 Run:
 
 ```bash
-draft event --verify-chain
+draft doctor
+draft receipt verify --all
 ```
 
 The core API and daemon also expose event replay summaries, which count events
@@ -37,7 +39,7 @@ by type after verifying the chain.
 
 ## Durability
 
-Event append uses a local lock under `.draft/locks/`, appends one JSON object per line, and syncs the file. This keeps concurrent local writers serialized and makes abrupt process exits easier to diagnose.
+Canonical event append writes one JSON object per line to `.draft/events/event.log` and syncs the file. Receipt-producing trust events preallocate their `rcp_` id before append, so the event line is final when written.
 
 ## Event Types
 

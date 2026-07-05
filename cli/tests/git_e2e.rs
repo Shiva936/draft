@@ -4,6 +4,8 @@ use predicates::str::contains;
 fn draft(dir: &std::path::Path) -> Assert {
     let mut c = Assert::cargo_bin("draft").unwrap();
     c.current_dir(dir);
+    // Hermetic, per-test global store (see smoke.rs for rationale).
+    c.env("DRAFT_GLOBAL_HOME", dir.join(".draft").join("_global"));
     c
 }
 

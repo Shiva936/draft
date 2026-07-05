@@ -34,7 +34,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.3.1-7c3aed?style=flat-square" />
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.2-7c3aed?style=flat-square" />
   <img alt="status" src="https://img.shields.io/badge/status-pre--1.0-0ea5e9?style=flat-square" />
   <img alt="local-first" src="https://img.shields.io/badge/local--first-yes-10b981?style=flat-square" />
   <img alt="offline capable" src="https://img.shields.io/badge/offline--capable-yes-14b8a6?style=flat-square" />
@@ -214,15 +214,24 @@ draft verify -p "update app"
 
 ## Commands
 
-The v0.3.1 command surface is intentionally local and workspace-oriented.
+The v0.3.2 command surface is intentionally local and workspace-oriented.
 
 ```text
-init       config     hook       ignore     status
-event      checkpoint create    pack       list
-candidate  task       verify    risk       review
-approve    reject     compare   compose    disperse
-save       receipt    storage   rollback
+init       doctor     identity   config     hook
+ignore     status     event      checkpoint create
+pack       list       candidate  task       verify
+risk       review     approve    reject     compare
+compose    disperse   save       receipt    storage
+rollback   cockpit    mcp        acp        a2a
 ```
+
+New in v0.3.2: `init --global`, `doctor`, `identity status`, `receipt verify`,
+`pack --export/--import`, `pack inspect/depends/conflicts/compose`,
+`verify <pck_id> --explain/--full/--fuzz`, `save --dry-run`, `rollback --dry-run`,
+`cockpit`, and the `mcp`/`acp`/`a2a` adapters. Draft treats each changepack as an
+independent, composable, portable, **signed**, locally verifiable unit of change.
+Event history is `draft event` — there is no `log` command; only `--page` and
+`--limit` apply. See [CHANGELOG.md](CHANGELOG.md).
 
 ### ChangePack Commands
 
@@ -274,17 +283,18 @@ Raw event records:
 draft event --raw
 ```
 
-Verify the event hash chain:
+Verify event, receipt, and transparency integrity:
 
 ```bash
-draft event --verify-chain
+draft doctor
+draft receipt verify --all
 ```
 
-Draft stores provenance as append-only hash-chained event records. The normal `draft event` timeline is a readable view derived from that raw stream; there is no separate durable human log file outside the event model.
+Draft stores provenance as append-only hash-chained event records linked to signed receipts and the local transparency chain. The normal `draft event` timeline is a readable view derived from that raw stream; there is no separate durable human log file outside the event model.
 
 ### Candidate And Task Commands
 
-Candidates are named execution profiles. They do not represent roles in v0.3.1.
+Candidates are named execution profiles. They do not represent roles in v0.3.2.
 
 Run a task with an explicit instruction boundary:
 
@@ -314,10 +324,11 @@ When `draft save` runs, Draft:
 
 1. renders supported hook variables such as `{{message}}`;
 2. checks local policy;
-3. verifies that `.draft/` is not part of the save candidate;
-4. executes the command from the workspace root;
-5. captures stdout, stderr, exit code, and command hash;
-6. writes a durable receipt.
+3. verifies canonical approval, workspace hash, receipt signatures, event chain, and transparency linkage;
+4. verifies that `.draft/` is not part of the save candidate;
+5. executes the command from the workspace root;
+6. captures stdout, stderr, exit code, and command hash;
+7. writes a durable receipt.
 
 Draft does not parse, detect, or model what the hook command does. Hooks are opaque by design.
 
@@ -416,15 +427,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, development 
 
 ## Project Status
 
-Draft is pre-1.0 software. The current focus is v0.3.1 production readiness:
+Draft is pre-1.0 software. The current focus is v0.3.2 production readiness:
 
 * CLI ergonomics;
-* ChangePack naming and selection;
-* review cockpit flows;
-* event stream UX;
-* rollback target semantics;
+* verified, signed, portable changepacks;
+* AG-UI review cockpit flows;
+* event, receipt, and transparency integrity;
+* import/export and rollback safety;
 * documentation alignment;
-* safety and release compliance.
+* security, performance, and release compliance.
 
 Public APIs and storage details may still evolve before 1.0.
 

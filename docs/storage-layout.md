@@ -1,8 +1,19 @@
 # Storage Layout
 
-Draft stores all private state below `.draft/`. The store is native to Draft v0.3.1 and is independent of external tools.
+Draft stores private state in two hidden `.draft/` stores. The global store (`~/.draft/`) holds user/device identity, signing keys, trust data, adapter config, and reusable cache state. The project store (`<workspace>/.draft/`) holds workspace changepacks, events, receipts, transparency data, checkpoints, evidence, and indexes. Both stores are native to Draft v0.3.2 and independent of external tools.
 
-## Top-Level Files
+## Global Store
+
+- `~/.draft/config.toml`: global defaults.
+- `~/.draft/identity/`: actor and candidate registry.
+- `~/.draft/keys/signing.key`: private Ed25519 signing key.
+- `~/.draft/trust/`: trusted and revoked public-key metadata.
+- `~/.draft/adapters/`: local adapter configuration.
+- `~/.draft/cache/`: rebuildable global caches.
+
+The global store never stores project pack data.
+
+## Project Top-Level Files
 
 - `.draft/workspace.json`: workspace id, schema version, Draft version, and creation time.
 - `.draft/config.toml`: workspace configuration.
@@ -20,9 +31,16 @@ Draft stores all private state below `.draft/`. The store is native to Draft v0.
 - `.draft/changepacks/`: ChangePack manifests, patches, reviews, and linked metadata.
 - `.draft/evidence/`: verification and run evidence.
 - `.draft/receipts/`: durable action receipts.
+- `.draft/transparency/`: local tamper-evident receipt/event chain.
+- `.draft/packs/`: canonical v0.3.2 pack manifests, lockfiles, patches, and evidence summaries.
+- `.draft/imports/quarantine/`: untrusted imported `.draftpack` artifacts, including their embedded content objects (`objects/<hash>`). A quarantined pack's whole directory moves to `.draft/packs/` when the import is saved.
+- `.draft/exports/`: local export outputs when requested.
+- `.draft/lsif/`: basic offline symbol index.
 - `.draft/indexes/`: rebuildable SQLite indexes.
 - `.draft/locks/`: local writer locks.
 - `.draft/tmp/`: temporary files for atomic writes.
+
+The project store never stores the private signing key.
 
 ## Authority And Caches
 
@@ -45,7 +63,7 @@ Events are stored as JSON Lines. Each event includes:
 - current event hash;
 - schema version.
 
-The append path uses a local writer lock and syncs the file after append. `draft event --verify-chain` verifies the chain.
+The append path uses a local writer lock and syncs the file after append. `draft doctor` and `draft receipt verify --all` verify the event, receipt, and transparency chains.
 
 ## Object Store
 

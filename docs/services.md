@@ -55,6 +55,21 @@ Sessions are lightweight in-memory records for connected clients. They are usefu
 
 The service store records local daemon metadata so clients can discover service status.
 
+## Protocol Adapters
+
+Adapter status is explicit and honest — every adapter is implemented or marked
+experimental, never a silent stub. `draft doctor --global` lists these
+statuses. Adapter configuration lives under `~/.draft/adapters/<name>/`; no
+adapter writes raw `.draft/` state or exposes signing keys.
+
+| Adapter | Surface | Status |
+| --- | --- | --- |
+| MCP (Model Context Protocol) | `draft mcp` | Implemented |
+| ACP client (Agent Client Protocol) | `draft acp` | Implemented |
+| `acp-comm` (Agent Communication Protocol) | `draft acp` | **Experimental** |
+| A2A (Agent2Agent) | `draft a2a` | Implemented |
+| AG-UI Review Cockpit | `draft cockpit` | Implemented |
+
 ## Reserved Boundary
 
-The `sync` crate is intentionally no-network in v0.3.1. It exists as a named boundary for later design work without changing current local-first behavior.
+The `sync` crate is intentionally no-network in v0.3.2. It exists as a named boundary for later design work without changing current local-first behavior.

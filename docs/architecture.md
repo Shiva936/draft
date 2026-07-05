@@ -1,6 +1,6 @@
 # Architecture
 
-Draft v0.3.1 is structured as a local-first Rust workspace:
+Draft v0.3.2 is structured as a local-first Rust workspace:
 
 ```text
 cli / tui
@@ -9,12 +9,12 @@ optional draftd service
     |
 draft-core::App
     |
-.draft/ durable store
+global + project .draft/ durable stores
 ```
 
 ## Crate Boundaries
 
-`core/` owns the domain model and durable store. It implements config, scanning, snapshots, tasks, runs, ChangePacks, evidence, verification, risk, policy, review, approval, compare, compose, save, receipts, rollback, events, object storage, and indexing.
+`core/` owns the domain model and durable stores. It implements config, scanning, snapshots, tasks, runs, changepacks, import/export, evidence, verification, risk, policy, review, approval, compare, compose, save, signed receipts, rollback, events, transparency, object storage, LSIF, and indexing.
 
 `cli/` exposes the command-line interface. It invokes `draft-core` directly so the CLI stays usable without a daemon.
 
@@ -40,7 +40,7 @@ draft-core::App
 6. Review decisions approve or reject the ChangePack.
 7. Save records the verified ChangePack and receipt in `.draft/`.
 8. Optional `hooks.save` execution is captured as receipt evidence.
-9. Every important transition appends a hash-chained event.
+9. Every important transition appends a hash-chained event and trust-relevant transitions create signed receipts linked through the transparency chain.
 
 ## Store Actority
 

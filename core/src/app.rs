@@ -20,7 +20,7 @@ use crate::identity::{resolve_actor, ActorKind, ActorRef};
 use crate::lock::FileGuard;
 
 const DRAFT_DIR: &str = ".draft";
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 crate::id_newtype!(EventId, "evt_");
 crate::id_newtype!(SnapshotId, "chk_");
@@ -35,6 +35,326 @@ crate::id_newtype!(RollbackPlanId, "rbp_");
 
 #[derive(Debug, Clone)]
 pub struct App;
+
+/// Report from `draft init --global`.
+#[derive(Debug, Clone, Serialize)]
+pub struct InitGlobalReport {
+    pub root: String,
+    pub created: bool,
+    pub hidden: bool,
+    pub actor_id: String,
+    pub public_key_id: String,
+}
+
+/// A single named health check inside a doctor report.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorCheck {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+impl DoctorCheck {
+    fn ok(name: &str, detail: impl Into<String>) -> Self {
+        DoctorCheck {
+            name: name.to_string(),
+            ok: true,
+            detail: detail.into(),
+        }
+    }
+    fn fail(name: &str, detail: impl Into<String>) -> Self {
+        DoctorCheck {
+            name: name.to_string(),
+            ok: false,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Validation of one `.draft/` store (global or project).
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorScope {
+    pub label: String,
+    pub root: String,
+    pub exists: bool,
+    pub hidden: bool,
+    pub checks: Vec<DoctorCheck>,
+}
+
+impl DoctorScope {
+    /// True if the store exists and every check passed.
+    pub fn healthy(&self) -> bool {
+        self.exists && self.checks.iter().all(|c| c.ok)
+    }
+}
+
+/// Full `draft doctor` report across both stores.
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorReport {
+    pub global: DoctorScope,
+    pub project: Option<DoctorScope>,
+}
+
+/// Report from `draft pack inspect <pck_id>`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackInspectReport {
+    pub manifest: crate::pack::PackManifest,
+    pub lifecycle: String,
+    pub symbols_touched: Vec<String>,
+    pub public_api_changed: Vec<String>,
+    pub receipts: Vec<String>,
+    pub verified: bool,
+}
+
+/// Report from `draft pack depends <pck_id>`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackDependsReport {
+    pub pack_id: String,
+    pub base_workspace_hash: String,
+    pub changed_files: Vec<String>,
+    /// Other packs sharing symbols with this one → the shared symbol names.
+    pub shared_symbol_packs: std::collections::BTreeMap<String, Vec<String>>,
+    pub declared_dependencies: Vec<String>,
+}
+
+/// A single detected conflict between two packs.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConflictFinding {
+    pub kind: String,
+    pub detail: String,
+    pub blocking: bool,
+}
+
+/// Report from `draft pack conflicts <a> <b>`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackConflictsReport {
+    pub pack_a: String,
+    pub pack_b: String,
+    pub conflicts: Vec<ConflictFinding>,
+    pub blocking: bool,
+}
+
+/// Report from `draft pack compose <a> <b> --name <name>`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackComposeReport {
+    pub pack_id: String,
+    pub name: String,
+    pub dependencies: Vec<String>,
+    pub requires_reverification: bool,
+}
+
+/// Report from `draft verify pck_<id>` (v0.3.2 evidence-based verification).
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyV2Report {
+    pub pack_id: String,
+    pub risk_level: String,
+    pub risk_score: u32,
+    pub explanations: Vec<String>,
+    pub required_actions: Vec<String>,
+    pub selected_tests: Vec<crate::verifyv2::SelectedTest>,
+    pub selected_fuzz_targets: Vec<crate::verifyv2::SelectedFuzzTarget>,
+    pub selection_reason: String,
+    pub coverage_basis: String,
+    pub symbols_touched: usize,
+    pub public_api_changed: usize,
+    pub result_hash: String,
+}
+
+/// Report from `draft pack --export`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackExportReport {
+    pub pack_id: String,
+    pub name: String,
+    pub output: String,
+    pub bytes: u64,
+}
+
+/// Report from `draft pack --import`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PackImportReport {
+    pub pack_id: String,
+    pub name: String,
+    pub quarantined: bool,
+    pub remapped: bool,
+    pub external_receipts: usize,
+    pub applied: bool,
+}
+
+/// Parameters describing one canonical-pack lifecycle sync.
+struct PackSyncSpec {
+    kind: crate::event::EventKind,
+    intent: crate::pack::PackIntent,
+    approval: crate::pack::ApprovalState,
+    save: crate::pack::SaveState,
+    metadata: Value,
+}
+
+/// Result of a `--dry-run` for save or rollback: what would happen and why.
+#[derive(Debug, Clone, Serialize)]
+pub struct DryRunReport {
+    pub action: String,
+    pub target: String,
+    pub would_proceed: bool,
+    pub resulting_state: String,
+    pub affected_files: Vec<String>,
+    pub checks: Vec<DoctorCheck>,
+}
+
+impl DoctorReport {
+    /// True if every present scope is healthy.
+    pub fn healthy(&self) -> bool {
+        self.global.healthy() && self.project.as_ref().map(|p| p.healthy()).unwrap_or(true)
+    }
+}
+
+/// Write a minimal canonical manifest for the implicit base pack (empty change).
+fn write_base_canonical_manifest(root: &Path, pack_id: &ChangepackId, name: &str) {
+    use crate::pack::{ApprovalState, ImportState, PackManifest, PackStore, SaveState};
+    let empty = sha256_hex(b"");
+    let manifest = PackManifest {
+        schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+        pack_id: pack_id.to_string(),
+        name: name.to_string(),
+        description: "base pack".to_string(),
+        intent: crate::pack::PackIntent::Feature,
+        origin: "local".to_string(),
+        actor: "actor_local".to_string(),
+        candidate: None,
+        created_at: now().to_rfc3339(),
+        base_workspace_hash: empty.clone(),
+        target_workspace_hash: empty.clone(),
+        changes_hash: empty.clone(),
+        risk_hash: String::new(),
+        verify_hash: String::new(),
+        lsif_hash: String::new(),
+        receipt_hashes: Vec::new(),
+        import_state: ImportState::None,
+        approval_state: ApprovalState::Pending,
+        save_state: SaveState::Unsaved,
+    };
+    let store = PackStore::new(crate::layout::ProjectPaths::for_root(root));
+    let _ = store.write_manifest(&manifest);
+    // Empty lockfile so conflicts/depends have a file set to read.
+    let lock = crate::pack::PackLockfile {
+        schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+        pack_id: pack_id.to_string(),
+        workspace_hash: empty,
+        file_hashes: std::collections::BTreeMap::new(),
+        policy_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+        risk_engine_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+        verification_commands: Vec::new(),
+        lsif_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+        test_selector_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+        fuzz_selector_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+        dependency_pack_hashes: Vec::new(),
+        receipt_hashes: Vec::new(),
+    };
+    let _ = store.write_lockfile(&lock);
+}
+
+/// Scan the workspace for test source files (excluding `.draft/`), returning
+/// (relative path, content). Used to discover tests that reference changed
+/// symbols during evidence-based selection.
+fn scan_test_files(root: &Path) -> DraftResult<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(false)
+        .parents(false)
+        .build();
+    for dent in walker.flatten() {
+        let path = dent.path();
+        if !path.is_file() || crate::pathguard::path_is_draft(path) {
+            continue;
+        }
+        let rel = match path.strip_prefix(root) {
+            Ok(r) => r.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+        let lower = rel.to_lowercase();
+        let is_test = lower.contains("test")
+            || lower.contains("spec")
+            || lower.contains("/tests/")
+            || lower.starts_with("tests/");
+        if is_test {
+            if let Ok(content) = fs::read_to_string(path) {
+                out.push((rel, content));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Discover available fuzz target names under a `fuzz/fuzz_targets/` directory.
+fn scan_fuzz_targets(root: &Path) -> Vec<String> {
+    let dir = root.join("fuzz/fuzz_targets");
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    out.push(stem.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Names of packs currently sitting in the import quarantine.
+fn quarantine_names(paths: &crate::layout::ProjectPaths) -> Vec<String> {
+    let mut names = Vec::new();
+    let qdir = paths.quarantine_dir();
+    if let Ok(entries) = std::fs::read_dir(&qdir) {
+        for entry in entries.flatten() {
+            let manifest = entry.path().join("manifest.json");
+            if let Ok(m) = read_json::<crate::pack::PackManifest>(&manifest) {
+                names.push(m.name);
+            }
+        }
+    }
+    names
+}
+
+/// Serialize a value to pretty JSON bytes for archive members.
+fn to_pretty<T: Serialize>(value: &T) -> DraftResult<Vec<u8>> {
+    serde_json::to_vec_pretty(value)
+        .map_err(|e| DraftError::storage(format!("serialize failed: {e}")))
+}
+
+fn bool_check(
+    name: &str,
+    cond: bool,
+    ok_detail: impl Into<String>,
+    fail_detail: impl Into<String>,
+) -> DoctorCheck {
+    if cond {
+        DoctorCheck::ok(name, ok_detail)
+    } else {
+        DoctorCheck::fail(name, fail_detail)
+    }
+}
+
+#[cfg(unix)]
+fn key_perms_check(key: &Path) -> DoctorCheck {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(key) {
+        Ok(meta) => {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode == 0o600 {
+                DoctorCheck::ok("key-perms", "signing key is 0600")
+            } else {
+                DoctorCheck::fail(
+                    "key-perms",
+                    format!("signing key mode is {mode:o}, expected 600"),
+                )
+            }
+        }
+        Err(_) => DoctorCheck::fail("key-perms", "signing key not readable"),
+    }
+}
 
 impl App {
     pub fn new() -> Self {
@@ -54,6 +374,16 @@ impl App {
             ));
         }
         layout.create_all()?;
+        // v0.3.2 canonical project store (events/receipts/transparency/packs/
+        // imports/quarantine/exports/lsif/cache/adapters) + hidden `.draft/`.
+        let project_paths = crate::layout::ProjectPaths::for_root(root);
+        let hidden_status = project_paths.create_all()?;
+        if let crate::hidden::HiddenStatus::Failed(reason) = &hidden_status {
+            eprintln!(
+                "warning: could not hide {}: {reason}",
+                layout.draft_dir.display()
+            );
+        }
         if !layout.config_toml().exists() {
             write_toml(&layout.config_toml(), &DraftConfig::default())?;
         }
@@ -100,6 +430,10 @@ impl App {
             let pack_dir = layout.pack_dir(&base.id);
             ensure_dir(&pack_dir)?;
             write_json(&pack_dir.join("manifest.json"), &base)?;
+            // Also write a canonical v0.3.2 manifest for the (empty) base pack so
+            // it participates in inspect/depends/conflicts/compose. No trust
+            // receipt is minted for the implicit base pack.
+            write_base_canonical_manifest(root, &base.id, base_pack_name);
             write_atomic(
                 layout.selected_pack_file().as_path(),
                 base.id.to_string().as_bytes(),
@@ -133,6 +467,13 @@ impl App {
         })?;
         let layout = DraftLayout::for_root(&root);
         let meta = read_json::<WorkspaceMetadata>(&layout.workspace_json())?;
+        // One-time migration: a workspace created by v0.3.1 lacks the canonical
+        // v0.3.2 stores (transparency/, imports/quarantine/, lsif/, ...). Detect
+        // via the transparency dir and create the missing tree idempotently.
+        let paths = crate::layout::ProjectPaths::for_root(&root);
+        if !paths.transparency_dir().exists() {
+            paths.create_all()?;
+        }
         Ok(Workspace {
             id: meta.id,
             root,
@@ -176,6 +517,224 @@ impl App {
         let ws = self.open(cwd)?;
         Ok(ConfigReport {
             entries: ResolvedConfig::load(&ws)?.entries(),
+        })
+    }
+
+    // ---- v0.3.2 global store, doctor, identity, layered config ----------
+
+    /// `draft init --global`: create the hidden global `~/.draft/` store,
+    /// provision the actor identity + Ed25519 signing key, and seed the
+    /// default policy. Idempotent.
+    pub fn init_global(&self) -> DraftResult<InitGlobalReport> {
+        let home = crate::home::GlobalHome::locate()?;
+        let created = !home.exists();
+        let hidden = home.create_all()?;
+        // Seed a default policy file if absent (safe default).
+        if !home.default_policy_toml().exists() {
+            write_toml(
+                &home.default_policy_toml(),
+                &crate::policy::Policy::safe_default(),
+            )?;
+        }
+        if !home.config_toml().exists() {
+            crate::fsutil::write_atomic(&home.config_toml(), b"# Draft global config\n")?;
+        }
+        let profile = crate::identity::global::ensure_actor(&home)?;
+        Ok(InitGlobalReport {
+            root: home.root().display().to_string(),
+            created,
+            hidden: hidden.is_ok(),
+            actor_id: profile.actor_id,
+            public_key_id: profile.public_key_id,
+        })
+    }
+
+    /// `draft identity status`: show the active actor and signing-key state.
+    pub fn identity_status(&self) -> DraftResult<crate::identity::IdentityStatus> {
+        let home = crate::home::GlobalHome::locate()?;
+        crate::identity::global::status(&home)
+    }
+
+    /// `draft receipt verify rcp_<id>`: verify a single signed receipt.
+    pub fn receipt_verify(
+        &self,
+        cwd: &Path,
+        receipt_id: &str,
+    ) -> DraftResult<crate::receipt::ReceiptVerification> {
+        validate_receipt_id(receipt_id)?;
+        let ws = self.open(cwd)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.verify_receipt(receipt_id)
+    }
+
+    /// `draft receipt verify --all`: verify the event chain, transparency chain,
+    /// and every receipt. Fails closed if anything does not verify.
+    pub fn receipt_verify_all(&self, cwd: &Path) -> DraftResult<crate::ledger::LedgerVerification> {
+        let ws = self.open(cwd)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.verify_all()
+    }
+
+    /// `draft config set --global <key> <value>`.
+    pub fn config_set_global(&self, key: &str, value: &str) -> DraftResult<ConfigReport> {
+        reject_remote_key(key)?;
+        let home = crate::home::GlobalHome::locate()?;
+        home.create_all()?;
+        crate::config::set_value(&home.config_toml(), key, value)?;
+        Ok(ConfigReport::single(key, value))
+    }
+
+    /// `draft config get <key>` with full precedence: CLI > project > global >
+    /// built-in default. Works outside a workspace (project layer is skipped).
+    pub fn config_get_layered(&self, cwd: &Path, key: &str) -> DraftResult<ConfigReport> {
+        reject_remote_key(key)?;
+        let home = crate::home::GlobalHome::locate().ok();
+        let project_cfg = self.open(cwd).ok().map(|ws| ws.layout.config_toml());
+        let resolver = crate::config::ConfigResolver::load(
+            project_cfg.as_deref(),
+            home.as_ref().map(|h| h.config_toml()).as_deref(),
+        );
+        Ok(ConfigReport::single(
+            key,
+            &resolver.get(key).unwrap_or_default(),
+        ))
+    }
+
+    /// `draft doctor`: validate the global store and (if present) the project
+    /// store for the current directory.
+    pub fn doctor(&self, cwd: &Path) -> DraftResult<DoctorReport> {
+        let global = self.doctor_global_scope()?;
+        let project = match self.open(cwd) {
+            Ok(ws) => Some(self.doctor_project_scope(&ws)?),
+            Err(_) => None,
+        };
+        Ok(DoctorReport { global, project })
+    }
+
+    /// `draft doctor --global`: validate only the global store.
+    pub fn doctor_global(&self) -> DraftResult<DoctorReport> {
+        Ok(DoctorReport {
+            global: self.doctor_global_scope()?,
+            project: None,
+        })
+    }
+
+    fn doctor_global_scope(&self) -> DraftResult<DoctorScope> {
+        let home = crate::home::GlobalHome::locate()?;
+        let exists = home.exists();
+        let mut checks = Vec::new();
+        if exists {
+            checks.push(bool_check(
+                "identity",
+                home.actor_json().exists(),
+                "actor.json present",
+                "actor.json missing — run `draft init --global`",
+            ));
+            checks.push(bool_check(
+                "signing-key",
+                home.signing_key().exists(),
+                "signing key present",
+                "signing key missing — run `draft init --global`",
+            ));
+            checks.push(bool_check(
+                "keys-dir",
+                home.keys_dir().is_dir(),
+                "keys/ present",
+                "keys/ missing",
+            ));
+            checks.push(bool_check(
+                "default-policy",
+                home.default_policy_toml().exists(),
+                "default policy present",
+                "default policy missing",
+            ));
+            #[cfg(unix)]
+            checks.push(key_perms_check(&home.signing_key()));
+            // Adapter status is explicit: every protocol adapter is either
+            // implemented or marked experimental (never a silent stub).
+            for adapter in crate::adapters::protocol_adapters() {
+                checks.push(DoctorCheck::ok(
+                    &format!("adapter:{}", adapter.id),
+                    format!("{} — {}", adapter.display_name, adapter.status),
+                ));
+            }
+        } else {
+            checks.push(DoctorCheck::fail(
+                "exists",
+                "global store missing — run `draft init --global`",
+            ));
+        }
+        Ok(DoctorScope {
+            label: "global".to_string(),
+            root: home.root().display().to_string(),
+            exists,
+            hidden: crate::hidden::is_hidden(home.root()),
+            checks,
+        })
+    }
+
+    fn doctor_project_scope(&self, ws: &Workspace) -> DraftResult<DoctorScope> {
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let mut checks = Vec::new();
+        checks.push(bool_check(
+            "workspace-json",
+            paths.workspace_json().exists(),
+            "workspace.json present",
+            "workspace.json missing",
+        ));
+        // Event chain integrity (reuses the existing verified replay).
+        match self.verify_events(&ws.root) {
+            Ok(_) => checks.push(DoctorCheck::ok("event-chain", "event hash chain intact")),
+            Err(e) => checks.push(DoctorCheck::fail("event-chain", e.message)),
+        }
+        // v0.3.2 trust ledger: canonical event log, receipts, transparency chain.
+        match crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str()) {
+            Ok(ledger) => match ledger.verify_all() {
+                Ok(v) => {
+                    checks.push(bool_check(
+                        "trust-event-log",
+                        v.event_chain_ok,
+                        format!("{} canonical events verified", v.event_count),
+                        "canonical event log broken",
+                    ));
+                    checks.push(bool_check(
+                        "transparency-chain",
+                        v.transparency_ok,
+                        format!("{} transparency entries verified", v.transparency_count),
+                        "transparency chain broken",
+                    ));
+                    let bad = v.receipts.iter().filter(|r| !r.ok).count();
+                    checks.push(bool_check(
+                        "receipts",
+                        bad == 0,
+                        format!("{} receipts verified", v.receipts.len()),
+                        format!("{bad} receipt(s) failed verification"),
+                    ));
+                }
+                Err(e) => checks.push(DoctorCheck::fail("trust-ledger", e.message)),
+            },
+            Err(e) => checks.push(DoctorCheck::fail("trust-ledger", e.message)),
+        }
+        for (name, dir) in [
+            ("events-dir", paths.events_dir()),
+            ("receipts-dir", paths.receipts_dir()),
+            ("transparency-dir", paths.transparency_dir()),
+            ("packs-dir", paths.packs_dir()),
+            ("quarantine-dir", paths.quarantine_dir()),
+        ] {
+            checks.push(bool_check(
+                name,
+                dir.is_dir(),
+                format!("{} present", dir.display()),
+                format!("{} missing", dir.display()),
+            ));
+        }
+        Ok(DoctorScope {
+            label: "project".to_string(),
+            root: ws.root.display().to_string(),
+            exists: true,
+            hidden: crate::hidden::is_hidden(paths.draft_dir()),
+            checks,
         })
     }
 
@@ -333,8 +892,23 @@ impl App {
             Some(snapshot.id.to_string()),
             serde_json::json!({ "message": message }),
         )?;
+        // v0.3.2 trust ledger: a checkpoint is a receipt-producing event. Record
+        // a canonical CheckpointCreated event with a signed receipt and a
+        // transparency-chain entry bound to the current workspace hash.
+        let workspace_hash = crate::hashing::workspace_hash(&ws.root)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::CheckpointCreated,
+            Some(snapshot.id.to_string()),
+            None,
+            workspace_hash,
+            serde_json::json!({ "message": message }),
+        )?;
         Ok(CheckpointReport {
             snapshot_id: snapshot.id.to_string(),
+            // The report's receipt_id is the reversible rollback target (legacy
+            // receipt); the signed trust receipt lives in the ledger and is
+            // verifiable via `draft receipt verify --all`.
             receipt_id: receipt.id.to_string(),
             files: snapshot.files.len(),
         })
@@ -679,6 +1253,22 @@ impl App {
             Some(pack.id.to_string()),
             serde_json::json!({}),
         )?;
+        // v0.3.2: materialize the canonical manifest/lockfile/changes and a
+        // signed PackCreated trust receipt so every pack is inspectable and
+        // exportable from the moment it exists.
+        let created_patch = load_patch(&ws, &pack).ok();
+        self.sync_canonical_pack(
+            &ws,
+            &pack,
+            created_patch.as_ref(),
+            PackSyncSpec {
+                kind: crate::event::EventKind::PackCreated,
+                intent: crate::pack::PackIntent::Feature,
+                approval: crate::pack::ApprovalState::Pending,
+                save: crate::pack::SaveState::Unsaved,
+                metadata: serde_json::json!({ "name": pack.name }),
+            },
+        )?;
         Ok(pack)
     }
 
@@ -818,11 +1408,43 @@ impl App {
         Ok(raw.trim().to_string())
     }
 
-    fn resolve_pack_arg(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<String> {
+    /// True when `reference` resolves to a legacy changepack (canonical-only
+    /// packs, e.g. imports, have none).
+    pub fn is_legacy_pack_ref(&self, cwd: &Path, reference: &str) -> bool {
+        self.open(cwd)
+            .and_then(|ws| self.resolve_pack_ref(&ws, reference))
+            .is_ok()
+    }
+
+    pub fn resolve_pack_arg(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<String> {
         match pack_id {
             Some(id) if !id.trim().is_empty() => {
                 let ws = self.open(cwd)?;
-                Ok(self.resolve_pack_ref(&ws, id)?.id.to_string())
+                match self.resolve_pack_ref(&ws, id) {
+                    Ok(pack) => Ok(pack.id.to_string()),
+                    // Canonical-only packs (e.g. quarantined or saved imports)
+                    // have no legacy changepack; resolve them against the
+                    // canonical pack store and quarantine by id or name.
+                    Err(legacy_err) => {
+                        let store = crate::pack::PackStore::new(
+                            crate::layout::ProjectPaths::for_root(&ws.root),
+                        );
+                        let candidate = if id.starts_with("pck_") {
+                            Some(id.to_string())
+                        } else {
+                            store
+                                .list()?
+                                .into_iter()
+                                .chain(store.list_quarantined()?)
+                                .find(|m| m.name == id)
+                                .map(|m| m.pack_id)
+                        };
+                        match candidate {
+                            Some(cid) if store.locate(&cid).is_some() => Ok(cid),
+                            _ => Err(legacy_err),
+                        }
+                    }
+                }
             }
             _ => self.selected_pack_id(cwd),
         }
@@ -1748,6 +2370,18 @@ impl App {
     ) -> DraftResult<SaveReceipt> {
         let ws = self.open(cwd)?;
         validate_pack_id(pack_id)?;
+        // Imported packs take the canonical import-save path: gates, content
+        // application from embedded objects, and promotion out of quarantine.
+        {
+            let store =
+                crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+            if let Some(loc) = store.locate(pack_id) {
+                let manifest = store.read_manifest_in(loc, pack_id)?;
+                if manifest.import_state != crate::pack::ImportState::None {
+                    return self.save_imported_pack(&ws, &store, loc, manifest);
+                }
+            }
+        }
         let mut pack = load_pack(&ws, pack_id)?;
         ensure_pack_not_locked(&ws, &pack)?;
         let started = now();
@@ -1825,6 +2459,7 @@ impl App {
                 "risk policy blocks save",
             ));
         }
+        validate_canonical_save_gate(&ws, pack_id)?;
         let receipt_id = ReceiptId::generate();
         let rendered_message = render_message(&cfg, &pack, &patch, &receipt_id);
         let store = ObjectStore::new(ws.layout.clone());
@@ -1967,6 +2602,342 @@ impl App {
             Some(pack.id.to_string()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
+        // v0.3.2: emit the canonical pack manifest/lockfile and a signed
+        // PackSaved trust receipt bound to the current workspace hash.
+        self.sync_canonical_pack(
+            &ws,
+            &pack,
+            Some(&patch),
+            PackSyncSpec {
+                kind: crate::event::EventKind::PackSaved,
+                intent: crate::pack::PackIntent::Feature,
+                approval: crate::pack::ApprovalState::Approved,
+                save: crate::pack::SaveState::Saved,
+                metadata: serde_json::json!({ "save_receipt": receipt.id.to_string() }),
+            },
+        )?;
+        Ok(receipt)
+    }
+
+    /// Upsert the canonical v0.3.2 `manifest.json`/`pack.lock.json` for `pack`
+    /// and record a signed trust receipt for `kind`. Purely additive to the
+    /// legacy changepack store; never alters legacy return values.
+    fn sync_canonical_pack(
+        &self,
+        ws: &Workspace,
+        pack: &Changepack,
+        patch: Option<&PatchSet>,
+        spec: PackSyncSpec,
+    ) -> DraftResult<String> {
+        use crate::pack::{ImportState, PackLockfile, PackManifest, PackStore};
+        let PackSyncSpec {
+            kind,
+            intent,
+            approval,
+            save,
+            metadata,
+        } = spec;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = PackStore::new(paths);
+        let workspace_hash = crate::hashing::workspace_hash(&ws.root)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        let outcome = ledger.record(
+            kind,
+            Some(pack.id.to_string()),
+            None,
+            workspace_hash.clone(),
+            metadata,
+        )?;
+        let receipt_hash = crate::hashing::sha256_hex(outcome.receipt.receipt_id.as_bytes());
+
+        let existing = store.read_manifest(pack.id.as_str()).ok();
+        let created_at = existing
+            .as_ref()
+            .map(|m| m.created_at.clone())
+            .unwrap_or_else(|| now().to_rfc3339());
+        let base_ws = existing
+            .as_ref()
+            .map(|m| m.base_workspace_hash.clone())
+            .unwrap_or_else(|| workspace_hash.clone());
+        let target_ws = if patch.is_some() {
+            workspace_hash.clone()
+        } else {
+            existing
+                .as_ref()
+                .map(|m| m.target_workspace_hash.clone())
+                .unwrap_or_else(|| workspace_hash.clone())
+        };
+        let mut receipt_hashes = existing
+            .as_ref()
+            .map(|m| m.receipt_hashes.clone())
+            .unwrap_or_default();
+        receipt_hashes.push(receipt_hash);
+        // Serialize the patch once; the manifest's changes_hash is the hash of
+        // the exact bytes written to changes.patch so import can re-verify it.
+        let changes_bytes: Option<Vec<u8>> =
+            patch.map(|p| serde_json::to_vec_pretty(p).unwrap_or_default());
+        let changes_hash = changes_bytes
+            .as_ref()
+            .map(|b| sha256_hex(b))
+            .or_else(|| existing.as_ref().map(|m| m.changes_hash.clone()))
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| sha256_hex(b""));
+        let verify_hash = if !pack.verification_refs.is_empty() {
+            sha256_hex(pack.verification_refs.join(",").as_bytes())
+        } else {
+            existing
+                .as_ref()
+                .map(|m| m.verify_hash.clone())
+                .unwrap_or_default()
+        };
+        let manifest = PackManifest {
+            schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            pack_id: pack.id.to_string(),
+            name: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
+            description: existing
+                .as_ref()
+                .map(|m| m.description.clone())
+                .unwrap_or_default(),
+            intent,
+            origin: "local".to_string(),
+            actor: ledger.actor_id().to_string(),
+            candidate: None,
+            created_at,
+            base_workspace_hash: base_ws,
+            target_workspace_hash: target_ws,
+            changes_hash,
+            risk_hash: existing
+                .as_ref()
+                .map(|m| m.risk_hash.clone())
+                .unwrap_or_default(),
+            verify_hash,
+            lsif_hash: existing
+                .as_ref()
+                .map(|m| m.lsif_hash.clone())
+                .unwrap_or_default(),
+            receipt_hashes: receipt_hashes.clone(),
+            import_state: ImportState::None,
+            approval_state: approval,
+            save_state: save,
+        };
+        store.write_manifest(&manifest)?;
+        if let Some(bytes) = &changes_bytes {
+            let paths2 = crate::layout::ProjectPaths::for_root(&ws.root);
+            write_atomic(&paths2.pack_changes(pack.id.as_str()), bytes)?;
+        }
+
+        if let Some(p) = patch {
+            let mut file_hashes = std::collections::BTreeMap::new();
+            for f in &p.files {
+                let fp = ws.root.join(f.path.as_str());
+                if let Ok(bytes) = std::fs::read(&fp) {
+                    file_hashes.insert(f.path.to_string(), sha256_hex(&bytes));
+                }
+            }
+            let lock = PackLockfile {
+                schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                pack_id: pack.id.to_string(),
+                workspace_hash,
+                file_hashes,
+                policy_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                risk_engine_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                verification_commands: Vec::new(),
+                lsif_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                test_selector_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                fuzz_selector_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                dependency_pack_hashes: Vec::new(),
+                receipt_hashes,
+            };
+            store.write_lockfile(&lock)?;
+        }
+        Ok(outcome.receipt.receipt_id)
+    }
+
+    /// Save an imported pack: enforce the import gates, apply the embedded
+    /// content to the workspace (fail closed, nothing written on any
+    /// conflict), and promote the pack out of quarantine.
+    ///
+    /// Save hooks do not run for import saves — there is no rendered save
+    /// message/diff context for an imported pack.
+    fn save_imported_pack(
+        &self,
+        ws: &Workspace,
+        store: &crate::pack::PackStore,
+        loc: crate::pack::PackLocation,
+        manifest: crate::pack::PackManifest,
+    ) -> DraftResult<SaveReceipt> {
+        use crate::pack::ImportState;
+        let started = now();
+        let pack_id = manifest.pack_id.clone();
+        let dir = store.dir_for(loc, &pack_id);
+
+        // State gate with actionable, state-specific errors.
+        match manifest.import_state {
+            ImportState::ImportApproved => {}
+            ImportState::ImportedQuarantined => {
+                return Err(DraftError::new(
+                    DraftErrorKind::ReviewRequired,
+                    "imported packs must be locally verified and approved before save",
+                )
+                .with_suggestion("run `draft verify <pck_id>`, then approve it"));
+            }
+            ImportState::ImportVerified => {
+                return Err(DraftError::new(
+                    DraftErrorKind::ReviewRequired,
+                    "imported packs must be approved before save",
+                ));
+            }
+            ImportState::ImportRejected => {
+                return Err(DraftError::invalid_config(
+                    "a rejected import cannot be saved",
+                ));
+            }
+            ImportState::ImportSaved => {
+                return Err(DraftError::invalid_config(
+                    "this imported pack is already saved",
+                ));
+            }
+            ImportState::None => unreachable!("save_imported_pack requires an imported pack"),
+        }
+
+        // Policy gates.
+        let policy = effective_policy(ws)?;
+        if policy.require_local_verify_for_imports && !manifest.is_verified() {
+            return Err(DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                "imported packs must be locally re-verified before save",
+            )
+            .with_suggestion("run `draft verify <pck_id>` first"));
+        }
+        let risk_path = dir.join("risk.json");
+        let mut risk_level = "unknown".to_string();
+        if risk_path.exists() {
+            let risk: crate::riskv2::RiskReport = read_json(&risk_path)?;
+            risk_level = risk.risk_level.as_str().to_string();
+            if policy.block_on_critical_risk
+                && risk.risk_level == crate::riskv2::RiskLevel::Critical
+            {
+                return Err(DraftError::new(
+                    DraftErrorKind::RiskPolicyBlocked,
+                    "unresolved critical risk blocks save",
+                ));
+            }
+        } else if policy.block_on_critical_risk {
+            return Err(DraftError::new(
+                DraftErrorKind::RiskPolicyBlocked,
+                "no local risk report exists for this imported pack",
+            )
+            .with_suggestion("run `draft verify <pck_id>` before save"));
+        }
+        if policy.require_reverify_on_workspace_change {
+            let current = crate::hashing::workspace_hash(&ws.root)?;
+            if manifest.target_workspace_hash != current {
+                return Err(DraftError::new(
+                    DraftErrorKind::VerificationFailed,
+                    "workspace content changed after the import was verified",
+                )
+                .with_suggestion("run `draft verify <pck_id>` again before save"));
+            }
+        }
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        if !ledger.verify_all()?.all_ok {
+            return Err(DraftError::new(
+                DraftErrorKind::OperationLogCorrupt,
+                "canonical event, receipt, or transparency ledger failed verification",
+            )
+            .with_suggestion("run `draft receipt verify --all` or `draft doctor`"));
+        }
+
+        // Integrity + application plan (validate everything before writing).
+        let changes_bytes = fs::read(dir.join("changes.patch"))?;
+        if sha256_hex(&changes_bytes) != manifest.changes_hash {
+            return Err(DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                "imported changes.patch does not match the manifest changes_hash (tampering?)",
+            ));
+        }
+        let patch: PatchSet = serde_json::from_slice(&changes_bytes).map_err(|e| {
+            DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                format!("imported changes.patch is corrupt: {e}"),
+            )
+        })?;
+        let plan = plan_import_apply(ws, &dir, &patch)?;
+
+        // The apply is rollback-safe: checkpoint the workspace first.
+        self.checkpoint(&ws.root, &format!("pre-import-save {pack_id}"))?;
+
+        ws.events()?.append(
+            "save.started",
+            Some(pack_id.clone()),
+            serde_json::json!({ "imported": true }),
+        )?;
+        for (dest, bytes) in &plan.writes {
+            if let Some(parent) = dest.parent() {
+                ensure_dir(parent)?;
+            }
+            write_atomic(dest, bytes)?;
+        }
+        for dest in &plan.deletes {
+            if dest.is_file() {
+                fs::remove_file(dest)?;
+            }
+        }
+
+        // Promote out of quarantine and finalize the manifest.
+        if loc == crate::pack::PackLocation::Quarantine {
+            store.promote_from_quarantine(&pack_id)?;
+        }
+        let wsh_after = crate::hashing::workspace_hash(&ws.root)?;
+        let mut manifest = manifest;
+        manifest.import_state = ImportState::ImportSaved;
+        manifest.save_state = crate::pack::SaveState::Saved;
+        manifest.target_workspace_hash = wsh_after.clone();
+        store.write_manifest(&manifest)?;
+
+        ledger.record(
+            crate::event::EventKind::PackSaved,
+            Some(pack_id.clone()),
+            None,
+            wsh_after,
+            serde_json::json!({
+                "imported": true,
+                "applied": true,
+                "files_written": plan.writes.len(),
+                "files_deleted": plan.deletes.len(),
+            }),
+        )?;
+
+        // Legacy-parity save receipt so every caller of the save surface
+        // (CLI, daemon, cockpit) gets the same artifact shape.
+        let object_store = ObjectStore::new(ws.layout.clone());
+        let mut receipt = SaveReceipt {
+            schema_version: SCHEMA_VERSION,
+            id: ReceiptId::generate(),
+            changepack_id: ChangepackId::new(pack_id.clone()),
+            actor: resolve_actor(&ws.layout.draft_dir),
+            native_save_status: NativeSaveStatus::Saved,
+            hook_status: HookStatus::NotConfigured,
+            overall_status: SaveOverallStatus::Saved,
+            message_ref: object_store.put_bytes(manifest.name.as_bytes())?,
+            hook_results: Vec::new(),
+            hook_receipt_refs: Vec::new(),
+            object_refs: Vec::new(),
+            event_refs: Vec::new(),
+            risk_level,
+            risk_receipt_id: None,
+            started_at: started,
+            ended_at: now(),
+            receipt_hash: String::new(),
+            failure_reason: None,
+        };
+        receipt.receipt_hash = hash_json(&receipt)?;
+        write_save_receipt(ws, &receipt)?;
+        ws.events()?.append(
+            "save.completed",
+            Some(pack_id),
+            serde_json::to_value(&receipt).unwrap_or(Value::Null),
+        )?;
         Ok(receipt)
     }
 
@@ -2044,7 +3015,1283 @@ impl App {
             Some(receipt.id.to_string()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
+        // v0.3.2: record a signed RollbackPerformed trust receipt.
+        let workspace_hash = crate::hashing::workspace_hash(&ws.root)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::RollbackPerformed,
+            Some(reference.to_string()),
+            None,
+            workspace_hash,
+            serde_json::json!({
+                "rollback_receipt": receipt.id.to_string(),
+                "snapshot": snap.id.to_string(),
+            }),
+        )?;
         Ok(receipt)
+    }
+
+    /// `draft rollback <target> --dry-run`: resolve the target and report what
+    /// would change and which safety checks pass, without mutating anything.
+    pub fn rollback_dry_run(&self, cwd: &Path, reference: &str) -> DraftResult<DryRunReport> {
+        let ws = self.open(cwd)?;
+        let mut checks = Vec::new();
+        // Target id prefix must be chk_/pck_/rcp_ (validated by the resolver).
+        let plan = match self.rollback_plan(cwd, reference) {
+            Ok(plan) => {
+                checks.push(DoctorCheck::ok("target", format!("resolved {reference}")));
+                Some(plan)
+            }
+            Err(e) => {
+                checks.push(DoctorCheck::fail("target", e.message.clone()));
+                None
+            }
+        };
+        let affected: Vec<String> = plan
+            .as_ref()
+            .map(|p| {
+                p.affected_files
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // No affected path may touch `.draft/` (already filtered, assert here).
+        let draft_touch = affected.iter().any(|f| is_draft_path(f));
+        checks.push(bool_check(
+            "draft-exclusion",
+            !draft_touch,
+            ".draft/ is not touched",
+            "rollback would touch .draft/",
+        ));
+        // Event chain must be intact to trust the rollback.
+        checks.push(match self.verify_events(&ws.root) {
+            Ok(_) => DoctorCheck::ok("event-chain", "intact"),
+            Err(e) => DoctorCheck::fail("event-chain", e.message),
+        });
+        let allowed = plan.is_some() && checks.iter().all(|c| c.ok);
+        Ok(DryRunReport {
+            action: "rollback".to_string(),
+            target: reference.to_string(),
+            would_proceed: allowed,
+            resulting_state: if allowed {
+                "workspace restored to target".to_string()
+            } else {
+                "blocked".to_string()
+            },
+            affected_files: affected,
+            checks,
+        })
+    }
+
+    /// `draft save --dry-run`: report whether the pack would save and why,
+    /// without writing anything.
+    pub fn save_dry_run(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<DryRunReport> {
+        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
+        let ws = self.open(cwd)?;
+        {
+            let store =
+                crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+            if let Some(loc) = store.locate(&pack_id) {
+                let manifest = store.read_manifest_in(loc, &pack_id)?;
+                if manifest.import_state != crate::pack::ImportState::None {
+                    return self.import_save_dry_run(&ws, &store, loc, manifest);
+                }
+            }
+        }
+        let pack = load_pack(&ws, &pack_id)?;
+        let patch = load_patch(&ws, &pack)?;
+        let policy = read_or_default::<PolicyConfig>(&ws.layout.policy_toml());
+        let readiness = save_readiness(&ws, &pack, &patch, &policy)?;
+        let mut checks = Vec::new();
+        let draft_touch = patch.files.iter().any(|f| is_draft_path(f.path.as_str()));
+        checks.push(bool_check(
+            "draft-exclusion",
+            !draft_touch,
+            ".draft/ not in candidate",
+            ".draft/ present in save candidate",
+        ));
+        checks.push(bool_check(
+            "verified",
+            readiness.verification_receipt_id.is_some(),
+            "verification receipt present",
+            "not verified",
+        ));
+        checks.push(bool_check(
+            "approved",
+            readiness.approval_ref.is_some(),
+            "approval present",
+            "not approved",
+        ));
+        checks.push(match self.verify_events(&ws.root) {
+            Ok(_) => DoctorCheck::ok("event-chain", "intact"),
+            Err(e) => DoctorCheck::fail("event-chain", e.message),
+        });
+        let would = checks.iter().all(|c| c.ok);
+        Ok(DryRunReport {
+            action: "save".to_string(),
+            target: pack_id,
+            would_proceed: would,
+            resulting_state: if would {
+                "saved".to_string()
+            } else {
+                "blocked".to_string()
+            },
+            affected_files: patch.files.iter().map(|f| f.path.to_string()).collect(),
+            checks,
+        })
+    }
+
+    /// `draft save --dry-run` for an imported pack: report the import gates
+    /// and whether the embedded content would apply cleanly.
+    fn import_save_dry_run(
+        &self,
+        ws: &Workspace,
+        store: &crate::pack::PackStore,
+        loc: crate::pack::PackLocation,
+        manifest: crate::pack::PackManifest,
+    ) -> DraftResult<DryRunReport> {
+        use crate::pack::ImportState;
+        let dir = store.dir_for(loc, &manifest.pack_id);
+        let mut checks = Vec::new();
+        checks.push(bool_check(
+            "locally-verified",
+            manifest.is_verified(),
+            "local verification evidence present",
+            "imported pack is not locally verified",
+        ));
+        checks.push(bool_check(
+            "approved",
+            manifest.import_state == ImportState::ImportApproved,
+            "import approved",
+            "imported pack is not approved",
+        ));
+        let workspace_unchanged = crate::hashing::workspace_hash(&ws.root)
+            .map(|h| h == manifest.target_workspace_hash)
+            .unwrap_or(false);
+        checks.push(bool_check(
+            "workspace-unchanged",
+            workspace_unchanged,
+            "workspace matches verification state",
+            "workspace changed since local verification",
+        ));
+        let (applies, affected) = match fs::read(dir.join("changes.patch"))
+            .map_err(DraftError::from)
+            .and_then(|b| {
+                if sha256_hex(&b) != manifest.changes_hash {
+                    return Err(DraftError::new(
+                        DraftErrorKind::VerificationFailed,
+                        "changes hash mismatch",
+                    ));
+                }
+                serde_json::from_slice::<PatchSet>(&b)
+                    .map_err(|e| DraftError::invalid_config(e.to_string()))
+            })
+            .and_then(|patch| plan_import_apply(ws, &dir, &patch).map(|plan| (patch, plan)))
+        {
+            Ok((patch, _plan)) => (
+                DoctorCheck::ok("applies-cleanly", "embedded content applies cleanly"),
+                patch.files.iter().map(|f| f.path.to_string()).collect(),
+            ),
+            Err(e) => (DoctorCheck::fail("applies-cleanly", e.message), Vec::new()),
+        };
+        checks.push(applies);
+        let would = checks.iter().all(|c| c.ok);
+        Ok(DryRunReport {
+            action: "save".to_string(),
+            target: manifest.pack_id,
+            would_proceed: would,
+            resulting_state: if would {
+                "import applied and saved".to_string()
+            } else {
+                "blocked".to_string()
+            },
+            affected_files: affected,
+            checks,
+        })
+    }
+
+    /// Resolve a pack reference (pck_id or unique name) to a canonical pack id.
+    fn resolve_canonical_pack_ref(&self, ws: &Workspace, reference: &str) -> DraftResult<String> {
+        if reference.starts_with("pck_") {
+            return Ok(reference.to_string());
+        }
+        let store = crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        if let Some(m) = store.list()?.into_iter().find(|m| m.name == reference) {
+            return Ok(m.pack_id);
+        }
+        // Quarantined imports are addressable by name too.
+        if let Some(m) = store
+            .list_quarantined()?
+            .into_iter()
+            .find(|m| m.name == reference)
+        {
+            return Ok(m.pack_id);
+        }
+        // Fall back to the legacy resolver (name/selected).
+        Ok(self.resolve_pack_ref(ws, reference)?.id.to_string())
+    }
+
+    /// `draft pack --export <pck_id|name> [--output <path>]`.
+    pub fn pack_export(
+        &self,
+        cwd: &Path,
+        reference: &str,
+        output: Option<&Path>,
+    ) -> DraftResult<PackExportReport> {
+        use crate::importexport::{DraftpackHeader, Provenance, DRAFTPACK_FORMAT};
+        let ws = self.open(cwd)?;
+        let pack_id = self.resolve_canonical_pack_ref(&ws, reference)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = crate::pack::PackStore::new(paths.clone());
+        let manifest = store.read_manifest(&pack_id)?;
+
+        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+        let header = DraftpackHeader {
+            format: DRAFTPACK_FORMAT.to_string(),
+            draft_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            pack_id: manifest.pack_id.clone(),
+            name: manifest.name.clone(),
+            exported_at: now().to_rfc3339(),
+        };
+        entries.push(("draftpack.json".into(), to_pretty(&header)?));
+        entries.push(("manifest.json".into(), to_pretty(&manifest)?));
+        if let Ok(lock) = store.read_lockfile(&pack_id) {
+            entries.push(("pack.lock.json".into(), to_pretty(&lock)?));
+        }
+        if paths.pack_changes(&pack_id).exists() {
+            let changes_bytes = fs::read(paths.pack_changes(&pack_id))?;
+            // Embed the content-addressed objects referenced by the patch
+            // (new file contents + hunk bodies) so the pack is portable: an
+            // importing workspace can re-verify content and apply it on save.
+            if let Ok(patch) = serde_json::from_slice::<PatchSet>(&changes_bytes) {
+                let object_store = ObjectStore::new(ws.layout.clone());
+                let mut refs = std::collections::BTreeSet::new();
+                for f in &patch.files {
+                    if let Some(h) = &f.new_hash {
+                        refs.insert(h.clone());
+                    }
+                    for hunk in &f.hunks {
+                        if !hunk.content_ref.is_empty() {
+                            refs.insert(hunk.content_ref.clone());
+                        }
+                    }
+                }
+                for object_ref in refs {
+                    let hex = object_ref.strip_prefix("b3:").ok_or_else(|| {
+                        DraftError::storage(format!("unsupported object ref '{object_ref}'"))
+                    })?;
+                    let bytes = object_store.get_bytes(&object_ref)?;
+                    entries.push((format!("objects/{hex}"), bytes));
+                }
+            }
+            entries.push(("changes.patch".into(), changes_bytes));
+        }
+        for (name, p) in [
+            ("risk.json", paths.pack_risk(&pack_id)),
+            ("verify.json", paths.pack_verify(&pack_id)),
+            ("lsif.json", paths.pack_lsif(&pack_id)),
+        ] {
+            if p.exists() {
+                entries.push((name.to_string(), fs::read(&p)?));
+            }
+        }
+        // Signed receipts referencing this pack are preserved as provenance.
+        let rstore = crate::receipt::ReceiptStore::new(paths.clone());
+        let mut external_receipt_ids = Vec::new();
+        for r in rstore.list()? {
+            if r.subject_id.as_deref() == Some(pack_id.as_str()) {
+                entries.push((format!("receipts/{}.json", r.receipt_id), to_pretty(&r)?));
+                external_receipt_ids.push(r.receipt_id.clone());
+            }
+        }
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        let provenance = Provenance {
+            origin: "local".to_string(),
+            exported_by_actor: ledger.actor_id().to_string(),
+            source_workspace_hash: manifest.target_workspace_hash.clone(),
+            external_receipt_ids,
+        };
+        entries.push(("provenance.json".into(), to_pretty(&provenance)?));
+
+        let out = match output {
+            Some(p) => p.to_path_buf(),
+            None => {
+                ensure_dir(&paths.exports_dir())?;
+                paths
+                    .exports_dir()
+                    .join(format!("{}.draftpack", manifest.name))
+            }
+        };
+        crate::importexport::write_archive(&out, &entries)?;
+        let wsh = crate::hashing::workspace_hash(&ws.root)?;
+        ledger.record(
+            crate::event::EventKind::PackExported,
+            Some(pack_id.clone()),
+            None,
+            wsh,
+            serde_json::json!({ "output": out.display().to_string() }),
+        )?;
+        Ok(PackExportReport {
+            pack_id,
+            name: manifest.name,
+            output: out.display().to_string(),
+            bytes: fs::metadata(&out).map(|m| m.len()).unwrap_or(0),
+        })
+    }
+
+    /// `draft pack --import <path> [--name <unique>] [--dry-run]`.
+    pub fn pack_import(
+        &self,
+        cwd: &Path,
+        path: &Path,
+        new_name: Option<&str>,
+        dry_run: bool,
+    ) -> DraftResult<PackImportReport> {
+        use crate::importexport::{DraftpackHeader, DRAFTPACK_FORMAT};
+        use crate::pack::{ImportState, PackManifest, PackStore};
+        let ws = self.open(cwd)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = PackStore::new(paths.clone());
+
+        // Full security validation happens inside read_archive (fail closed).
+        let archive = crate::importexport::read_archive(path)?;
+        let header: DraftpackHeader = archive.read_json("draftpack.json")?;
+        if header.format != DRAFTPACK_FORMAT {
+            return Err(DraftError::invalid_config(format!(
+                "unsupported .draftpack format '{}'",
+                header.format
+            )));
+        }
+        let mut manifest: PackManifest = archive.read_json("manifest.json")?;
+        manifest.ensure_supported()?;
+        // Content integrity: changes.patch must match the manifest changes_hash.
+        if let Some(changes) = archive.get("changes.patch") {
+            let recomputed = sha256_hex(changes);
+            if recomputed != manifest.changes_hash {
+                return Err(DraftError::invalid_config(
+                    "changes hash mismatch: manifest.changes_hash does not match changes.patch",
+                ));
+            }
+        }
+
+        let target_name = new_name
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| manifest.name.clone());
+        // Uniqueness spans both saved packs and already-quarantined imports.
+        let name_taken =
+            store.name_taken(&target_name)? || quarantine_names(&paths).contains(&target_name);
+        if name_taken {
+            let hint = if new_name.is_some() {
+                format!("name '{target_name}' already exists; choose another --name")
+            } else {
+                format!("duplicate pack name '{target_name}'; import with --name <unique>")
+            };
+            return Err(DraftError::invalid_config(hint));
+        }
+
+        let mut target_id = manifest.pack_id.clone();
+        let mut remapped = false;
+        if store.exists(&target_id) || paths.quarantine_dir().join(&target_id).exists() {
+            target_id = format!("pck_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+            remapped = true;
+        }
+        // Embedded objects are content-addressed: a byte payload that does not
+        // hash to its own entry name is tampering (fail closed).
+        for (entry_name, bytes) in archive
+            .entries
+            .iter()
+            .filter(|(k, _)| k.starts_with("objects/"))
+        {
+            let expected = entry_name.trim_start_matches("objects/");
+            let actual = blake3_hex(bytes);
+            if actual != expected {
+                return Err(DraftError::invalid_config(format!(
+                    "corrupt embedded object '{entry_name}': content hash mismatch"
+                )));
+            }
+        }
+
+        // External receipts are provenance only and never granted local trust,
+        // but a corrupt or wrong-schema receipt still rejects the artifact
+        // (fail closed on every embedded document).
+        let mut external_receipts = 0usize;
+        for (entry_name, bytes) in archive
+            .entries
+            .iter()
+            .filter(|(k, _)| k.starts_with("receipts/"))
+        {
+            serde_json::from_slice::<crate::receipt::ReceiptRecord>(bytes).map_err(|e| {
+                DraftError::invalid_config(format!(
+                    "corrupt or wrong-schema receipt '{entry_name}' in artifact: {e}"
+                ))
+            })?;
+            external_receipts += 1;
+        }
+
+        if dry_run {
+            return Ok(PackImportReport {
+                pack_id: target_id,
+                name: target_name,
+                quarantined: true,
+                remapped,
+                external_receipts,
+                applied: false,
+            });
+        }
+
+        // Extract into the quarantine using the path guard for defense in depth.
+        let qdir = paths.quarantine_dir().join(&target_id);
+        ensure_dir(&qdir)?;
+        for (name, bytes) in &archive.entries {
+            if name == "manifest.json" {
+                continue; // rewritten below with quarantine state
+            }
+            let dest = crate::pathguard::safe_join(&qdir, name)
+                .map_err(|v| DraftError::invalid_config(format!("unsafe entry {name}: {v}")))?;
+            if let Some(parent) = dest.parent() {
+                ensure_dir(parent)?;
+            }
+            write_atomic(&dest, bytes)?;
+        }
+        manifest.pack_id = target_id.clone();
+        manifest.name = target_name.clone();
+        manifest.import_state = ImportState::ImportedQuarantined;
+        // Origin trust marks never carry over: the pack must be locally
+        // re-verified and re-approved. The origin's risk/verify/lsif files and
+        // receipts stay on disk in quarantine as provenance only.
+        manifest.verify_hash = String::new();
+        manifest.risk_hash = String::new();
+        manifest.lsif_hash = String::new();
+        manifest.approval_state = crate::pack::ApprovalState::Pending;
+        manifest.save_state = crate::pack::SaveState::Unsaved;
+        write_json(&qdir.join("manifest.json"), &manifest)?;
+
+        let wsh = crate::hashing::workspace_hash(&ws.root)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::PackImported,
+            Some(target_id.clone()),
+            None,
+            wsh,
+            serde_json::json!({
+                "source": path.display().to_string(),
+                "remapped": remapped,
+                "external_receipts": external_receipts,
+            }),
+        )?;
+        Ok(PackImportReport {
+            pack_id: target_id,
+            name: target_name,
+            quarantined: true,
+            remapped,
+            external_receipts,
+            applied: true,
+        })
+    }
+
+    /// `draft verify pck_<id> [--explain|--full|--fuzz]`: LSIF-backed risk +
+    /// evidence-based test/fuzz selection. Writes lsif.json/risk.json/verify.json
+    /// and records a signed PackVerified receipt.
+    pub fn verify_pack_v2(
+        &self,
+        cwd: &Path,
+        pack_ref: &str,
+        full: bool,
+        fuzz: bool,
+    ) -> DraftResult<VerifyV2Report> {
+        use crate::lsif::{LsifIndex, LSIF_BACKEND};
+        use crate::pack::PackStore;
+        let ws = self.open(cwd)?;
+        let pack_id = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = PackStore::new(paths.clone());
+        let loc = store
+            .locate(&pack_id)
+            .unwrap_or(crate::pack::PackLocation::Store);
+        let manifest = store.read_manifest_in(loc, &pack_id)?;
+
+        // Policy may escalate verification scope for sensitive intents
+        // (e.g. `security` requires the full suite and fuzzing).
+        let policy = effective_policy(&ws)?;
+        let intent_label = manifest.intent.as_str();
+        let full = full || policy.intent_requires_full_verify(intent_label);
+        let fuzz = fuzz || policy.intent_requires_fuzz(intent_label);
+
+        // Imported packs are verified from their embedded, content-addressed
+        // artifacts, never from origin evidence.
+        if manifest.import_state != crate::pack::ImportState::None {
+            return self.verify_imported_pack(&ws, &paths, &store, loc, manifest, full, fuzz);
+        }
+        let pack = self.resolve_pack_ref(&ws, &pack_id)?;
+
+        // Changed files (content) — never include `.draft/`.
+        let patch = load_patch(&ws, &pack)?;
+        let changed: Vec<(String, String)> = patch
+            .files
+            .iter()
+            .filter(|f| !is_draft_path(f.path.as_str()))
+            .map(|f| {
+                let content = fs::read_to_string(ws.root.join(f.path.as_str())).unwrap_or_default();
+                (f.path.to_string(), content)
+            })
+            .collect();
+        let changed_paths: Vec<String> = changed.iter().map(|(p, _)| p.clone()).collect();
+
+        // LSIF impact.
+        let lsif = LsifIndex::open(&paths)?;
+        lsif.index_pack(&pack_id, &changed)?;
+        let changed_symbols = lsif.symbols_touched_by_pack(&pack_id)?;
+        let public_api = lsif.public_api_symbols_changed(&pack_id)?;
+        let known: std::collections::BTreeSet<String> = changed_symbols.iter().cloned().collect();
+        for (rel, content) in scan_test_files(&ws.root)? {
+            lsif.record_refs(&rel, &content, &known)?;
+        }
+        let test_files = lsif.files_referencing_symbols(&changed_symbols)?;
+        let fuzz_targets = scan_fuzz_targets(&ws.root);
+
+        // Risk.
+        let ledger_events = crate::event::EventLog::new(paths.clone())
+            .read_all()
+            .unwrap_or_default();
+        let all_manifests = store.list()?;
+        let risk_inputs = crate::riskv2::RiskInputs {
+            intent: manifest.intent,
+            files_touched: changed.len(),
+            lines_changed: changed.iter().map(|(_, c)| c.lines().count()).sum(),
+            high_risk_paths: crate::riskv2::high_risk_paths(&changed_paths),
+            has_tests: !test_files.is_empty(),
+            has_fuzz: fuzz && !fuzz_targets.is_empty(),
+            public_api_changes: public_api.len(),
+            imported: manifest.import_state != crate::pack::ImportState::None,
+            dependency_count: store
+                .read_lockfile(&pack_id)
+                .map(|l| l.dependency_pack_hashes.len())
+                .unwrap_or(0),
+            semantic_impact: changed_symbols.len(),
+            candidate_rollback_rate: manifest
+                .candidate
+                .as_deref()
+                .map(|c| candidate_rollback_rate(&ledger_events, &all_manifests, c))
+                .unwrap_or(0.0),
+        };
+        let risk = crate::riskv2::assess(&risk_inputs);
+
+        // Selection evidence.
+        let selection = crate::verifyv2::SelectionInput {
+            changed_files: changed_paths.clone(),
+            changed_symbols: changed_symbols.clone(),
+            test_files: test_files.clone(),
+            fuzz_targets: fuzz_targets.clone(),
+            full,
+            fuzz,
+        };
+        let evidence = crate::verifyv2::plan(&selection);
+
+        // Persist canonical evidence.
+        write_json(&paths.pack_risk(&pack_id), &risk)?;
+        write_json(&paths.pack_verify(&pack_id), &evidence)?;
+        let lsif_summary = serde_json::json!({
+            "backend": LSIF_BACKEND,
+            "symbols_touched": changed_symbols,
+            "public_api_changed": public_api,
+            "tests_referencing": test_files,
+            "semantic_impact": changed_symbols.len(),
+        });
+        write_json(&paths.pack_lsif(&pack_id), &lsif_summary)?;
+
+        // Update manifest hashes and record PackVerified.
+        let wsh = crate::hashing::workspace_hash(&ws.root)?;
+        let mut manifest = manifest;
+        manifest.target_workspace_hash = wsh.clone();
+        manifest.risk_hash = crate::hashing::canonical_hash(&risk);
+        manifest.verify_hash = evidence.result_hash.clone();
+        manifest.lsif_hash = crate::hashing::canonical_hash(&lsif_summary);
+        store.write_manifest(&manifest)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::PackVerified,
+            Some(pack_id.clone()),
+            None,
+            wsh,
+            serde_json::json!({
+                "risk_level": risk.risk_level.as_str(),
+                "result_hash": evidence.result_hash,
+            }),
+        )?;
+
+        Ok(VerifyV2Report {
+            pack_id,
+            risk_level: risk.risk_level.as_str().to_string(),
+            risk_score: risk.risk_score,
+            explanations: risk.explanations,
+            required_actions: risk.required_actions,
+            selected_tests: evidence.selected_tests,
+            selected_fuzz_targets: evidence.selected_fuzz_targets,
+            selection_reason: evidence.selection_reason,
+            coverage_basis: evidence.coverage_basis,
+            symbols_touched: changed_symbols.len(),
+            public_api_changed: public_api.len(),
+            result_hash: evidence.result_hash,
+        })
+    }
+
+    /// Locally re-verify an imported pack from its quarantined artifacts.
+    ///
+    /// Fail closed on any integrity violation: the embedded `changes.patch`
+    /// must match the manifest's `changes_hash`, and every referenced content
+    /// object must hash to its own name. Evidence (risk/verify/lsif) is then
+    /// produced by the same pipeline as local packs, with file contents read
+    /// from the embedded objects instead of the workspace.
+    #[allow(clippy::too_many_arguments)]
+    fn verify_imported_pack(
+        &self,
+        ws: &Workspace,
+        paths: &crate::layout::ProjectPaths,
+        store: &crate::pack::PackStore,
+        loc: crate::pack::PackLocation,
+        manifest: crate::pack::PackManifest,
+        full: bool,
+        fuzz: bool,
+    ) -> DraftResult<VerifyV2Report> {
+        use crate::lsif::{LsifIndex, LSIF_BACKEND};
+        use crate::pack::ImportState;
+
+        if !crate::pack::can_import_transition(manifest.import_state, ImportState::ImportVerified) {
+            return Err(DraftError::invalid_config(format!(
+                "imported pack in state '{}' cannot be verified",
+                manifest.lifecycle()
+            )));
+        }
+        let pack_id = manifest.pack_id.clone();
+        let dir = store.dir_for(loc, &pack_id);
+
+        // Integrity gate: changes.patch must exist, match the manifest hash,
+        // and parse.
+        let changes_path = dir.join("changes.patch");
+        if !changes_path.exists() {
+            return Err(DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                "imported pack has no changes.patch to verify",
+            ));
+        }
+        let changes_bytes = fs::read(&changes_path)?;
+        if sha256_hex(&changes_bytes) != manifest.changes_hash {
+            return Err(DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                "imported changes.patch does not match the manifest changes_hash (tampering?)",
+            ));
+        }
+        let patch: PatchSet = serde_json::from_slice(&changes_bytes).map_err(|e| {
+            DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                format!("imported changes.patch is corrupt: {e}"),
+            )
+        })?;
+
+        // Reconstruct changed-file contents from the embedded objects
+        // (content-addressed; re-checked here against post-import tampering).
+        let mut changed: Vec<(String, String)> = Vec::new();
+        for f in &patch.files {
+            if is_draft_path(f.path.as_str()) {
+                continue;
+            }
+            let content = match &f.new_hash {
+                Some(h) => String::from_utf8_lossy(&read_imported_object(&dir, h)?).into_owned(),
+                None => String::new(),
+            };
+            changed.push((f.path.to_string(), content));
+        }
+        let changed_paths: Vec<String> = changed.iter().map(|(p, _)| p.clone()).collect();
+
+        // Same evidence pipeline as local packs.
+        let lsif = LsifIndex::open(paths)?;
+        lsif.index_pack(&pack_id, &changed)?;
+        let changed_symbols = lsif.symbols_touched_by_pack(&pack_id)?;
+        let public_api = lsif.public_api_symbols_changed(&pack_id)?;
+        let known: std::collections::BTreeSet<String> = changed_symbols.iter().cloned().collect();
+        for (rel, content) in scan_test_files(&ws.root)? {
+            lsif.record_refs(&rel, &content, &known)?;
+        }
+        let test_files = lsif.files_referencing_symbols(&changed_symbols)?;
+        let fuzz_targets = scan_fuzz_targets(&ws.root);
+
+        let dependency_count = read_json::<crate::pack::PackLockfile>(&dir.join("pack.lock.json"))
+            .map(|l| l.dependency_pack_hashes.len())
+            .unwrap_or(0);
+        let risk_inputs = crate::riskv2::RiskInputs {
+            intent: manifest.intent,
+            files_touched: changed.len(),
+            lines_changed: changed.iter().map(|(_, c)| c.lines().count()).sum(),
+            high_risk_paths: crate::riskv2::high_risk_paths(&changed_paths),
+            has_tests: !test_files.is_empty(),
+            has_fuzz: fuzz && !fuzz_targets.is_empty(),
+            public_api_changes: public_api.len(),
+            imported: true,
+            dependency_count,
+            semantic_impact: changed_symbols.len(),
+            candidate_rollback_rate: 0.0,
+        };
+        let risk = crate::riskv2::assess(&risk_inputs);
+
+        let selection = crate::verifyv2::SelectionInput {
+            changed_files: changed_paths.clone(),
+            changed_symbols: changed_symbols.clone(),
+            test_files: test_files.clone(),
+            fuzz_targets: fuzz_targets.clone(),
+            full,
+            fuzz,
+        };
+        let evidence = crate::verifyv2::plan(&selection);
+
+        // Persist local evidence beside the pack (replacing origin evidence;
+        // the origin's signed receipts remain as provenance).
+        write_json(&dir.join("risk.json"), &risk)?;
+        write_json(&dir.join("verify.json"), &evidence)?;
+        let lsif_summary = serde_json::json!({
+            "backend": LSIF_BACKEND,
+            "symbols_touched": changed_symbols,
+            "public_api_changed": public_api,
+            "tests_referencing": test_files,
+            "semantic_impact": changed_symbols.len(),
+        });
+        write_json(&dir.join("lsif.json"), &lsif_summary)?;
+
+        let wsh = crate::hashing::workspace_hash(&ws.root)?;
+        let mut manifest = manifest;
+        manifest.target_workspace_hash = wsh.clone();
+        manifest.risk_hash = crate::hashing::canonical_hash(&risk);
+        manifest.verify_hash = evidence.result_hash.clone();
+        manifest.lsif_hash = crate::hashing::canonical_hash(&lsif_summary);
+        manifest.import_state = ImportState::ImportVerified;
+        // Approval must follow the latest verification.
+        manifest.approval_state = crate::pack::ApprovalState::Pending;
+        store.write_manifest_in(loc, &manifest)?;
+
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::PackVerified,
+            Some(pack_id.clone()),
+            None,
+            wsh,
+            serde_json::json!({
+                "imported": true,
+                "risk_level": risk.risk_level.as_str(),
+                "result_hash": evidence.result_hash,
+            }),
+        )?;
+
+        Ok(VerifyV2Report {
+            pack_id,
+            risk_level: risk.risk_level.as_str().to_string(),
+            risk_score: risk.risk_score,
+            explanations: risk.explanations,
+            required_actions: risk.required_actions,
+            selected_tests: evidence.selected_tests,
+            selected_fuzz_targets: evidence.selected_fuzz_targets,
+            selection_reason: evidence.selection_reason,
+            coverage_basis: evidence.coverage_basis,
+            symbols_touched: changed_symbols.len(),
+            public_api_changed: public_api.len(),
+            result_hash: evidence.result_hash,
+        })
+    }
+
+    /// Index a pack into LSIF from the current content of its changed files.
+    fn ensure_pack_indexed(
+        &self,
+        ws: &Workspace,
+        lsif: &crate::lsif::LsifIndex,
+        pack_id: &str,
+    ) -> DraftResult<Vec<String>> {
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = crate::pack::PackStore::new(paths);
+        let files: Vec<String> = store
+            .read_lockfile(pack_id)
+            .map(|l| l.file_hashes.keys().cloned().collect())
+            .unwrap_or_default();
+        let content: Vec<(String, String)> = files
+            .iter()
+            .map(|f| {
+                (
+                    f.clone(),
+                    fs::read_to_string(ws.root.join(f)).unwrap_or_default(),
+                )
+            })
+            .collect();
+        lsif.index_pack(pack_id, &content)?;
+        lsif.symbols_touched_by_pack(pack_id)
+    }
+
+    /// `draft pack inspect <pck_id>`.
+    pub fn pack_inspect(&self, cwd: &Path, pack_ref: &str) -> DraftResult<PackInspectReport> {
+        let ws = self.open(cwd)?;
+        let pack_id = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = crate::pack::PackStore::new(paths.clone());
+        let loc = store
+            .locate(&pack_id)
+            .unwrap_or(crate::pack::PackLocation::Store);
+        let manifest = store.read_manifest_in(loc, &pack_id)?;
+        let lsif = crate::lsif::LsifIndex::open(&paths)?;
+        if manifest.import_state == crate::pack::ImportState::None {
+            self.ensure_pack_indexed(&ws, &lsif, &pack_id)?;
+        }
+        // Imported packs were indexed from their embedded content at local
+        // verification; re-indexing from the workspace would erase that.
+        let symbols_touched = lsif.symbols_touched_by_pack(&pack_id)?;
+        let public_api_changed = lsif.public_api_symbols_changed(&pack_id)?;
+        let receipts = crate::receipt::ReceiptStore::new(paths)
+            .list()?
+            .into_iter()
+            .filter(|r| r.subject_id.as_deref() == Some(pack_id.as_str()))
+            .map(|r| r.receipt_id)
+            .collect();
+        Ok(PackInspectReport {
+            lifecycle: manifest.lifecycle().to_string(),
+            verified: manifest.is_verified(),
+            symbols_touched,
+            public_api_changed,
+            receipts,
+            manifest,
+        })
+    }
+
+    /// `draft pack depends <pck_id>`.
+    pub fn pack_depends(&self, cwd: &Path, pack_ref: &str) -> DraftResult<PackDependsReport> {
+        let ws = self.open(cwd)?;
+        let pack_id = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = crate::pack::PackStore::new(paths.clone());
+        let manifest = store.read_manifest(&pack_id)?;
+        let lsif = crate::lsif::LsifIndex::open(&paths)?;
+        // Index this pack and every other pack so shared-symbol analysis is real.
+        let my_symbols = self.ensure_pack_indexed(&ws, &lsif, &pack_id)?;
+        for other in store.list()? {
+            if other.pack_id != pack_id {
+                self.ensure_pack_indexed(&ws, &lsif, &other.pack_id)?;
+            }
+        }
+        // Shortlist packs that touch any of this pack's symbols, then compute
+        // the exact shared-symbol overlap only for those.
+        let mut shared_symbol_packs = std::collections::BTreeMap::new();
+        for other_id in lsif.packs_touching_symbols(&my_symbols)? {
+            if other_id == pack_id {
+                continue;
+            }
+            let shared = lsif.possible_semantic_conflicts(&pack_id, &other_id)?;
+            if !shared.is_empty() {
+                shared_symbol_packs.insert(other_id, shared);
+            }
+        }
+        let lock = store.read_lockfile(&pack_id).ok();
+        Ok(PackDependsReport {
+            pack_id,
+            base_workspace_hash: manifest.base_workspace_hash,
+            changed_files: lock
+                .as_ref()
+                .map(|l| l.file_hashes.keys().cloned().collect())
+                .unwrap_or_default(),
+            shared_symbol_packs,
+            declared_dependencies: lock.map(|l| l.dependency_pack_hashes).unwrap_or_default(),
+        })
+    }
+
+    /// `draft pack conflicts <a> <b>`: textual, semantic, policy, verification,
+    /// and dependency conflicts.
+    pub fn pack_conflicts(
+        &self,
+        cwd: &Path,
+        a_ref: &str,
+        b_ref: &str,
+    ) -> DraftResult<PackConflictsReport> {
+        let ws = self.open(cwd)?;
+        let a = self.resolve_canonical_pack_ref(&ws, a_ref)?;
+        let b = self.resolve_canonical_pack_ref(&ws, b_ref)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = crate::pack::PackStore::new(paths.clone());
+        let ma = store.read_manifest(&a)?;
+        let mb = store.read_manifest(&b)?;
+        let lock_a = store.read_lockfile(&a).ok();
+        let lock_b = store.read_lockfile(&b).ok();
+        let mut conflicts = Vec::new();
+
+        // Textual: same file changed with different content.
+        if let (Some(la), Some(lb)) = (&lock_a, &lock_b) {
+            for (path, ha) in &la.file_hashes {
+                if let Some(hb) = lb.file_hashes.get(path) {
+                    if ha != hb {
+                        conflicts.push(ConflictFinding {
+                            kind: "textual".to_string(),
+                            detail: format!("both change '{path}' with different content"),
+                            blocking: true,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Semantic: both touch the same symbols (via LSIF).
+        let lsif = crate::lsif::LsifIndex::open(&paths)?;
+        self.ensure_pack_indexed(&ws, &lsif, &a)?;
+        self.ensure_pack_indexed(&ws, &lsif, &b)?;
+        let shared = lsif.possible_semantic_conflicts(&a, &b)?;
+        if !shared.is_empty() {
+            conflicts.push(ConflictFinding {
+                kind: "semantic".to_string(),
+                detail: format!("both touch symbols: {}", shared.join(", ")),
+                blocking: true,
+            });
+        }
+
+        // Policy: intent mismatch that policy would treat as incompatible.
+        if ma.intent != mb.intent
+            && (ma.intent == crate::pack::PackIntent::Security
+                || mb.intent == crate::pack::PackIntent::Security)
+        {
+            conflicts.push(ConflictFinding {
+                kind: "policy".to_string(),
+                detail: format!(
+                    "composing '{}' with '{}' intent requires stronger verification",
+                    ma.intent.as_str(),
+                    mb.intent.as_str()
+                ),
+                blocking: false,
+            });
+        }
+
+        // Verification: an unverified pack cannot be trusted for composition.
+        for m in [&ma, &mb] {
+            if !m.is_verified() {
+                conflicts.push(ConflictFinding {
+                    kind: "verification".to_string(),
+                    detail: format!("pack '{}' is not verified", m.pack_id),
+                    blocking: false,
+                });
+            }
+        }
+
+        // Dependency: one pack already declares the other as a dependency.
+        for (m, other) in [(&ma, &b), (&mb, &a)] {
+            if let Ok(lock) = store.read_lockfile(&m.pack_id) {
+                if lock.dependency_pack_hashes.iter().any(|d| d == other) {
+                    conflicts.push(ConflictFinding {
+                        kind: "dependency".to_string(),
+                        detail: format!("'{}' depends on '{other}'", m.pack_id),
+                        blocking: false,
+                    });
+                }
+            }
+        }
+
+        let blocking = conflicts.iter().any(|c| c.blocking);
+        Ok(PackConflictsReport {
+            pack_a: a,
+            pack_b: b,
+            conflicts,
+            blocking,
+        })
+    }
+
+    /// `draft pack compose <a> <b> --name <name>`: create a new pack combining
+    /// two others. Blocking conflicts prevent composition; the result is marked
+    /// unverified and must be re-verified.
+    pub fn pack_compose(
+        &self,
+        cwd: &Path,
+        a_ref: &str,
+        b_ref: &str,
+        name: &str,
+    ) -> DraftResult<PackComposeReport> {
+        use crate::pack::{
+            ApprovalState, ImportState, PackLockfile, PackManifest, PackStore, SaveState,
+        };
+        let ws = self.open(cwd)?;
+        let conflict_report = self.pack_conflicts(cwd, a_ref, b_ref)?;
+        if conflict_report.blocking {
+            let details: Vec<String> = conflict_report
+                .conflicts
+                .iter()
+                .filter(|c| c.blocking)
+                .map(|c| format!("{}: {}", c.kind, c.detail))
+                .collect();
+            return Err(DraftError::new(
+                DraftErrorKind::ConflictDetected,
+                format!(
+                    "cannot compose — blocking conflicts: {}",
+                    details.join("; ")
+                ),
+            ));
+        }
+        let a = conflict_report.pack_a;
+        let b = conflict_report.pack_b;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let store = PackStore::new(paths.clone());
+        if store.name_taken(name)? {
+            return Err(DraftError::invalid_config(format!(
+                "pack name '{name}' already exists"
+            )));
+        }
+        let ma = store.read_manifest(&a)?;
+        let new_id = format!("pck_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+
+        // Combined change set from both lockfiles.
+        let mut file_hashes = std::collections::BTreeMap::new();
+        for id in [&a, &b] {
+            if let Ok(lock) = store.read_lockfile(id) {
+                for (f, h) in lock.file_hashes {
+                    file_hashes.insert(f, h);
+                }
+            }
+        }
+        let wsh = crate::hashing::workspace_hash(&ws.root)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        let outcome = ledger.record(
+            crate::event::EventKind::PackComposed,
+            Some(new_id.clone()),
+            None,
+            wsh.clone(),
+            serde_json::json!({ "sources": [a, b], "name": name }),
+        )?;
+        let manifest = PackManifest {
+            schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            pack_id: new_id.clone(),
+            name: name.to_string(),
+            description: format!("composed from {a} + {b}"),
+            intent: ma.intent,
+            origin: "composed".to_string(),
+            actor: ledger.actor_id().to_string(),
+            candidate: None,
+            created_at: now().to_rfc3339(),
+            base_workspace_hash: ma.base_workspace_hash.clone(),
+            target_workspace_hash: wsh.clone(),
+            changes_hash: sha256_hex(format!("{a}+{b}").as_bytes()),
+            risk_hash: String::new(),
+            verify_hash: String::new(), // unverified — must be re-verified
+            lsif_hash: String::new(),
+            receipt_hashes: vec![crate::hashing::sha256_hex(
+                outcome.receipt.receipt_id.as_bytes(),
+            )],
+            import_state: ImportState::None,
+            approval_state: ApprovalState::Pending,
+            save_state: SaveState::Unsaved,
+        };
+        store.write_manifest(&manifest)?;
+        let lock = PackLockfile {
+            schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            pack_id: new_id.clone(),
+            workspace_hash: wsh,
+            file_hashes,
+            policy_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            risk_engine_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            verification_commands: Vec::new(),
+            lsif_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            test_selector_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            fuzz_selector_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            dependency_pack_hashes: vec![a.clone(), b.clone()],
+            receipt_hashes: manifest.receipt_hashes.clone(),
+        };
+        store.write_lockfile(&lock)?;
+        Ok(PackComposeReport {
+            pack_id: new_id,
+            name: name.to_string(),
+            dependencies: vec![a, b],
+            requires_reverification: true,
+        })
+    }
+
+    // ---- Cockpit / AG-UI support (thin read/act methods) ----------------
+
+    /// All canonical pack manifests, including quarantined imports (for the
+    /// cockpit pack list, MCP, and ACP pending review).
+    pub fn list_canonical_packs(&self, cwd: &Path) -> DraftResult<Vec<crate::pack::PackManifest>> {
+        let ws = self.open(cwd)?;
+        let store = crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        let mut packs = store.list()?;
+        packs.extend(store.list_quarantined()?);
+        packs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        Ok(packs)
+    }
+
+    /// A pack's stored diff (changes.patch text), empty if none.
+    pub fn pack_diff_text(&self, cwd: &Path, pack_ref: &str) -> DraftResult<String> {
+        let ws = self.open(cwd)?;
+        let pid = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
+        let store = crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        let loc = store
+            .locate(&pid)
+            .unwrap_or(crate::pack::PackLocation::Store);
+        let p = store.dir_for(loc, &pid).join("changes.patch");
+        Ok(fs::read_to_string(p).unwrap_or_default())
+    }
+
+    /// A pack's stored risk report (or null).
+    pub fn pack_risk_json(&self, cwd: &Path, pack_ref: &str) -> DraftResult<Value> {
+        let ws = self.open(cwd)?;
+        let pid = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
+        let store = crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        let loc = store
+            .locate(&pid)
+            .unwrap_or(crate::pack::PackLocation::Store);
+        let p = store.dir_for(loc, &pid).join("risk.json");
+        if p.exists() {
+            read_json::<Value>(&p)
+        } else {
+            Ok(Value::Null)
+        }
+    }
+
+    /// Signed receipts referencing a pack.
+    pub fn pack_receipts_v2(
+        &self,
+        cwd: &Path,
+        pack_ref: &str,
+    ) -> DraftResult<Vec<crate::receipt::ReceiptRecord>> {
+        let ws = self.open(cwd)?;
+        let pid = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
+        Ok(
+            crate::receipt::ReceiptStore::new(crate::layout::ProjectPaths::for_root(&ws.root))
+                .list()?
+                .into_iter()
+                .filter(|r| r.subject_id.as_deref() == Some(pid.as_str()))
+                .collect(),
+        )
+    }
+
+    /// The canonical hash-chained event log.
+    pub fn canonical_events(&self, cwd: &Path) -> DraftResult<Vec<crate::event::EventRecord>> {
+        let ws = self.open(cwd)?;
+        crate::event::EventLog::new(crate::layout::ProjectPaths::for_root(&ws.root)).read_all()
+    }
+
+    /// Approve or reject a pack through the legacy decision path and record the
+    /// canonical PackApproved/PackRejected trust receipt.
+    pub fn cockpit_decide(
+        &self,
+        cwd: &Path,
+        pack_ref: &str,
+        approve: bool,
+        reason: Option<String>,
+    ) -> DraftResult<String> {
+        let ws = self.open(cwd)?;
+        // Imported packs never take the legacy decision path: their approval
+        // is a canonical import-state transition with a signed receipt.
+        if let Ok(pack_id) = self.resolve_canonical_pack_ref(&ws, pack_ref) {
+            let store =
+                crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+            if let Some(loc) = store.locate(&pack_id) {
+                let manifest = store.read_manifest_in(loc, &pack_id)?;
+                if manifest.import_state != crate::pack::ImportState::None {
+                    return self.decide_imported_pack(&ws, &store, loc, manifest, approve, reason);
+                }
+            }
+        }
+        let decision = if approve {
+            DecisionKind::Approve
+        } else {
+            DecisionKind::Reject
+        };
+        self.decide_selected(cwd, Some(pack_ref), decision, reason)?;
+        let pack = self.resolve_pack_ref(&ws, pack_ref)?;
+        self.sync_canonical_pack(
+            &ws,
+            &pack,
+            None,
+            PackSyncSpec {
+                kind: if approve {
+                    crate::event::EventKind::PackApproved
+                } else {
+                    crate::event::EventKind::PackRejected
+                },
+                intent: crate::pack::PackIntent::Feature,
+                approval: if approve {
+                    crate::pack::ApprovalState::Approved
+                } else {
+                    crate::pack::ApprovalState::Rejected
+                },
+                save: crate::pack::SaveState::Unsaved,
+                metadata: serde_json::json!({ "via": "cockpit" }),
+            },
+        )?;
+        Ok(pack.id.to_string())
+    }
+
+    /// Approve or reject an imported pack: a canonical import-state transition
+    /// recorded with a signed PackApproved/PackRejected receipt. Approval
+    /// requires prior local verification; rejection is terminal.
+    fn decide_imported_pack(
+        &self,
+        ws: &Workspace,
+        store: &crate::pack::PackStore,
+        loc: crate::pack::PackLocation,
+        mut manifest: crate::pack::PackManifest,
+        approve: bool,
+        reason: Option<String>,
+    ) -> DraftResult<String> {
+        use crate::pack::ImportState;
+        let target = if approve {
+            ImportState::ImportApproved
+        } else {
+            ImportState::ImportRejected
+        };
+        if approve && manifest.import_state == ImportState::ImportedQuarantined {
+            return Err(DraftError::new(
+                DraftErrorKind::ReviewRequired,
+                "imported packs must be locally verified before approval",
+            )
+            .with_suggestion("run `draft verify <pck_id>` first"));
+        }
+        if !crate::pack::can_import_transition(manifest.import_state, target) {
+            return Err(DraftError::invalid_config(format!(
+                "imported pack in state '{}' cannot be {}",
+                manifest.lifecycle(),
+                if approve { "approved" } else { "rejected" }
+            )));
+        }
+        manifest.import_state = target;
+        manifest.approval_state = if approve {
+            crate::pack::ApprovalState::Approved
+        } else {
+            crate::pack::ApprovalState::Rejected
+        };
+        store.write_manifest_in(loc, &manifest)?;
+
+        let wsh = crate::hashing::workspace_hash(&ws.root)?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            if approve {
+                crate::event::EventKind::PackApproved
+            } else {
+                crate::event::EventKind::PackRejected
+            },
+            Some(manifest.pack_id.clone()),
+            None,
+            wsh,
+            serde_json::json!({
+                "via": "cockpit",
+                "imported": true,
+                "reason": reason,
+            }),
+        )?;
+        Ok(manifest.pack_id)
+    }
+
+    /// Import a `.draftpack` provided as bytes (cockpit upload).
+    pub fn pack_import_bytes(
+        &self,
+        cwd: &Path,
+        bytes: &[u8],
+        name: Option<&str>,
+    ) -> DraftResult<PackImportReport> {
+        let tmp = std::env::temp_dir().join(format!(
+            "draft-import-{}.draftpack",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::write(&tmp, bytes)
+            .map_err(|e| DraftError::storage(format!("write temp import: {e}")))?;
+        let result = self.pack_import(cwd, &tmp, name, false);
+        let _ = std::fs::remove_file(&tmp);
+        result
     }
 
     pub fn receipts(&self, cwd: &Path) -> DraftResult<Vec<Value>> {
@@ -3963,7 +6210,7 @@ fn find_workspace_root(cwd: &Path) -> Option<PathBuf> {
 fn reject_remote_key(key: &str) -> DraftResult<()> {
     if key.starts_with("target.") {
         return Err(DraftError::invalid_config(
-            "retired external-action config keys are not supported in Draft v0.3.1; use hooks.*",
+            "retired external-action config keys are not supported in Draft v0.3.2; use hooks.*",
         ));
     }
     Ok(())
@@ -4002,8 +6249,10 @@ fn read_ignore_lines(path: &Path) -> DraftResult<Vec<String>> {
 }
 
 fn is_draft_path(path: &str) -> bool {
-    let p = path.replace('\\', "/");
-    p == ".draft" || p.starts_with(".draft/")
+    // Delegate to the central path guard so *every* `.draft` component (nested,
+    // case-insensitive, backslash-separated) is hard-excluded (spec §9.2), not
+    // just a top-level `.draft/`.
+    crate::pathguard::is_draft_path(path)
 }
 
 fn pattern_match(pattern: &str, path: &str) -> bool {
@@ -4542,6 +6791,110 @@ fn save_readiness(
     })
 }
 
+/// Resolve the effective policy for a workspace: project `.draft/policy.toml`
+/// over the global default policy over the built-in safe default. Fails closed
+/// on an unreadable or malformed policy file.
+fn effective_policy(ws: &Workspace) -> DraftResult<crate::policy::Policy> {
+    let project = crate::layout::ProjectPaths::for_root(&ws.root).policy_toml();
+    let global = crate::home::GlobalHome::locate()
+        .ok()
+        .map(|h| h.default_policy_toml());
+    crate::policy::Policy::resolve_checked(Some(&project), global.as_deref())
+        .map_err(DraftError::invalid_config)
+}
+
+fn validate_canonical_save_gate(ws: &Workspace, pack_id: &str) -> DraftResult<()> {
+    let policy = effective_policy(ws)?;
+    let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+    let store = crate::pack::PackStore::new(paths.clone());
+    let manifest = store.read_manifest(pack_id)?;
+    if !manifest.is_verified() {
+        return Err(DraftError::new(
+            DraftErrorKind::VerificationFailed,
+            "canonical verification receipt is required before save",
+        ));
+    }
+    if policy.require_approval_for_save
+        && manifest.approval_state != crate::pack::ApprovalState::Approved
+    {
+        return Err(DraftError::new(
+            DraftErrorKind::ReviewRequired,
+            "canonical approval receipt is required before save",
+        ));
+    }
+    if manifest.import_state == crate::pack::ImportState::ImportedQuarantined {
+        return Err(DraftError::new(
+            DraftErrorKind::ReviewRequired,
+            "imported packs must be locally verified and approved before save",
+        ));
+    }
+    validate_canonical_risk_gate(&policy, &paths, pack_id, &manifest)?;
+    if policy.require_reverify_on_workspace_change {
+        let current_hash = crate::hashing::workspace_hash(&ws.root)?;
+        if manifest.target_workspace_hash != current_hash {
+            return Err(DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                "workspace content changed after canonical verification",
+            )
+            .with_suggestion("run `draft verify <pck_id>` again before save"));
+        }
+    }
+    let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+    let verification = ledger.verify_all()?;
+    if !verification.all_ok {
+        return Err(DraftError::new(
+            DraftErrorKind::OperationLogCorrupt,
+            "canonical event, receipt, or transparency ledger failed verification",
+        )
+        .with_suggestion("run `draft receipt verify --all` or `draft doctor`"));
+    }
+    Ok(())
+}
+
+/// Enforce the canonical risk report (`risk.json`) against the effective
+/// policy: an unresolved critical risk blocks save, and high/critical risk
+/// requires explicit approval. A missing risk report fails closed when the
+/// policy blocks on critical risk.
+fn validate_canonical_risk_gate(
+    policy: &crate::policy::Policy,
+    paths: &crate::layout::ProjectPaths,
+    pack_id: &str,
+    manifest: &crate::pack::PackManifest,
+) -> DraftResult<()> {
+    let risk_path = paths.pack_risk(pack_id);
+    if !risk_path.exists() {
+        if policy.block_on_critical_risk {
+            return Err(DraftError::new(
+                DraftErrorKind::RiskPolicyBlocked,
+                "no canonical risk report exists for this pack",
+            )
+            .with_suggestion("run `draft verify <pck_id>` before save"));
+        }
+        return Ok(());
+    }
+    let risk: crate::riskv2::RiskReport = read_json(&risk_path)?;
+    if policy.block_on_critical_risk && risk.risk_level == crate::riskv2::RiskLevel::Critical {
+        return Err(DraftError::new(
+            DraftErrorKind::RiskPolicyBlocked,
+            "unresolved critical risk blocks save",
+        )
+        .with_suggestion("resolve the required actions in risk.json and re-verify"));
+    }
+    if policy.require_approval_on_high_risk
+        && matches!(
+            risk.risk_level,
+            crate::riskv2::RiskLevel::High | crate::riskv2::RiskLevel::Critical
+        )
+        && manifest.approval_state != crate::pack::ApprovalState::Approved
+    {
+        return Err(DraftError::new(
+            DraftErrorKind::ReviewRequired,
+            "high-risk pack requires explicit approval before save",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct ReceiptRef {
     id: String,
@@ -4890,9 +7243,16 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
         conn.execute(
             "INSERT INTO receipts (id, kind, status, subject_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                receipt.get("id").and_then(Value::as_str).unwrap_or_default(),
+                // Legacy receipts use `id`; v0.3.2 signed receipts use `receipt_id`.
+                receipt
+                    .get("id")
+                    .or_else(|| receipt.get("receipt_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
                 receipt.get("kind").and_then(Value::as_str).unwrap_or_else(|| {
-                    if receipt.get("hook_results").is_some()
+                    if receipt.get("event_type").is_some() {
+                        "signed"
+                    } else if receipt.get("hook_results").is_some()
                         || receipt.get("overall_status").is_some()
                     {
                         "save"
@@ -4913,6 +7273,7 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
                 receipt
                     .get("created_at")
                     .or_else(|| receipt.get("started_at"))
+                    .or_else(|| receipt.get("timestamp"))
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             ],
@@ -5085,6 +7446,176 @@ fn render_message(
     interpolate_lenient(&cfg.save_message_template, &values)
 }
 
+/// The fraction (0.0–1.0) of a candidate's packs that were later rolled back —
+/// a risk signal, never a verdict on its own. Returns 0.0 when the candidate
+/// has produced no packs. Live values stay 0.0 until candidate attribution is
+/// recorded on manifests (e.g. via `draft a2a link`).
+fn candidate_rollback_rate(
+    events: &[crate::event::EventRecord],
+    manifests: &[crate::pack::PackManifest],
+    candidate: &str,
+) -> f64 {
+    let candidate_packs: Vec<&str> = manifests
+        .iter()
+        .filter(|m| m.candidate.as_deref() == Some(candidate))
+        .map(|m| m.pack_id.as_str())
+        .collect();
+    if candidate_packs.is_empty() {
+        return 0.0;
+    }
+    let rolled_back = candidate_packs
+        .iter()
+        .filter(|pack_id| {
+            events.iter().any(|e| {
+                e.event_type == "RollbackPerformed" && e.subject_id.as_deref() == Some(**pack_id)
+            })
+        })
+        .count();
+    rolled_back as f64 / candidate_packs.len() as f64
+}
+
+/// A fully validated import application plan: every write has its bytes in
+/// hand and every precondition was checked before anything touches the
+/// workspace.
+struct ImportApplyPlan {
+    writes: Vec<(PathBuf, Vec<u8>)>,
+    deletes: Vec<PathBuf>,
+}
+
+/// Validate that an imported patch applies cleanly to the current workspace
+/// and assemble the plan. Fail closed on the first conflict: a file whose
+/// current content does not match the patch's recorded `old_hash`, a missing
+/// content object, or an unsafe path. Already-applied entries are skipped so
+/// the apply is idempotent.
+fn plan_import_apply(
+    ws: &Workspace,
+    pack_dir: &Path,
+    patch: &PatchSet,
+) -> DraftResult<ImportApplyPlan> {
+    let current_hash = |p: &Path| -> DraftResult<Option<String>> {
+        if !p.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(format!("b3:{}", blake3_hex(&fs::read(p)?))))
+    };
+    let conflict = |path: &WorkspacePath, why: &str| {
+        DraftError::new(
+            DraftErrorKind::SaveFailed,
+            format!("cannot apply imported change to '{path}': {why}"),
+        )
+        .with_suggestion("resolve the local conflict, then re-verify and save again")
+    };
+
+    let mut writes = Vec::new();
+    let mut deletes = Vec::new();
+    for f in &patch.files {
+        if is_draft_path(f.path.as_str()) {
+            continue;
+        }
+        let dest = safe_workspace_dest(&ws.root, &f.path)?;
+        let current = current_hash(&dest)?;
+        match &f.change_kind {
+            FileChangeKind::Added => {
+                let new_hash = f
+                    .new_hash
+                    .as_ref()
+                    .ok_or_else(|| conflict(&f.path, "added file has no recorded content hash"))?;
+                if current.as_deref() == Some(new_hash.as_str()) {
+                    continue; // already applied
+                }
+                if current.is_some() {
+                    return Err(conflict(
+                        &f.path,
+                        "a different local file already exists at this path",
+                    ));
+                }
+                writes.push((dest, read_imported_object(pack_dir, new_hash)?));
+            }
+            FileChangeKind::Modified
+            | FileChangeKind::TypeChanged
+            | FileChangeKind::PermissionChanged => {
+                let new_hash = f.new_hash.as_ref().ok_or_else(|| {
+                    conflict(&f.path, "modified file has no recorded content hash")
+                })?;
+                if current.as_deref() == Some(new_hash.as_str()) {
+                    continue; // already applied
+                }
+                if current.as_deref() != f.old_hash.as_deref() {
+                    return Err(conflict(
+                        &f.path,
+                        "local content differs from the change's base version",
+                    ));
+                }
+                writes.push((dest, read_imported_object(pack_dir, new_hash)?));
+            }
+            FileChangeKind::Deleted => {
+                match current {
+                    None => continue, // already applied
+                    Some(h) if Some(h.as_str()) == f.old_hash.as_deref() => deletes.push(dest),
+                    Some(_) => {
+                        return Err(conflict(
+                            &f.path,
+                            "local content differs from the change's base version",
+                        ))
+                    }
+                }
+            }
+            FileChangeKind::Renamed { from } => {
+                let new_hash = f.new_hash.as_ref().ok_or_else(|| {
+                    conflict(&f.path, "renamed file has no recorded content hash")
+                })?;
+                let source = safe_workspace_dest(&ws.root, from)?;
+                let source_hash = current_hash(&source)?;
+                if current.as_deref() == Some(new_hash.as_str()) && source_hash.is_none() {
+                    continue; // already applied
+                }
+                if source_hash.as_deref() != f.old_hash.as_deref() {
+                    return Err(conflict(
+                        from,
+                        "rename source differs from the change's base version",
+                    ));
+                }
+                if current.is_some() {
+                    return Err(conflict(
+                        &f.path,
+                        "a different local file already exists at the rename target",
+                    ));
+                }
+                writes.push((dest, read_imported_object(pack_dir, new_hash)?));
+                deletes.push(source);
+            }
+        }
+    }
+    Ok(ImportApplyPlan { writes, deletes })
+}
+
+/// Read a content object embedded in an imported pack directory, re-checking
+/// its content address (fail closed on post-import tampering or absence).
+fn read_imported_object(pack_dir: &Path, object_ref: &str) -> DraftResult<Vec<u8>> {
+    let hex = object_ref.strip_prefix("b3:").ok_or_else(|| {
+        DraftError::new(
+            DraftErrorKind::VerificationFailed,
+            format!("imported pack references unsupported object '{object_ref}'"),
+        )
+    })?;
+    let path = pack_dir.join("objects").join(hex);
+    if !path.exists() {
+        return Err(DraftError::new(
+            DraftErrorKind::VerificationFailed,
+            format!("imported pack is missing content object '{hex}'"),
+        )
+        .with_suggestion("re-export the pack with draft v0.3.2 or newer (format draftpack/2)"));
+    }
+    let bytes = fs::read(&path)?;
+    if blake3_hex(&bytes) != hex {
+        return Err(DraftError::new(
+            DraftErrorKind::VerificationFailed,
+            format!("imported content object '{hex}' failed its content-address check"),
+        ));
+    }
+    Ok(bytes)
+}
+
 fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Snapshot> {
     if reference.starts_with("chk_") {
         validate_checkpoint_id(reference)?;
@@ -5104,6 +7635,12 @@ fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Sn
             )));
         }
         let value: Value = read_json(&receipt_path)?;
+        // Canonical signed receipts resolve through their subject; anything
+        // else takes the legacy path, which requires an explicit rollback
+        // target.
+        if let Ok(record) = serde_json::from_value::<crate::receipt::ReceiptRecord>(value.clone()) {
+            return resolve_canonical_receipt_target(ws, &record);
+        }
         if !value
             .get("reversible")
             .and_then(Value::as_bool)
@@ -5131,6 +7668,65 @@ fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Sn
     Err(DraftError::invalid_config(format!(
         "rollback reference '{reference}' must start with chk_, pck_, or rcp_"
     )))
+}
+
+/// Canonical receipt event types whose subject is a meaningful local rollback
+/// anchor. Deliberately excluded: PackImported (no local snapshot precedes
+/// it), PackComposed (no base snapshot), PackExported (no state change), and
+/// RollbackPerformed (aliases the original reference).
+const ROLLBACK_ELIGIBLE_EVENTS: &[&str] = &[
+    "CheckpointCreated",
+    "PackCreated",
+    "PackVerified",
+    "PackApproved",
+    "PackSaved",
+];
+
+/// Resolve a canonical signed receipt to a rollback snapshot via its subject.
+/// The receipt must verify (fail closed: an unverifiable receipt is not a
+/// trustworthy rollback anchor) and its event type must be rollback-eligible.
+fn resolve_canonical_receipt_target(
+    ws: &Workspace,
+    record: &crate::receipt::ReceiptRecord,
+) -> DraftResult<Snapshot> {
+    let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+    let verification = ledger.verify_receipt(&record.receipt_id)?;
+    if !verification.ok {
+        return Err(DraftError::new(
+            DraftErrorKind::OperationLogCorrupt,
+            format!(
+                "receipt '{}' failed verification and cannot anchor a rollback",
+                record.receipt_id
+            ),
+        )
+        .with_suggestion("run `draft receipt verify --all` or `draft doctor`"));
+    }
+    if !ROLLBACK_ELIGIBLE_EVENTS.contains(&record.event_type.as_str()) {
+        return Err(DraftError::invalid_config(format!(
+            "receipt '{}' ({}) is not rollback-eligible",
+            record.receipt_id, record.event_type
+        )));
+    }
+    match record.subject_id.as_deref() {
+        Some(subject) if subject.starts_with("chk_") => {
+            validate_checkpoint_id(subject)?;
+            load_snapshot(ws, &SnapshotId::new(subject))
+        }
+        Some(subject) if subject.starts_with("pck_") => {
+            validate_pack_id(subject)?;
+            let pack = load_pack(ws, subject).map_err(|_| {
+                DraftError::invalid_config(format!(
+                    "pack '{subject}' has no local snapshot to roll back to"
+                ))
+            })?;
+            load_snapshot(ws, &pack.base_snapshot_id)
+        }
+        other => Err(DraftError::invalid_config(format!(
+            "receipt '{}' subject '{}' is not a rollback target",
+            record.receipt_id,
+            other.unwrap_or("<none>")
+        ))),
+    }
 }
 
 fn validate_checkpoint_id(id: &str) -> DraftResult<()> {
@@ -6333,5 +8929,67 @@ fn json_err(e: serde_json::Error) -> DraftError {
 impl From<serde_json::Error> for DraftError {
     fn from(e: serde_json::Error) -> Self {
         json_err(e)
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+
+    fn manifest_for(candidate: Option<&str>, pack_id: &str) -> crate::pack::PackManifest {
+        crate::pack::PackManifest {
+            schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+            pack_id: pack_id.to_string(),
+            name: pack_id.to_string(),
+            description: String::new(),
+            intent: crate::pack::PackIntent::Feature,
+            origin: "local".into(),
+            actor: "act_t".into(),
+            candidate: candidate.map(|c| c.to_string()),
+            created_at: "2026-07-04T00:00:00+00:00".into(),
+            base_workspace_hash: "sha256:a".into(),
+            target_workspace_hash: "sha256:b".into(),
+            changes_hash: "sha256:c".into(),
+            risk_hash: String::new(),
+            verify_hash: String::new(),
+            lsif_hash: String::new(),
+            receipt_hashes: vec![],
+            import_state: crate::pack::ImportState::None,
+            approval_state: crate::pack::ApprovalState::Pending,
+            save_state: crate::pack::SaveState::Unsaved,
+        }
+    }
+
+    fn rollback_event(subject: &str) -> crate::event::EventRecord {
+        crate::event::EventRecord {
+            event_id: "evt_t".into(),
+            event_type: "RollbackPerformed".into(),
+            time: "2026-07-04T00:00:00+00:00".into(),
+            subject_id: Some(subject.to_string()),
+            actor_id: "act_t".into(),
+            candidate_id: None,
+            workspace_id: "ws_t".into(),
+            previous_event_hash: String::new(),
+            event_hash: String::new(),
+            receipt_id: None,
+            metadata: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn candidate_rollback_rate_counts_rolled_back_fraction() {
+        let manifests = vec![
+            manifest_for(Some("cand_a"), "pck_1"),
+            manifest_for(Some("cand_a"), "pck_2"),
+            manifest_for(Some("cand_b"), "pck_3"),
+            manifest_for(None, "pck_4"),
+        ];
+        let events = vec![rollback_event("pck_1")];
+        // One of cand_a's two packs was rolled back.
+        assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_a"), 0.5);
+        // cand_b has packs but no rollbacks.
+        assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_b"), 0.0);
+        // Unknown candidates never divide by zero.
+        assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_x"), 0.0);
     }
 }

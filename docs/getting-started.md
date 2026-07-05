@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks through a complete Draft v0.3.1 workflow using only local files and the CLI.
+This guide walks through a complete Draft v0.3.2 workflow using only local files and the CLI.
 
 ## Create A Workspace
 
@@ -74,10 +74,11 @@ Rollback infers the target type from the ID prefix. Rollback never restores `.dr
 ```bash
 draft event
 draft event --raw
-draft event --verify-chain
+draft doctor
+draft receipt verify --all
 ```
 
-`draft event` is a readable timeline derived from the stored event stream. `draft event --raw` prints the underlying JSONL records for audit, debugging, replay, and tooling.
+`draft event` is a readable timeline derived from the stored event stream. `draft event --raw` prints the underlying JSONL records for audit, debugging, replay, and tooling. `draft doctor` and `draft receipt verify --all` verify event, receipt, and transparency integrity.
 
 ## Optional Local Services
 

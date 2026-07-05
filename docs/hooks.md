@@ -1,6 +1,6 @@
 # Hooks
 
-Draft v0.3.1 supports generic command hooks under `hooks.*`.
+Draft v0.3.2 supports generic command hooks under `hooks.*`.
 
 Hooks are user-configured shell commands that Draft runs after or around Draft commands. Draft treats every hook as opaque. It does not infer whether a hook commits to Git, updates Jujutsu, runs a script, pushes to GitHub, or performs any other external action.
 
@@ -71,7 +71,7 @@ Missing placeholders fail the hook before execution and obey `continue_on_error`
 Hook-capable commands accept `--var` as a tail marker:
 
 ```bash
-draft save auth-refactor --var ticket="AUTH-123" release="v0.3.1"
+draft save auth-refactor --var ticket="AUTH-123" release="v0.3.2"
 ```
 
 Every token after `--var` must be `key=value`. Normal Draft flags are not allowed after `--var`. Variable names must match `[a-zA-Z_][a-zA-Z0-9_]*` and must not override built-in placeholders.
@@ -82,7 +82,7 @@ Dynamic variables are available as placeholders and environment variables:
 {{ticket}}
 {{release}}
 DRAFT_VAR_TICKET=AUTH-123
-DRAFT_VAR_RELEASE=v0.3.1
+DRAFT_VAR_RELEASE=v0.3.2
 ```
 
 ## Environment
@@ -129,7 +129,7 @@ Run a user-owned external command:
 command = "./scripts/publish-after-review.sh \"{{message}}\""
 ```
 
-That behavior is only user-scripted hook execution. Draft v0.3.1 has no native push, forge, PR, integration adapter, hosted review, or GitHub feature.
+That behavior is only user-scripted hook execution. Draft v0.3.2 has no native push, forge, PR, hosted review, marketplace, cloud sync, or GitHub feature.
 
 ## Safety
 

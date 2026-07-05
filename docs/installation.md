@@ -1,6 +1,10 @@
 # Installation
 
+<<<<<<< Updated upstream
 Draft v0.3.1 publishes versioned GitHub Release binaries for Linux, macOS, WSL, and native Windows.
+=======
+Draft v0.3.2 is a Rust workspace. The current public path is building the CLI from source.
+>>>>>>> Stashed changes
 
 ## Requirements
 
