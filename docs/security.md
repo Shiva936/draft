@@ -1,6 +1,6 @@
 # Security Model
 
-Draft v0.3.1 is a local tool. Its security model focuses on protecting the local workspace, preserving audit evidence, and preventing Draft metadata from entering user change candidates.
+Draft v0.3.2 is a local tool. Its security model focuses on protecting the local workspace, preserving signed audit evidence, and preventing Draft metadata from entering user change candidates.
 
 ## Trust Boundary
 
@@ -32,13 +32,37 @@ If `.draft/` appears in a save candidate, Draft:
 
 ## Event Integrity
 
-Events are hash-chained. Run:
+Events are hash-chained and linked to signed receipts and the local transparency chain. Run:
 
 ```bash
-draft event --verify-chain
+draft doctor
+draft receipt verify --all
 ```
 
-This detects edits, missing links, and parse failures. Event hashing is tamper-evident, not a substitute for backups or cryptographic signing.
+This detects edits, missing links, parse failures, bad receipt signatures, and transparency-chain tampering. Event hashing and signed receipts are tamper-evident, not a substitute for backups.
+
+## Import Boundary
+
+`.draftpack` import is the untrusted-input boundary. Every archive is
+validated fail-closed before a byte reaches the quarantine: path traversal,
+absolute/UNC paths, `.draft/` writes, symlinks, hardlinks, device/fifo
+entries, invalid UTF-8 names, oversized artifacts, zip-bomb archives, corrupt
+or wrong-schema manifests and receipts, changes-hash mismatches, and embedded
+content objects whose bytes do not match their content address are all
+rejected. Imported packs enter `imports/quarantine/`, lose all origin trust
+marks, and must be locally re-verified and approved before they can be saved.
+Saving an imported pack re-checks integrity, applies the embedded content only
+if every touched file matches the change's recorded base version (nothing is
+written on any conflict), and checkpoints the workspace first so the apply is
+rollback-safe.
+
+## Save Gate
+
+Save is blocked unless the pack is verified and approved, the canonical risk
+report exists and reports no unresolved critical risk, the workspace hash
+still matches the verification state, and the event, receipt, and
+transparency chains verify. These gates are governed by the resolved policy
+(see [policy.md](policy.md)); the defaults fail closed.
 
 ## Hooks And External Commands
 

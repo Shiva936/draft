@@ -1,6 +1,26 @@
 # Release Notes
 
-See [CHANGELOG.md](CHANGELOG.md) for the public changelog. This file keeps the v0.3.1 release note summary.
+See [CHANGELOG.md](CHANGELOG.md) for the public changelog.
+
+## v0.3.2
+
+Draft v0.3.2 makes Draft a verified changepack system. Where traditional version
+control isolates timelines, Draft treats each changepack as an independent,
+composable, portable, signed, and locally verifiable unit of change. It introduces secure
+pack import/export with quarantine and content-embedded, applyable `.draftpack`
+artifacts (format 2), the full imported-pack lifecycle (quarantine → local
+re-verification → approval → conflict-checked save), an enforced field-level
+policy layer governing the save and verification gates, Ed25519-signed receipts,
+a tamper-evident event and transparency history (with rollback by canonical
+signed receipt), hidden global/project `.draft/` metadata stores,
+an AG-UI Review Cockpit, LSIF-backed semantic impact, an explainable rule-first
+risk model that persists its ML-ready feature vector, and evidence-based
+test/fuzz selection.
+
+The goal is not to become another Git alternative — it is to be the safest local
+workflow layer for reviewing human and AI-generated changes before they become
+permanent. No `draft log`; use `draft event` with `--page`/`--limit`. IDs remain
+`chk_`/`pck_`/`rcp_`.
 
 ## v0.3.1
 

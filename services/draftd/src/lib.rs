@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use draft_core::error::{DraftError, DraftErrorKind, DraftResult};
-use draft_core::{App, DecisionKind};
+use draft_core::App;
 use draft_ipc::{ErrorObject, Request, Response};
 use draft_sessions::SessionManager;
 use draft_store::{ServiceJobRecord, ServiceJobStatus, ServiceStore, WorkspaceRecord};
@@ -81,9 +81,13 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
         "pack.show" => {
             with_path(&req, |p| app.pack_show(p, &string_param(&req, "pack")?)).into_response(id)
         }
-        "verify.run" => {
-            with_path(&req, |p| app.verify(p, &string_param(&req, "pack")?)).into_response(id)
-        }
+        "verify.run" => with_path(&req, |p| {
+            let pack = string_param(&req, "pack")?;
+            let report = app.verify(p, &pack)?;
+            app.verify_pack_v2(p, &pack, false, false)?;
+            Ok(report)
+        })
+        .into_response(id),
         "risk.assess" => {
             with_path(&req, |p| app.risk(p, &string_param(&req, "pack")?)).into_response(id)
         }
@@ -96,19 +100,19 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
         })
         .into_response(id),
         "decision.approve" => with_path(&req, |p| {
-            app.decide(
+            app.cockpit_decide(
                 p,
                 &string_param(&req, "pack")?,
-                DecisionKind::Approve,
+                true,
                 optional_string_param(&req, "reason"),
             )
         })
         .into_response(id),
         "decision.reject" => with_path(&req, |p| {
-            app.decide(
+            app.cockpit_decide(
                 p,
                 &string_param(&req, "pack")?,
-                DecisionKind::Reject,
+                false,
                 optional_string_param(&req, "reason"),
             )
         })
@@ -193,7 +197,12 @@ fn submit_job(store: &ServiceStore, app: &App, req: &Request) -> DraftResult<Ser
 fn run_job(app: &App, path: &Path, req: &Request, kind: &str) -> DraftResult<Value> {
     match kind {
         "scan" => to_value(app.status(path)?),
-        "verify" => to_value(app.verify(path, &string_param(req, "pack")?)?),
+        "verify" => {
+            let pack = string_param(req, "pack")?;
+            let report = app.verify(path, &pack)?;
+            app.verify_pack_v2(path, &pack, false, false)?;
+            to_value(report)
+        }
         "risk" => to_value(app.risk(path, &string_param(req, "pack")?)?),
         "compose" => to_value(app.compose(
             path,

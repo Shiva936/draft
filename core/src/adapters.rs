@@ -11,7 +11,10 @@ pub struct StackAdapter {
 pub struct ProtocolAdapter {
     pub id: &'static str,
     pub display_name: &'static str,
+    /// Which crate/command implements this adapter (or "experimental").
     pub scope: &'static str,
+    /// Honest status: "implemented" or "experimental" (no misleading stubs).
+    pub status: &'static str,
 }
 
 pub fn tier_a_stack_adapters() -> Vec<StackAdapter> {
@@ -64,27 +67,32 @@ pub fn protocol_adapters() -> Vec<ProtocolAdapter> {
         ProtocolAdapter {
             id: "mcp",
             display_name: "Model Context Protocol",
-            scope: "adapter-scaffold",
+            scope: "draft-adapters (draft mcp)",
+            status: "implemented",
         },
         ProtocolAdapter {
             id: "acp-client",
             display_name: "Agent Client Protocol",
-            scope: "adapter-scaffold",
+            scope: "draft-adapters (draft acp)",
+            status: "implemented",
         },
         ProtocolAdapter {
             id: "acp-comm",
             display_name: "Agent Communication Protocol",
-            scope: "adapter-scaffold",
+            scope: "draft-adapters (draft acp)",
+            status: "experimental",
         },
         ProtocolAdapter {
             id: "a2a",
             display_name: "Agent2Agent",
-            scope: "adapter-scaffold",
+            scope: "draft-adapters (draft a2a)",
+            status: "implemented",
         },
         ProtocolAdapter {
             id: "ag-ui",
             display_name: "AG-UI",
-            scope: "adapter-scaffold",
+            scope: "draft-agui (draft cockpit)",
+            status: "implemented",
         },
     ]
 }
@@ -94,7 +102,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_required_adapter_scaffolding() {
+    fn exposes_real_or_experimental_adapters() {
+        // No adapter may claim stub behavior as working.
+        for a in protocol_adapters() {
+            assert!(
+                a.status == "implemented" || a.status == "experimental",
+                "{} has misleading status {}",
+                a.id,
+                a.status
+            );
+        }
+    }
+
+    #[test]
+    fn exposes_required_adapters() {
         let stacks: Vec<_> = tier_a_stack_adapters().into_iter().map(|a| a.id).collect();
         for required in [
             "rust",

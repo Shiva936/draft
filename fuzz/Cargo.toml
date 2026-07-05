@@ -1,0 +1,80 @@
+# Standalone cargo-fuzz crate (nightly): `cargo +nightly fuzz run <target>`.
+# Detached from the main workspace so stable builds/CI never require libFuzzer.
+# The guaranteed, stable coverage lives in core/tests/security_fixtures.rs.
+[package]
+name = "draft-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+draft-core = { path = "../core" }
+draft-adapters = { path = "../services/adapters" }
+serde_json = "1.0"
+tempfile = "3"
+
+[[bin]]
+name = "import_parser"
+path = "fuzz_targets/import_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "draftpack_reader"
+path = "fuzz_targets/draftpack_reader.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "manifest_parser"
+path = "fuzz_targets/manifest_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "receipt_parser"
+path = "fuzz_targets/receipt_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "event_parser"
+path = "fuzz_targets/event_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "path_sanitizer"
+path = "fuzz_targets/path_sanitizer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "rollback_resolver"
+path = "fuzz_targets/rollback_resolver.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "diff_parser"
+path = "fuzz_targets/diff_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "adapter_message"
+path = "fuzz_targets/adapter_message.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "agui_request"
+path = "fuzz_targets/agui_request.rs"
+test = false
+doc = false

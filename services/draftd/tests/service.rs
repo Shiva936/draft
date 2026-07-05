@@ -145,8 +145,10 @@ fn daemon_dispatcher_covers_control_plane() {
         "receipt.list",
         json!({ "path": workspace.path().display().to_string() }),
     );
-    let receipt_id = receipts.result.unwrap()[0]["id"]
+    let first_receipt = &receipts.result.as_ref().unwrap()[0];
+    let receipt_id = first_receipt["id"]
         .as_str()
+        .or_else(|| first_receipt["receipt_id"].as_str())
         .unwrap()
         .to_string();
     let resp = call(

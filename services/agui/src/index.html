@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="draft-csrf" content="__CSRF__" />
+<title>Draft Review Cockpit</title>
+<style>
+  :root { --bg:#0e1116; --panel:#171b22; --line:#272d38; --fg:#e6edf3; --muted:#8b949e;
+    --low:#3fb950; --medium:#d29922; --high:#f85149; --critical:#da3633; --accent:#388bfd; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:12px 18px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
+  header h1 { font-size:15px; margin:0; letter-spacing:.5px; }
+  .muted { color:var(--muted); }
+  main { display:grid; grid-template-columns:320px 1fr; height:calc(100vh - 50px); }
+  #list { border-right:1px solid var(--line); overflow:auto; }
+  #detail { overflow:auto; padding:18px; }
+  .pack { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .pack:hover { background:var(--panel); }
+  .pack.active { background:var(--panel); border-left:3px solid var(--accent); }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid var(--line); }
+  .imported { color:var(--medium); border-color:var(--medium); }
+  .risk-low{color:var(--low)} .risk-medium{color:var(--medium)} .risk-high{color:var(--high)} .risk-critical{color:var(--critical)}
+  .tabs { display:flex; gap:6px; margin:10px 0 16px; flex-wrap:wrap; }
+  .tabs button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; }
+  .tabs button.active { border-color:var(--accent); color:var(--accent); }
+  pre { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; overflow:auto; }
+  table { width:100%; border-collapse:collapse; }
+  td,th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); font-size:13px; }
+  .actions button { margin-right:8px; padding:8px 16px; border-radius:6px; border:1px solid var(--line); cursor:pointer; }
+  .approve { background:#1a7f37; color:#fff; border:none; } .reject { background:#a40e26; color:#fff; border:none; }
+  .bar { padding:12px 18px; border-top:1px solid var(--line); display:flex; gap:10px; align-items:center; }
+  input[type=file]{ color:var(--muted); }
+  .ok{color:var(--low)} .bad{color:var(--high)}
+</style>
+</head>
+<body>
+<header>
+  <h1>DRAFT · Review Cockpit</h1>
+  <span class="muted">verified changepacks — local only</span>
+  <span id="status" class="muted" style="margin-left:auto"></span>
+</header>
+<main>
+  <div id="list"></div>
+  <div id="detail"><p class="muted">Select a pack to review.</p></div>
+</main>
+<div class="bar">
+  <button onclick="loadPacks()">↻ Refresh</button>
+  <button onclick="exportSelected()">⤓ Export selected</button>
+  <label>Import: <input type="file" id="importFile" accept=".draftpack" onchange="importPack()"></label>
+  <a href="#" onclick="showEvents();return false" class="muted">Event timeline →</a>
+</div>
+<script>
+const csrf = document.querySelector('meta[name=draft-csrf]').content;
+let packs = [], current = null, tab = 'detail';
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { const t = await r.text(); throw new Error(t || r.statusText); }
+  const ct = r.headers.get('content-type')||'';
+  return ct.includes('json') ? r.json() : r.text();
+}
+function post(path, body, isJson=true) {
+  const headers = { 'x-draft-csrf': csrf };
+  if (isJson) headers['content-type']='application/json';
+  return api(path, { method:'POST', headers, body: isJson?JSON.stringify(body):body });
+}
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+async function loadPacks() {
+  try {
+    packs = await api('/packs');
+    document.getElementById('status').textContent = packs.length + ' packs';
+    renderList();
+  } catch(e){ document.getElementById('status').textContent = 'error: '+e.message; }
+}
+function renderList() {
+  const el = document.getElementById('list');
+  el.innerHTML = packs.map(p => {
+    const imp = p.import_state && p.import_state !== 'none';
+    return `<div class="pack ${current===p.pack_id?'active':''}" onclick="selectPack('${p.pack_id}')">
+      <div><strong>${esc(p.name)}</strong> ${imp?'<span class="tag imported">quarantined</span>':''}</div>
+      <div class="muted">${esc(p.pack_id)} · ${esc(p.intent)} · ${esc(p.save_state)}</div>
+    </div>`;
+  }).join('') || '<p class="muted" style="padding:14px">No packs yet.</p>';
+}
+async function selectPack(id){ current=id; tab='detail'; renderList(); await renderDetail(); }
+
+async function renderDetail() {
+  const d = document.getElementById('detail');
+  if (!current) { d.innerHTML='<p class="muted">Select a pack.</p>'; return; }
+  const pack = await api('/packs/'+current);
+  const tabs = ['detail','diff','risk','receipts'];
+  let body = '';
+  if (tab==='detail') body = detailView(pack);
+  else if (tab==='diff') body = '<pre>'+esc(await api('/packs/'+current+'/diff')||'(no diff)')+'</pre>';
+  else if (tab==='risk') body = riskView(await api('/packs/'+current+'/risk'));
+  else if (tab==='receipts') body = receiptView(await api('/packs/'+current+'/receipts'));
+  d.innerHTML = `<h2>${esc(pack.manifest.name)} <span class="muted">${esc(pack.lifecycle)}</span></h2>
+    <div class="tabs">${tabs.map(t=>`<button class="${t===tab?'active':''}" onclick="setTab('${t}')">${t}</button>`).join('')}</div>
+    ${body}
+    <div class="actions" style="margin-top:18px">
+      <button class="approve" onclick="decide(true)">Approve</button>
+      <button class="reject" onclick="decide(false)">Reject</button>
+    </div>`;
+}
+function setTab(t){ tab=t; renderDetail(); }
+function detailView(p){
+  const m=p.manifest;
+  return `<table>
+    <tr><td>Pack id</td><td>${esc(m.pack_id)}</td></tr>
+    <tr><td>Intent</td><td>${esc(m.intent)}</td></tr>
+    <tr><td>Verified</td><td>${p.verified?'<span class=ok>yes</span>':'<span class=bad>no</span>'}</td></tr>
+    <tr><td>Approval</td><td>${esc(m.approval_state)}</td></tr>
+    <tr><td>Save</td><td>${esc(m.save_state)}</td></tr>
+    <tr><td>Import</td><td>${esc(m.import_state)}</td></tr>
+    <tr><td>Symbols touched</td><td>${(p.symbols_touched||[]).join(', ')||'—'}</td></tr>
+    <tr><td>Public API changed</td><td>${(p.public_api_changed||[]).join(', ')||'—'}</td></tr>
+    <tr><td>Workspace hash</td><td class=muted>${esc(m.target_workspace_hash)}</td></tr>
+  </table>`;
+}
+function riskView(r){
+  if(!r||r===null) return '<p class="muted">No risk report yet — verify the pack.</p>';
+  return `<p>Risk: <strong class="risk-${r.risk_level}">${esc(r.risk_level)}</strong> (${r.risk_score}/100)</p>
+    <h4>Explanations</h4><ul>${(r.explanations||[]).map(e=>`<li>${esc(e)}</li>`).join('')}</ul>
+    <h4>Required actions</h4><ul>${(r.required_actions||[]).map(e=>`<li>${esc(e)}</li>`).join('')}</ul>`;
+}
+function receiptView(rs){
+  if(!rs||!rs.length) return '<p class="muted">No receipts.</p>';
+  return `<table><tr><th>Receipt</th><th>Event</th><th>Algo</th><th>Key</th></tr>${
+    rs.map(r=>`<tr><td>${esc(r.receipt_id)}</td><td>${esc(r.event_type)}</td><td>${esc(r.signature_algorithm)}</td><td class=muted>${esc(r.public_key_id)}</td></tr>`).join('')}</table>`;
+}
+async function decide(approve){
+  try { await post('/packs/'+current+'/'+(approve?'approve':'reject'), {reason:'via cockpit'});
+    await loadPacks(); await renderDetail();
+  } catch(e){ alert((approve?'Approve':'Reject')+' failed:\n'+e.message); }
+}
+async function exportSelected(){
+  if(!current) return alert('Select a pack first.');
+  try { const r = await post('/packs/export', {pack_id:current}); alert('Exported to '+r.output); }
+  catch(e){ alert('Export failed:\n'+e.message); }
+}
+async function importPack(){
+  const f = document.getElementById('importFile').files[0]; if(!f) return;
+  try { const buf = await f.arrayBuffer();
+    const r = await post('/packs/import', new Uint8Array(buf), false);
+    alert('Imported '+r.pack_id+' → quarantine ('+r.name+')'); await loadPacks();
+  } catch(e){ alert('Import rejected:\n'+e.message); }
+}
+async function showEvents(){
+  const ev = await api('/events');
+  document.getElementById('detail').innerHTML = '<h2>Event timeline</h2><table><tr><th>Time</th><th>Type</th><th>Subject</th><th>Receipt</th></tr>'+
+    ev.map(e=>`<tr><td class=muted>${esc(e.time)}</td><td>${esc(e.type)}</td><td>${esc(e.subject_id||'')}</td><td class=muted>${esc(e.receipt_id||'')}</td></tr>`).join('')+'</table>';
+}
+loadPacks();
+</script>
+</body>
+</html>

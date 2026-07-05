@@ -1,6 +1,6 @@
 [package]
 name = "draft-core"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 
 [features]
@@ -21,3 +21,19 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = "3.8" # also needed for some core testing/ops if required, keeping it here
 blake3 = "1.8.5"
 zstd = "0.13.3"
+# v0.3.2: signed receipts, portable packs, encoding.
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+base64 = "0.22"
+tar = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
+[dev-dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+criterion = { version = "0.5", default-features = false }
+
+[[bench]]
+name = "bench"
+harness = false

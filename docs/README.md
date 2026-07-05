@@ -1,6 +1,6 @@
 # Draft Documentation
 
-Draft v0.3.1 is organized around local verified ChangePacks. The docs are written for users, agent actors, contributors, and maintainers of the open-source project.
+Draft v0.3.2 is organized around local verified changepacks. The docs are written for users, agent actors, contributors, and maintainers of the open-source project.
 
 ## Start Here
 
@@ -13,7 +13,7 @@ Draft v0.3.1 is organized around local verified ChangePacks. The docs are writte
 - [Safety Model](safety-model.md) explains Draft’s local safety boundaries.
 - [Security](security.md) documents the safety model and threat boundaries.
 - [FAQ](faq.md) answers common public-project questions.
-- [Release Compliance](release-compliance.md) tracks production-readiness against the v0.3.1 planning intent.
+- [Release Compliance](release-compliance.md) tracks production-readiness against the v0.3.2 planning intent.
 
 ## Concept References
 
@@ -36,8 +36,8 @@ Draft v0.3.1 is organized around local verified ChangePacks. The docs are writte
 - [Draft Ignore Rules](ignore-rules.md)
 - [Hooks](hooks.md)
 
-## v0.3.1 Boundary
+## v0.3.2 Boundary
 
-Draft v0.3.1 is local-first. It stores verified ChangePacks in `.draft/` and supports optional opaque `hooks.*` command execution without implementing network, hosted-service, or native external-action behavior.
+Draft v0.3.2 is local-first. It stores verified, signed, portable changepacks in `.draft/`, supports optional opaque `hooks.*` command execution, and does not implement network, hosted-service, marketplace, cloud sync, or native external-action behavior.
 
 Draft does not read external tool metadata to decide what changed. The workspace scanner walks files directly and applies only Draft’s own rules plus the hard `.draft/` exclusion.

@@ -23,5 +23,5 @@ Include:
 
 ## Boundaries
 
-Draft v0.3.1 is local-first. It does not provide hosted collaboration, remote synchronization, pull requests, deployment, or native VCS operations. Hook commands may call external tools, but those commands are user-owned shell behavior.
+Draft is local-first. It does not provide hosted collaboration, remote synchronization, pull requests, deployment, or native VCS operations. Hook commands may call external tools, but those commands are user-owned shell behavior.
 
