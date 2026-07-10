@@ -1609,10 +1609,11 @@ impl App {
                 RunStatus::Failed,
                 None,
                 None,
-                Some(-1).filter(|_| {
+                {
                     let _ = e;
                     true
-                }),
+                }
+                .then_some(-1),
             ),
         };
         let result = Snapshotter::new(&ws)?.create_snapshot()?;

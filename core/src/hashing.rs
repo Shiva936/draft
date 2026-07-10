@@ -216,7 +216,7 @@ fn workspace_hash_inner(root: &Path, cache_file: Option<&Path>) -> DraftResult<S
         hasher.update(e.rel.as_bytes());
         hasher.update([0u8]);
         hasher.update(e.content_hash.as_bytes());
-        hasher.update([b'\n']);
+        hasher.update(*b"\n");
     }
     let digest = hasher.finalize();
     let mut s = String::from("sha256:");
