@@ -1,0 +1,30 @@
+{
+  "name": "save-merge-and-dispose",
+  "expect": "saved_disposed",
+  "object": "save",
+  "save_mode": "merge_and_dispose",
+  "payload_schema": "stable-head.schema.json",
+  "payload": {
+    "schema_version": "0.3.3",
+    "id": "rcp_9f8e7d6c5b4a",
+    "receipt_id": "rcp_9f8e7d6c5b4a",
+    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "previous_stable_head": "rcp_0a1b2c3d4e5f",
+    "finalized_pack_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "finalized_pack_summary": { "pack_id": "pck_aaaaaaaaaaaa", "name": "auth-refactor", "affected_paths": ["src/a.rs"] },
+    "verification_result": "verified",
+    "save_mode": "merge_and_dispose",
+    "timestamp": "2026-07-01T00:00:00Z",
+    "stable_head_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "invalid_payload": {
+    "schema_version": "0.3.3",
+    "id": "rcp_9f8e7d6c5b4a",
+    "receipt_id": "rcp_9f8e7d6c5b4a",
+    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "base_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "verification_result": "verified",
+    "timestamp": "2026-07-01T00:00:00Z"
+  }
+}

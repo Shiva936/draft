@@ -99,7 +99,7 @@ fn builtin_defaults() -> Value {
     // Kept intentionally small; each key has a safe, offline value.
     let toml = r#"
 [core]
-schema_version = "0.3.2"
+schema_version = "0.3.3"
 
 [risk]
 block_on_critical = true
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn falls_back_to_builtin_default() {
         let r = ConfigResolver::load(None, None);
-        assert_eq!(r.get("core.schema_version").as_deref(), Some("0.3.2"));
+        assert_eq!(r.get("core.schema_version").as_deref(), Some("0.3.3"));
         assert_eq!(r.source_of("core.schema_version"), Some("default"));
         assert_eq!(r.get("agui.port").as_deref(), Some("4317"));
     }

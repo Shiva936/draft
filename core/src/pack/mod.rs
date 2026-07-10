@@ -1,4 +1,4 @@
-//! Canonical v0.3.2 pack model: manifest, lockfile, intents, and the pack state
+//! Canonical v0.3.3 pack model: manifest, lockfile, intents, and the pack state
 //! machine (PRD §9.5/9.6/9.11/9.12, TDD §17–21).
 //!
 //! A pack lives at `.draft/packs/pck_<id>/` and is described by an immutable

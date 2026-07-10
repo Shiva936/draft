@@ -1,0 +1,17 @@
+{
+  "name": "independent-packs",
+  "expect": "composition_verified",
+  "object": "composition",
+  "notes": "non-overlapping packs compose without dependency ordering",
+  "payload_schema": "composition.schema.json",
+  "payload": {
+    "id": "cmp_1b2c3d4e5f6a",
+    "base_stable_head": "rcp_0a1b2c3d4e5f",
+    "pack_ids": ["pck_aaaaaaaaaaaa", "pck_bbbbbbbbbbbb"],
+    "composition_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dependency_order": ["pck_aaaaaaaaaaaa", "pck_bbbbbbbbbbbb"],
+    "status": "verified",
+    "affected_paths": ["src/a.rs", "src/b.rs"],
+    "conflicts": []
+  }
+}

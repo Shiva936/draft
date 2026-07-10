@@ -28,7 +28,7 @@ if ($envUpdatePath -and ($envUpdatePath -eq "1" -or $envUpdatePath.ToLowerInvari
 $arch = $env:PROCESSOR_ARCHITECTURE
 switch ($arch) {
     "AMD64" { $Target = "x86_64-pc-windows-msvc" }
-    default { Fail "unsupported Windows CPU architecture for v0.3.1: $arch" }
+    default { Fail "unsupported Windows CPU architecture for v0.3.x: $arch" }
 }
 
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("draft-install-" + [System.Guid]::NewGuid().ToString("N"))

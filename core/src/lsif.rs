@@ -1,6 +1,6 @@
 //! Basic LSIF-style symbol index (PRD §9.17, TDD §34).
 //!
-//! v0.3.2 ships a lightweight, offline symbol index — the "basic" backend the
+//! v0.3.3 ships a lightweight, offline symbol index — the "basic" backend the
 //! spec permits when a full LSIF toolchain is unavailable. It persists the model
 //! `file -> symbol -> reference -> pack` in a SQLite database under
 //! `.draft/lsif/index.db` and answers the impact questions Draft needs: which

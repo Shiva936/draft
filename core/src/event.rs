@@ -1,4 +1,4 @@
-//! Canonical v0.3.2 event engine (PRD §9.9, TDD §13).
+//! Canonical v0.3.3 event engine (PRD §9.9, TDD §13).
 //!
 //! The event log is the append-only, hash-chained, indexed, tamper-detectable
 //! record of trust-relevant actions, stored at `.draft/events/event.log`
@@ -19,34 +19,82 @@ use std::io::Write;
 pub const GENESIS_HASH: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
-/// The ten trust-relevant event types that also produce signed receipts.
+/// Trust-relevant event types that may produce signed receipts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EventKind {
+    InitStarted,
+    InitialStableBaseCreated,
     CheckpointCreated,
     PackCreated,
     PackVerified,
+    PackAccepted,
     PackApproved,
     PackRejected,
     PackSaved,
+    CompositionCreated,
+    CompositionVerified,
+    CompositionFailed,
+    SaveStarted,
+    SaveHookStarted,
+    SaveHookCompleted,
+    SaveHookFailed,
+    ProjectStateVerificationStarted,
+    ProjectStateVerified,
+    ProjectStateVerificationFailed,
+    StableHeadAdvanced,
+    SaveFinalized,
+    PackDisposed,
+    PackDisposalFailed,
     PackExported,
     PackImported,
     PackComposed,
     RollbackPerformed,
+    CloseStarted,
+    CloseCompleted,
+    CloseFailed,
+    GcStarted,
+    GcCompleted,
+    GcFailed,
+    MigrationCompleted,
 }
 
 impl EventKind {
     pub fn as_str(&self) -> &'static str {
         match self {
+            EventKind::InitStarted => "InitStarted",
+            EventKind::InitialStableBaseCreated => "InitialStableBaseCreated",
             EventKind::CheckpointCreated => "CheckpointCreated",
             EventKind::PackCreated => "PackCreated",
             EventKind::PackVerified => "PackVerified",
+            EventKind::PackAccepted => "PackAccepted",
             EventKind::PackApproved => "PackApproved",
             EventKind::PackRejected => "PackRejected",
             EventKind::PackSaved => "PackSaved",
+            EventKind::CompositionCreated => "CompositionCreated",
+            EventKind::CompositionVerified => "CompositionVerified",
+            EventKind::CompositionFailed => "CompositionFailed",
+            EventKind::SaveStarted => "SaveStarted",
+            EventKind::SaveHookStarted => "SaveHookStarted",
+            EventKind::SaveHookCompleted => "SaveHookCompleted",
+            EventKind::SaveHookFailed => "SaveHookFailed",
+            EventKind::ProjectStateVerificationStarted => "ProjectStateVerificationStarted",
+            EventKind::ProjectStateVerified => "ProjectStateVerified",
+            EventKind::ProjectStateVerificationFailed => "ProjectStateVerificationFailed",
+            EventKind::StableHeadAdvanced => "StableHeadAdvanced",
+            EventKind::SaveFinalized => "SaveFinalized",
+            EventKind::PackDisposed => "PackDisposed",
+            EventKind::PackDisposalFailed => "PackDisposalFailed",
             EventKind::PackExported => "PackExported",
             EventKind::PackImported => "PackImported",
             EventKind::PackComposed => "PackComposed",
             EventKind::RollbackPerformed => "RollbackPerformed",
+            EventKind::CloseStarted => "CloseStarted",
+            EventKind::CloseCompleted => "CloseCompleted",
+            EventKind::CloseFailed => "CloseFailed",
+            EventKind::GcStarted => "GcStarted",
+            EventKind::GcCompleted => "GcCompleted",
+            EventKind::GcFailed => "GcFailed",
+            EventKind::MigrationCompleted => "MigrationCompleted",
         }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "draft-core"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 
 [features]
@@ -21,7 +21,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 tempfile = "3.8" # also needed for some core testing/ops if required, keeping it here
 blake3 = "1.8.5"
 zstd = "0.13.3"
-# v0.3.2: signed receipts, portable packs, encoding.
+# v0.3.3: signed receipts, portable packs, encoding.
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"

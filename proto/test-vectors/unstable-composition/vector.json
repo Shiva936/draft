@@ -1,0 +1,20 @@
+{
+  "name": "unstable-composition",
+  "expect": "project_state_failed",
+  "object": "project-state",
+  "notes": "project-state verification fails and stable_head does not advance",
+  "payload_schema": "verification.schema.json",
+  "payload": {
+    "verification_key": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "failed",
+    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "checks": [
+      { "name": "stable_head_integrity", "passed": false, "detail": "stable_head metadata failed integrity verification" }
+    ]
+  },
+  "invalid_payload": {
+    "verification_key": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "maybe",
+    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

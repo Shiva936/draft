@@ -1,0 +1,14 @@
+{
+  "name": "save-dispose-only",
+  "expect": "disposed_without_merge",
+  "object": "save",
+  "save_mode": "dispose_only",
+  "payload_schema": "config.schema.json",
+  "payload": {
+    "save": { "pack_disposal": "dispose_only" },
+    "hooks": { "save": { "before": [], "after": [] } }
+  },
+  "invalid_payload": {
+    "save": { "pack_disposal": "delete_everything" }
+  }
+}

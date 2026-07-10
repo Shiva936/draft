@@ -15,5 +15,5 @@ Draft stores events as JSON Lines under `.draft/events/`. Each event includes a 
 ## Consequences
 
 - Events can be streamed by services and inspected by users.
-- v0.3.1 exposed direct event-chain verification; v0.3.2 verifies event integrity through `draft doctor` and `draft receipt verify --all`.
-- The event stream is not a backup system. v0.3.2 links trust-relevant events to signed receipts and the local transparency chain.
+- v0.3.1 exposed direct event-chain verification; v0.3.3 verifies event integrity through `draft doctor` and `draft receipt verify --all`.
+- The event stream is not a backup system. v0.3.3 links trust-relevant events to signed receipts and the local transparency chain.

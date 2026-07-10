@@ -9,7 +9,7 @@ use draft_core::error::{DraftError, DraftErrorKind};
 use draft_core::App;
 
 #[derive(Parser)]
-#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft v0.3.2 - Verified Composable Changepacks")]
+#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft v0.3.3 - Verified Composable Changepacks")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -157,7 +157,7 @@ enum Command {
     },
     /// Verify a pack: risk + evidence-based test/fuzz selection.
     Verify {
-        /// Pack to verify (pck_id or name); enables v0.3.2 evidence verification.
+        /// Pack to verify (pck_id or name); enables v0.3.3 evidence verification.
         target: Option<String>,
         #[arg(short = 'p')]
         pack: Option<String>,
@@ -269,6 +269,13 @@ enum Command {
         #[command(subcommand)]
         action: ReceiptAction,
     },
+    /// Remove Draft metadata from this workspace.
+    Close {
+        #[arg(long)]
+        force: bool,
+    },
+    /// Run safe Draft metadata maintenance.
+    Gc,
     /// Manage storage.
     Storage {
         #[command(subcommand)]
@@ -685,14 +692,11 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             IgnoreAction::List { json } => render_ignore(app.ignore_list(&cwd)?, json),
         },
         Command::Status {
-            pack,
-            component,
-            full,
+            pack: _pack,
+            component: _component,
+            full: _full,
             json,
-        } => render_status(
-            app.status_v031(&cwd, pack.as_deref(), component.as_deref(), full)?,
-            json,
-        ),
+        } => render_status(app.status(&cwd)?, json),
         Command::Event {
             page,
             limit,
@@ -896,7 +900,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             fuzz,
             json,
         } => {
-            // v0.3.2 evidence verification triggers on a positional target or an
+            // v0.3.3 evidence verification triggers on a positional target or an
             // evidence flag; legacy `verify -p <pack>` stays on the legacy path.
             if target.is_some() || explain || full || fuzz {
                 let reference = target.or(pack);
@@ -908,7 +912,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                     app.verify_selected(&cwd, Some(refstr))?;
                 }
                 let report = app.verify_pack_v2(&cwd, refstr, full, fuzz)?;
-                render_verify_v2(report, explain, json)
+                render_verify(report, explain, json)
             } else {
                 let reference = app.resolve_pack_arg(&cwd, pack.as_deref())?;
                 render_json_or_text(
@@ -1070,6 +1074,8 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 }
             }
         },
+        Command::Close { force } => render_close(app.close(&cwd, force)?),
+        Command::Gc => render_gc(app.gc(&cwd)?),
         Command::Storage { action } => match action {
             StorageAction::Stats { json } => {
                 render_json_or_text(app.storage_stats(&cwd)?, json, "Storage stats")
@@ -1103,6 +1109,9 @@ fn render_init(report: draft_core::InitReport, json: bool) -> Result<(), DraftEr
     output::field("Workspace", &report.workspace_id);
     output::field("Root", &report.root);
     output::field(".draft", &report.draft_dir);
+    output::field("Stable head", &report.stable_head_id);
+    output::field("Stable receipt", &report.stable_head_receipt_id);
+    output::field("Workspace hash", &report.workspace_hash);
     Ok(())
 }
 
@@ -1153,8 +1162,8 @@ fn print_doctor_scope(scope: &draft_core::DoctorScope) {
     }
 }
 
-fn render_verify_v2(
-    report: draft_core::VerifyV2Report,
+fn render_verify(
+    report: draft_core::VerifyReport,
     explain: bool,
     json: bool,
 ) -> Result<(), DraftError> {
@@ -1280,6 +1289,25 @@ fn render_ledger_verification(
     }
 }
 
+fn render_close(report: draft_core::CloseReport) -> Result<(), DraftError> {
+    output::success("Draft closed");
+    output::field(".draft removed", &report.draft_dir);
+    output::field("Forced", &report.forced.to_string());
+    output::field("Pending packs", &report.pending_packs.to_string());
+    Ok(())
+}
+
+fn render_gc(report: draft_core::gc::GcReport) -> Result<(), DraftError> {
+    output::success("Draft GC complete");
+    output::field("Removed entries", &report.removed_entries.to_string());
+    output::field("Stable head valid", &report.stable_head_valid.to_string());
+    output::field(
+        "Active packs preserved",
+        &report.active_packs_preserved.to_string(),
+    );
+    Ok(())
+}
+
 fn ok_word(ok: bool) -> &'static str {
     if ok {
         "OK"
@@ -1379,8 +1407,9 @@ fn render_json_or_text<T: serde::Serialize>(
     if json {
         output::print_json(&value);
     } else {
+        // Human-readable by default (SRS-FR-130/131): never JSON without a flag.
         output::success(label);
-        output::print_json(&value);
+        output::print_human(&value);
     }
     Ok(())
 }

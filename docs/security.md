@@ -1,6 +1,6 @@
 # Security Model
 
-Draft v0.3.2 is a local tool. Its security model focuses on protecting the local workspace, preserving signed audit evidence, and preventing Draft metadata from entering user change candidates.
+Draft v0.3.3 is a local tool. Its security model focuses on protecting the local workspace, preserving signed audit evidence, and preventing Draft metadata from entering user change candidates.
 
 ## Trust Boundary
 

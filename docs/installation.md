@@ -1,10 +1,6 @@
 # Installation
 
-<<<<<<< Updated upstream
-Draft v0.3.1 publishes versioned GitHub Release binaries for Linux, macOS, WSL, and native Windows.
-=======
-Draft v0.3.2 is a Rust workspace. The current public path is building the CLI from source.
->>>>>>> Stashed changes
+Draft v0.3.3 publishes versioned GitHub Release binaries for Linux, macOS, WSL, and native Windows. Building from source is also supported.
 
 ## Requirements
 
@@ -39,7 +35,7 @@ The installers resolve the latest GitHub Release from `Shiva936/draft`, download
 | macOS Apple Silicon | `aarch64-apple-darwin` |
 | Windows x86_64 | `x86_64-pc-windows-msvc` |
 
-Windows arm64 is not a v0.3.1 binary target. Unsupported systems fail before download.
+Windows arm64 is not a v0.3.3 binary target. Unsupported systems fail before download.
 
 ## Install Location and PATH
 

@@ -1,0 +1,27 @@
+{
+  "name": "tampered-receipt",
+  "expect": "invalid",
+  "object": "receipt",
+  "notes": "receipt hash/event linkage must fail after payload mutation",
+  "payload_schema": "receipt.schema.json",
+  "payload": {
+    "receipt_id": "rcp_9f8e7d6c5b4a",
+    "receipt_type": "StableHeadAdvanced",
+    "stable_head_before": "rcp_0a1b2c3d4e5f",
+    "stable_head_after": "rcp_9f8e7d6c5b4a",
+    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "verification_result": "verified",
+    "save_mode": "merge_and_dispose",
+    "timestamp": "2026-07-01T00:00:00Z",
+    "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "invalid_payload": {
+    "receipt_id": "rcp_9f8e7d6c5b4a",
+    "receipt_type": "StableHeadAdvanced",
+    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "verification_result": "verified",
+    "timestamp": "2026-07-01T00:00:00Z",
+    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

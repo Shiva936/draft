@@ -1,24 +1,24 @@
-//! `draft-core` — Draft-native v0.3.2 verified-changepack primitives.
+//! `draft-core` — Draft-native v0.3.3 verified stable-base primitives.
 //!
-//! v0.3.2 is local-first and daemonless. It maintains two hidden `.draft/`
-//! metadata stores — a global user/device store (`~/.draft/`) and a project
-//! store (`<root>/.draft/`) — and owns scanning, snapshots, changepacks,
-//! signed receipts, hash-chained events, a tamper-evident transparency log,
-//! portable `.draftpack` import/export, verification/risk/LSIF evidence,
-//! and hardened save/rollback.
+//! v0.3.3 is local-first and branchless. Project stability is represented by
+//! verified stable base states and `stable_head`, while changepacks remain
+//! temporary until `draft save` finalizes and disposes them.
 
 pub mod adapters;
 mod app;
 pub mod common;
+pub mod composition;
 pub mod config;
 pub mod error;
 pub mod event;
 pub mod fsutil;
+pub mod gc;
 pub mod hashing;
 pub mod hidden;
 pub mod home;
 pub mod identity;
 pub mod importexport;
+pub mod index;
 pub mod layout;
 pub mod ledger;
 pub mod lock;
@@ -27,15 +27,16 @@ pub mod pack;
 pub mod pathguard;
 pub mod policy;
 pub mod receipt;
-pub mod riskv2;
+pub mod risk;
 pub mod signing;
+pub mod stable;
 pub mod transparency;
-pub mod verifyv2;
+pub mod verification;
 
 /// The Draft version string used in metadata, receipts, and `--version`.
-pub const DRAFT_VERSION: &str = "0.3.2";
+pub const DRAFT_VERSION: &str = "0.3.3";
 
-/// Schema version stamped into every persisted v0.3.2 format.
-pub const DRAFT_SCHEMA_VERSION: &str = "0.3.2";
+/// Schema version stamped into every persisted v0.3.3 format.
+pub const DRAFT_SCHEMA_VERSION: &str = "0.3.3";
 
 pub use app::*;

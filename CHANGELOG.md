@@ -2,6 +2,98 @@
 
 All notable public changes to Draft are tracked here.
 
+## v0.3.3
+
+Draft v0.3.3 finalizes the local branchless stability model: project stability
+is defined by verified stable base states, not branches. Changepacks remain
+independent, composable, portable, signed, locally verifiable units of change —
+and are now temporary until `draft save` finalizes and disposes them.
+
+### Added
+
+- Top-level `proto/` protocol contract layer: 16 specs, 8 JSON schemas, and 13
+  test vectors with schema-validated positive/negative payload fixtures.
+- Stable base and `stable_head`: `draft init` creates the initial verified
+  stable base and writes `stable_head` with an `InitialStableBaseCreated`
+  receipt; `stable_head` metadata is hash-verified on every read.
+- Project-state verification gate: before `stable_head` advances, Draft
+  re-verifies the composed final state (workspace hash, `.draft/` exclusion,
+  pack evidence, previous `stable_head` integrity, and full trust-ledger
+  verification), recording `ProjectStateVerificationStarted`,
+  `ProjectStateVerified`, or `ProjectStateVerificationFailed`. Failure
+  preserves the pack and never advances `stable_head`.
+- `draft save` finalization pipeline with canonical events (`SaveStarted`,
+  `SaveHookStarted/Completed/Failed`, `StableHeadAdvanced`, `SaveFinalized`,
+  `PackDisposed`/`PackDisposalFailed`) and configurable save modes via
+  `[save].pack_disposal`: `merge_and_dispose` (default — merge into Draft's
+  stable base, advance `stable_head`, dispose) and `dispose_only` (delegate
+  permanence externally through hooks, dispose without advancing).
+- Phased save hooks: `[hooks.save].before` runs before finalization,
+  `[hooks.save].after` runs after `stable_head` advancement and before
+  disposal; hook failure fails the save and preserves pack metadata.
+- Changepack disposal with minimal stable metadata retention: successful saves
+  remove pack workspace/staging/review/verification/risk metadata; compact
+  provenance remains in `stable_head`, receipts, events, and indexes.
+- `draft close [--force]`: removes Draft metadata without touching project
+  files, refuses unsafe pending state by default, and records
+  `CloseStarted`/`CloseCompleted`/`CloseFailed`.
+- `draft gc`: maintenance under a lock — prunes disposed/orphaned pack
+  metadata and temp/cache files, rebuilds the stable-graph and affected-path
+  indexes, validates `stable_head`, and records `GcStarted`/`GcCompleted`/
+  `GcFailed`.
+- Composition validation for independent/dependent/conflicting packs:
+  hunk-aware conflict detection, topological dependency ordering with cycle
+  failure, a deterministic `composition_hash`, and `CompositionCreated`/
+  `CompositionVerified`/`CompositionFailed` events on `draft pack compose`
+  and `draft compose`.
+- Deterministic verification cache keys (`verification_key` over
+  `workspace_hash + config_hash + toolchain_hash + verification_command_hash +
+  environment_hash`) persisted in `verify.json`, plus new performance-ready
+  artifacts: a verification cache manifest, an affected-path index, and an
+  incremental workspace-hash cache.
+- Non-destructive migration from a v0.3.2 `.draft/`: `stable_head` is
+  initialized on first open, pending packs are preserved, nothing is disposed,
+  and a `MigrationCompleted` event is recorded.
+- Rollback guidance for disposed packs: `draft rollback pck_<id>` on a saved
+  and disposed pack fails clearly and points to the `rcp_<id>` receipt.
+
+### Changed
+
+- Default CLI output is human-readable everywhere; machine-readable JSON is
+  emitted only with `--json`, or `--raw` where already supported.
+- After-save hooks now run after `stable_head` advancement (and still before
+  disposal), matching the finalization design; before-save hook or
+  verification failure leaves `stable_head` unchanged.
+- The v0.3.2 `riskv2`/`verifyv2` modules are renamed to `risk`/`verification`
+  (same explainable rule-first risk engine and evidence-based selection, plus
+  the new project-state verification).
+- Saved changepacks are no longer retained in `.draft/`: disposal is the final
+  step of every successful save, so `.draft/` does not grow into a duplicate
+  history store.
+- `storage doctor` no longer applies the legacy `receipt_hash` rule to
+  canonical Ed25519-signed receipts (those verify through the trust ledger).
+
+### Safety
+
+- `stable_head` advances only after successful project-state verification.
+- Pack disposal happens only as the final successful step; every failure path
+  (hooks, verification, receipt write, disposal) preserves recoverable state.
+- Every `.draft/` path (any nesting, case-insensitive) remains hard-excluded
+  from pack/diff/import/export/save/rollback/scan/hash operations.
+- Fail closed on any trust/path/hash/receipt/event verification failure.
+
+### Compatibility
+
+- No `draft log`; `draft event` remains the event surface with only `--page`
+  and `--limit` (no `-p`/`-l`). Rollback still accepts `chk_`/`pck_`/`rcp_`.
+- Existing v0.3.2 workspaces migrate automatically and non-destructively.
+
+### Documentation
+
+- New docs: stability model, save modes, config, changepacks, composition,
+  events, Git workflows, Draft-only workflows, and DraftHub readiness
+  (v0.4.0 preview), alongside updated close/gc/hooks/receipts/rollback docs.
+
 ## v0.3.2
 
 Draft v0.3.2 turns Draft into a verified **changepack system**. Changepacks are

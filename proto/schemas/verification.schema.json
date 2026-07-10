@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Verification",
+  "type": "object",
+  "required": ["verification_key", "status", "workspace_hash"],
+  "properties": {
+    "verification_key": { "type": "string" },
+    "status": { "enum": ["verified", "failed"] },
+    "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "checks": { "type": "array" }
+  },
+  "additionalProperties": true
+}

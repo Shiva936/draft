@@ -72,4 +72,4 @@ adapter writes raw `.draft/` state or exposes signing keys.
 
 ## Reserved Boundary
 
-The `sync` crate is intentionally no-network in v0.3.2. It exists as a named boundary for later design work without changing current local-first behavior.
+The `sync` crate is intentionally no-network in v0.3.3. It exists as a named boundary for later design work without changing current local-first behavior.

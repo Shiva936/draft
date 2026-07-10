@@ -141,18 +141,19 @@ pub struct PackComposeReport {
     pub name: String,
     pub dependencies: Vec<String>,
     pub requires_reverification: bool,
+    pub composition_hash: String,
 }
 
-/// Report from `draft verify pck_<id>` (v0.3.2 evidence-based verification).
+/// Report from `draft verify pck_<id>` (v0.3.3 evidence-based verification).
 #[derive(Debug, Clone, Serialize)]
-pub struct VerifyV2Report {
+pub struct VerifyReport {
     pub pack_id: String,
     pub risk_level: String,
     pub risk_score: u32,
     pub explanations: Vec<String>,
     pub required_actions: Vec<String>,
-    pub selected_tests: Vec<crate::verifyv2::SelectedTest>,
-    pub selected_fuzz_targets: Vec<crate::verifyv2::SelectedFuzzTarget>,
+    pub selected_tests: Vec<crate::verification::SelectedTest>,
+    pub selected_fuzz_targets: Vec<crate::verification::SelectedFuzzTarget>,
     pub selection_reason: String,
     pub coverage_basis: String,
     pub symbols_touched: usize,
@@ -374,7 +375,7 @@ impl App {
             ));
         }
         layout.create_all()?;
-        // v0.3.2 canonical project store (events/receipts/transparency/packs/
+        // v0.3.3 canonical project store (events/receipts/transparency/packs/
         // imports/quarantine/exports/lsif/cache/adapters) + hidden `.draft/`.
         let project_paths = crate::layout::ProjectPaths::for_root(root);
         let hidden_status = project_paths.create_all()?;
@@ -414,6 +415,15 @@ impl App {
         };
         let store = EventStore::new(layout.clone(), meta.id.clone())?;
         if created {
+            let workspace_hash = crate::hashing::workspace_hash(root)?;
+            let ledger = crate::ledger::TrustLedger::open(root, meta.id.as_str())?;
+            ledger.record(
+                crate::event::EventKind::InitStarted,
+                None,
+                None,
+                workspace_hash,
+                serde_json::json!({ "root": root.display().to_string() }),
+            )?;
             store.append(
                 "repo.initialized",
                 None,
@@ -430,7 +440,7 @@ impl App {
             let pack_dir = layout.pack_dir(&base.id);
             ensure_dir(&pack_dir)?;
             write_json(&pack_dir.join("manifest.json"), &base)?;
-            // Also write a canonical v0.3.2 manifest for the (empty) base pack so
+            // Also write a canonical v0.3.3 manifest for the (empty) base pack so
             // it participates in inspect/depends/conflicts/compose. No trust
             // receipt is minted for the implicit base pack.
             write_base_canonical_manifest(root, &base.id, base_pack_name);
@@ -449,11 +459,29 @@ impl App {
                 serde_json::json!({ "name": base_pack_name }),
             )?;
         }
+        let stable_store = crate::stable::StableHeadStore::new(project_paths.clone());
+        let stable_head = if stable_store.exists() {
+            stable_store.read()?
+        } else {
+            let workspace_hash = crate::hashing::workspace_hash(root)?;
+            let ledger = crate::ledger::TrustLedger::open(root, meta.id.as_str())?;
+            let outcome = ledger.record(
+                crate::event::EventKind::InitialStableBaseCreated,
+                None,
+                None,
+                workspace_hash,
+                serde_json::json!({ "source": "init" }),
+            )?;
+            stable_store.initialize(root, outcome.receipt.receipt_id)?
+        };
         Ok(InitReport {
             workspace_id: meta.id.to_string(),
             root: root.display().to_string(),
             created,
             draft_dir: layout.draft_dir.display().to_string(),
+            stable_head_id: stable_head.id,
+            stable_head_receipt_id: stable_head.receipt_id,
+            workspace_hash: stable_head.workspace_hash,
         })
     }
 
@@ -467,12 +495,31 @@ impl App {
         })?;
         let layout = DraftLayout::for_root(&root);
         let meta = read_json::<WorkspaceMetadata>(&layout.workspace_json())?;
-        // One-time migration: a workspace created by v0.3.1 lacks the canonical
-        // v0.3.2 stores (transparency/, imports/quarantine/, lsif/, ...). Detect
-        // via the transparency dir and create the missing tree idempotently.
+        // One-time migration: older workspaces lack the canonical trust/stable
+        // stores. Create missing directories idempotently and initialize
+        // stable_head without disposing packs or silently advancing past the
+        // current verified workspace hash.
         let paths = crate::layout::ProjectPaths::for_root(&root);
-        if !paths.transparency_dir().exists() {
+        if !paths.transparency_dir().exists() || !paths.stable_head_dir().exists() {
             paths.create_all()?;
+        }
+        let stable_store = crate::stable::StableHeadStore::new(paths.clone());
+        if !stable_store.exists() {
+            let workspace_hash = crate::hashing::workspace_hash(&root)?;
+            let ledger = crate::ledger::TrustLedger::open(&root, meta.id.as_str())?;
+            let outcome = ledger.record(
+                crate::event::EventKind::MigrationCompleted,
+                None,
+                None,
+                workspace_hash,
+                serde_json::json!({
+                    "from": "0.3.2",
+                    "to": crate::DRAFT_SCHEMA_VERSION,
+                    "packs_preserved": true,
+                    "stable_head_advanced": false
+                }),
+            )?;
+            stable_store.initialize(&root, outcome.receipt.receipt_id)?;
         }
         Ok(Workspace {
             id: meta.id,
@@ -520,7 +567,7 @@ impl App {
         })
     }
 
-    // ---- v0.3.2 global store, doctor, identity, layered config ----------
+    // ---- v0.3.3 global store, doctor, identity, layered config ----------
 
     /// `draft init --global`: create the hidden global `~/.draft/` store,
     /// provision the actor identity + Ed25519 signing key, and seed the
@@ -687,7 +734,7 @@ impl App {
             Ok(_) => checks.push(DoctorCheck::ok("event-chain", "event hash chain intact")),
             Err(e) => checks.push(DoctorCheck::fail("event-chain", e.message)),
         }
-        // v0.3.2 trust ledger: canonical event log, receipts, transparency chain.
+        // v0.3.3 trust ledger: canonical event log, receipts, transparency chain.
         match crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str()) {
             Ok(ledger) => match ledger.verify_all() {
                 Ok(v) => {
@@ -866,16 +913,6 @@ impl App {
         Ok(status)
     }
 
-    pub fn status_v031(
-        &self,
-        cwd: &Path,
-        _pack: Option<&str>,
-        _component: Option<&str>,
-        _full: bool,
-    ) -> DraftResult<WorkspaceStatus> {
-        self.status(cwd)
-    }
-
     pub fn checkpoint(&self, cwd: &Path, message: &str) -> DraftResult<CheckpointReport> {
         let ws = self.open(cwd)?;
         let snapshot = Snapshotter::new(&ws)?.create_snapshot()?;
@@ -892,7 +929,7 @@ impl App {
             Some(snapshot.id.to_string()),
             serde_json::json!({ "message": message }),
         )?;
-        // v0.3.2 trust ledger: a checkpoint is a receipt-producing event. Record
+        // v0.3.3 trust ledger: a checkpoint is a receipt-producing event. Record
         // a canonical CheckpointCreated event with a signed receipt and a
         // transparency-chain entry bound to the current workspace hash.
         let workspace_hash = crate::hashing::workspace_hash(&ws.root)?;
@@ -1253,7 +1290,7 @@ impl App {
             Some(pack.id.to_string()),
             serde_json::json!({}),
         )?;
-        // v0.3.2: materialize the canonical manifest/lockfile/changes and a
+        // v0.3.3: materialize the canonical manifest/lockfile/changes and a
         // signed PackCreated trust receipt so every pack is inspectable and
         // exportable from the moment it exists.
         let created_patch = load_patch(&ws, &pack).ok();
@@ -2178,9 +2215,34 @@ impl App {
         let r = self.resolve_pack_ref(&ws, right)?;
         ensure_pack_not_locked(&ws, &l)?;
         ensure_pack_not_locked(&ws, &r)?;
+        let project_paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        let compose_wsh =
+            crate::hashing::workspace_hash_cached(&ws.root, &project_paths.workspace_hash_cache())?;
+        ledger.record(
+            crate::event::EventKind::CompositionCreated,
+            Some(format!("{}+{}", l.id, r.id)),
+            None,
+            compose_wsh.clone(),
+            serde_json::json!({ "sources": [l.id.to_string(), r.id.to_string()] }),
+        )?;
+        let composition_failed = |reason: &str| -> DraftResult<()> {
+            ledger.record(
+                crate::event::EventKind::CompositionFailed,
+                Some(format!("{}+{}", l.id, r.id)),
+                None,
+                compose_wsh.clone(),
+                serde_json::json!({
+                    "sources": [l.id.to_string(), r.id.to_string()],
+                    "reason": reason,
+                }),
+            )?;
+            Ok(())
+        };
         let l_base = load_snapshot(&ws, &l.base_snapshot_id)?;
         let r_base = load_snapshot(&ws, &r.base_snapshot_id)?;
         if snapshot_file_fingerprint(&l_base) != snapshot_file_fingerprint(&r_base) {
+            composition_failed("compose requires changepacks with the same base content")?;
             return Err(DraftError::new(
                 DraftErrorKind::ConflictDetected,
                 "compose requires changepacks with the same base content",
@@ -2190,12 +2252,23 @@ impl App {
         let rp = load_patch(&ws, &r)?;
         let cmp = self.compare(cwd, left, right)?;
         if !cmp.compatible {
+            composition_failed("compose has overlapping changes")?;
             return Err(DraftError::new(
                 DraftErrorKind::ConflictDetected,
                 "compose has overlapping changes",
             )
             .with_context(format!("{:?}", cmp.warnings)));
         }
+        ledger.record(
+            crate::event::EventKind::CompositionVerified,
+            Some(format!("{}+{}", l.id, r.id)),
+            None,
+            compose_wsh.clone(),
+            serde_json::json!({
+                "sources": [l.id.to_string(), r.id.to_string()],
+                "compare": cmp.id,
+            }),
+        )?;
         let mut files = lp.files.clone();
         files.extend(rp.files.clone());
         files.sort_by(|a, b| a.path.cmp(&b.path).then(a.old_path.cmp(&b.old_path)));
@@ -2369,6 +2442,9 @@ impl App {
         vars: BTreeMap<String, String>,
     ) -> DraftResult<SaveReceipt> {
         let ws = self.open(cwd)?;
+        let project_paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let _save_lock =
+            FileGuard::acquire(&project_paths.lock_file("save"), Duration::from_secs(30))?;
         validate_pack_id(pack_id)?;
         // Imported packs take the canonical import-save path: gates, content
         // application from embedded objects, and promotion out of quarantine.
@@ -2389,6 +2465,14 @@ impl App {
             "save.started",
             Some(pack.id.to_string()),
             serde_json::json!({}),
+        )?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::SaveStarted,
+            Some(pack.id.to_string()),
+            None,
+            crate::hashing::workspace_hash_cached(&ws.root, &project_paths.workspace_hash_cache())?,
+            serde_json::json!({ "legacy_event": save_started_event_id.to_string() }),
         )?;
         let cfg = ResolvedConfig::load(&ws)?;
         let policy = read_or_default::<PolicyConfig>(&ws.layout.policy_toml());
@@ -2487,7 +2571,7 @@ impl App {
             receipt_hash: String::new(),
             failure_reason: None,
         };
-        if let Some(hook) = cfg.hook("save") {
+        for hook in cfg.save_hooks(SaveHookPhase::Before) {
             let ctx = HookContext {
                 message: rendered_message.clone(),
                 title: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
@@ -2516,13 +2600,41 @@ impl App {
                     .unwrap_or_else(|| "unknown".to_string()),
                 files_changed: patch.files.len().to_string(),
                 workspace_root: ws.root.display().to_string(),
-                hook_name: "save".to_string(),
-                hook_phase: hook.phase.clone(),
-                vars,
+                hook_name: "save.before".to_string(),
+                hook_phase: SaveHookPhase::Before.as_str().to_string(),
+                vars: vars.clone(),
             };
-            match run_hook(&ws, &store, "save", &hook, &ctx) {
+            ledger.record(
+                crate::event::EventKind::SaveHookStarted,
+                Some(pack.id.to_string()),
+                None,
+                crate::hashing::workspace_hash_cached(
+                    &ws.root,
+                    &project_paths.workspace_hash_cache(),
+                )?,
+                serde_json::json!({ "phase": "before", "command": hook.command }),
+            )?;
+            match run_hook(&ws, &store, "save.before", &hook, &ctx) {
                 Ok(result) => {
                     let failed = result.exit_code != 0;
+                    ledger.record(
+                        if failed {
+                            crate::event::EventKind::SaveHookFailed
+                        } else {
+                            crate::event::EventKind::SaveHookCompleted
+                        },
+                        Some(pack.id.to_string()),
+                        None,
+                        crate::hashing::workspace_hash_cached(
+                            &ws.root,
+                            &project_paths.workspace_hash_cache(),
+                        )?,
+                        serde_json::json!({
+                            "phase": "before",
+                            "command": hook.command,
+                            "exit_code": result.exit_code,
+                        }),
+                    )?;
                     let hook_receipt = Receipt::new(
                         "hook",
                         if failed { "failed" } else { "succeeded" },
@@ -2539,7 +2651,7 @@ impl App {
                             receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
                         } else {
                             receipt.overall_status = SaveOverallStatus::Failed;
-                            receipt.failure_reason = Some("hooks.save failed".to_string());
+                            receipt.failure_reason = Some("hooks.save.before failed".to_string());
                             receipt.ended_at = now();
                             receipt.receipt_hash = hash_json(&receipt)?;
                             write_save_receipt(&ws, &receipt)?;
@@ -2550,7 +2662,7 @@ impl App {
                             )?;
                             return Err(DraftError::new(
                                 DraftErrorKind::SaveFailed,
-                                "hooks.save failed",
+                                "hooks.save.before failed",
                             ));
                         }
                     } else {
@@ -2559,6 +2671,20 @@ impl App {
                 }
                 Err(e) => {
                     receipt.hook_status = HookStatus::Failed;
+                    ledger.record(
+                        crate::event::EventKind::SaveHookFailed,
+                        Some(pack.id.to_string()),
+                        None,
+                        crate::hashing::workspace_hash_cached(
+                            &ws.root,
+                            &project_paths.workspace_hash_cache(),
+                        )?,
+                        serde_json::json!({
+                            "phase": "before",
+                            "command": hook.command,
+                            "error": e.message,
+                        }),
+                    )?;
                     let hook_receipt = Receipt::new(
                         "hook",
                         "failed",
@@ -2566,6 +2692,263 @@ impl App {
                         serde_json::json!({
                             "hook_name": "save",
                             "hook_phase": hook.phase,
+                            "error": e.message
+                        }),
+                    );
+                    let hook_receipt_id = hook_receipt.id.to_string();
+                    write_receipt(&ws, &hook_receipt)?;
+                    receipt.hook_receipt_refs.push(hook_receipt_id);
+                    if hook.continue_on_error {
+                        receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                        receipt.failure_reason = Some(e.message);
+                    } else {
+                        receipt.overall_status = SaveOverallStatus::Failed;
+                        receipt.failure_reason = Some(e.message.clone());
+                        receipt.ended_at = now();
+                        receipt.receipt_hash = hash_json(&receipt)?;
+                        write_save_receipt(&ws, &receipt)?;
+                        ws.events()?.append(
+                            "save.completed",
+                            Some(pack.id.to_string()),
+                            serde_json::to_value(&receipt).unwrap_or(Value::Null),
+                        )?;
+                        return Err(DraftError::new(DraftErrorKind::SaveFailed, e.message));
+                    }
+                }
+            }
+        }
+        let stable_store = crate::stable::StableHeadStore::new(project_paths.clone());
+        let previous_head = stable_store.read().ok();
+        let save_mode = cfg.pack_disposal;
+        let pack_digest = Some(hash_json(&serde_json::json!({
+            "pack": pack,
+            "patch": patch,
+            "save_receipt": receipt.id.to_string()
+        }))?);
+        let affected_paths = patch
+            .files
+            .iter()
+            .map(|f| f.path.as_str().to_string())
+            .filter(|p| !is_draft_path(p.as_str()))
+            .collect::<Vec<_>>();
+        let pack_summary = Some(crate::stable::PackSummary {
+            pack_id: pack_id.to_string(),
+            name: pack.name.clone(),
+            affected_paths: affected_paths.clone(),
+        });
+        ledger.record(
+            crate::event::EventKind::ProjectStateVerificationStarted,
+            Some(pack_id.to_string()),
+            None,
+            crate::hashing::workspace_hash_cached(&ws.root, &project_paths.workspace_hash_cache())?,
+            serde_json::json!({ "save_receipt": receipt.id.to_string() }),
+        )?;
+        // Project-state verification (SRS-FR-083–086): pack validity is not
+        // project stability — re-verify the composed final state before any
+        // receipt is written or stable_head advances. Failure preserves the
+        // pack and leaves stable_head unchanged.
+        let pack_evidence_verified = crate::pack::PackStore::new(project_paths.clone())
+            .read_manifest(pack_id)
+            .map(|m| m.is_verified())
+            .unwrap_or_else(|_| !pack.verification_refs.is_empty());
+        let ps_report = crate::verification::verify_project_state(
+            &ws.root,
+            &project_paths,
+            ws.id.as_str(),
+            &affected_paths,
+            pack_evidence_verified,
+        );
+        if !ps_report.passed {
+            let failed_names = ps_report.failed_checks().join(", ");
+            ledger.record(
+                crate::event::EventKind::ProjectStateVerificationFailed,
+                Some(pack_id.to_string()),
+                None,
+                if ps_report.workspace_hash.is_empty() {
+                    crate::hashing::workspace_hash(&ws.root)?
+                } else {
+                    ps_report.workspace_hash.clone()
+                },
+                serde_json::json!({
+                    "save_receipt": receipt.id.to_string(),
+                    "checks": ps_report.checks,
+                    "failed": ps_report.failed_checks(),
+                }),
+            )?;
+            receipt.overall_status = SaveOverallStatus::Failed;
+            receipt.failure_reason =
+                Some(format!("project-state verification failed: {failed_names}"));
+            receipt.ended_at = now();
+            receipt.receipt_hash = hash_json(&receipt)?;
+            write_save_receipt(&ws, &receipt)?;
+            ws.events()?.append(
+                "save.completed",
+                Some(pack.id.to_string()),
+                serde_json::to_value(&receipt).unwrap_or(Value::Null),
+            )?;
+            return Err(DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                format!(
+                    "project-state verification failed: {failed_names}\n\nThe changepack was preserved and stable_head was not advanced."
+                ),
+            ));
+        }
+        let project_verified = ledger.record(
+            crate::event::EventKind::ProjectStateVerified,
+            Some(pack_id.to_string()),
+            None,
+            ps_report.workspace_hash.clone(),
+            serde_json::json!({
+                "save_receipt": receipt.id.to_string(),
+                "save_mode": save_mode.as_str(),
+                "checks": ps_report.checks,
+            }),
+        )?;
+        // Advance stable_head only after successful project-state verification
+        // (SRS-FR-050). After-save hooks run post-advance but pre-disposal
+        // (TDD §13.1/§14.3), so a failed after hook preserves pack metadata.
+        if save_mode == crate::stable::SaveMode::MergeAndDispose {
+            let stable_head = stable_store.advance(
+                &ws.root,
+                project_verified.receipt.receipt_id.clone(),
+                previous_head,
+                pack_digest,
+                pack_summary,
+                save_mode,
+            )?;
+            ledger.record(
+                crate::event::EventKind::StableHeadAdvanced,
+                Some(stable_head.id.clone()),
+                None,
+                stable_head.workspace_hash.clone(),
+                serde_json::json!({
+                    "stable_head": stable_head.id,
+                    "project_state_receipt": project_verified.receipt.receipt_id,
+                    "save_receipt": receipt.id.to_string()
+                }),
+            )?;
+        }
+        for hook in cfg.save_hooks(SaveHookPhase::After) {
+            let ctx = HookContext {
+                message: rendered_message.clone(),
+                title: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
+                description: String::new(),
+                task_id: pack
+                    .task_id
+                    .as_ref()
+                    .map(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                run_id: pack
+                    .run_id
+                    .as_ref()
+                    .map(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                changepack_id: pack.id.to_string(),
+                receipt_id: receipt.id.to_string(),
+                actor_name: cfg.identity_username.clone(),
+                actor_email: cfg.identity_email.clone(),
+                timestamp: now().to_rfc3339(),
+                verified: (!pack.verification_refs.is_empty()).to_string(),
+                risk_level: risk_summary
+                    .as_ref()
+                    .map(|risk| risk.level.label().to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                files_changed: patch.files.len().to_string(),
+                workspace_root: ws.root.display().to_string(),
+                hook_name: "save.after".to_string(),
+                hook_phase: SaveHookPhase::After.as_str().to_string(),
+                vars: vars.clone(),
+            };
+            ledger.record(
+                crate::event::EventKind::SaveHookStarted,
+                Some(pack.id.to_string()),
+                None,
+                crate::hashing::workspace_hash_cached(
+                    &ws.root,
+                    &project_paths.workspace_hash_cache(),
+                )?,
+                serde_json::json!({ "phase": "after", "command": hook.command }),
+            )?;
+            match run_hook(&ws, &store, "save.after", &hook, &ctx) {
+                Ok(result) => {
+                    let failed = result.exit_code != 0;
+                    ledger.record(
+                        if failed {
+                            crate::event::EventKind::SaveHookFailed
+                        } else {
+                            crate::event::EventKind::SaveHookCompleted
+                        },
+                        Some(pack.id.to_string()),
+                        None,
+                        crate::hashing::workspace_hash_cached(
+                            &ws.root,
+                            &project_paths.workspace_hash_cache(),
+                        )?,
+                        serde_json::json!({
+                            "phase": "after",
+                            "command": hook.command,
+                            "exit_code": result.exit_code,
+                        }),
+                    )?;
+                    let hook_receipt = Receipt::new(
+                        "hook",
+                        if failed { "failed" } else { "succeeded" },
+                        Some(pack.id.to_string()),
+                        serde_json::to_value(&result).unwrap_or(Value::Null),
+                    );
+                    let hook_receipt_id = hook_receipt.id.to_string();
+                    write_receipt(&ws, &hook_receipt)?;
+                    receipt.hook_receipt_refs.push(hook_receipt_id);
+                    receipt.hook_results.push(result);
+                    if failed {
+                        receipt.hook_status = HookStatus::Failed;
+                        if hook.continue_on_error {
+                            receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                        } else {
+                            receipt.overall_status = SaveOverallStatus::Failed;
+                            receipt.failure_reason = Some("hooks.save.after failed".to_string());
+                            receipt.ended_at = now();
+                            receipt.receipt_hash = hash_json(&receipt)?;
+                            write_save_receipt(&ws, &receipt)?;
+                            ws.events()?.append(
+                                "save.completed",
+                                Some(pack.id.to_string()),
+                                serde_json::to_value(&receipt).unwrap_or(Value::Null),
+                            )?;
+                            return Err(DraftError::new(
+                                DraftErrorKind::SaveFailed,
+                                "hooks.save.after failed",
+                            ));
+                        }
+                    } else {
+                        receipt.hook_status = HookStatus::Succeeded;
+                    }
+                }
+                Err(e) => {
+                    receipt.hook_status = HookStatus::Failed;
+                    ledger.record(
+                        crate::event::EventKind::SaveHookFailed,
+                        Some(pack.id.to_string()),
+                        None,
+                        crate::hashing::workspace_hash_cached(
+                            &ws.root,
+                            &project_paths.workspace_hash_cache(),
+                        )?,
+                        serde_json::json!({
+                            "phase": "after",
+                            "command": hook.command,
+                            "error": e.message,
+                        }),
+                    )?;
+                    let hook_receipt = Receipt::new(
+                        "hook",
+                        "failed",
+                        Some(pack.id.to_string()),
+                        serde_json::json!({
+                            "hook_name": "save.after",
+                            "hook_phase": SaveHookPhase::After.as_str(),
                             "error": e.message
                         }),
                     );
@@ -2602,8 +2985,6 @@ impl App {
             Some(pack.id.to_string()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
-        // v0.3.2: emit the canonical pack manifest/lockfile and a signed
-        // PackSaved trust receipt bound to the current workspace hash.
         self.sync_canonical_pack(
             &ws,
             &pack,
@@ -2616,10 +2997,44 @@ impl App {
                 metadata: serde_json::json!({ "save_receipt": receipt.id.to_string() }),
             },
         )?;
+        ledger.record(
+            crate::event::EventKind::SaveFinalized,
+            Some(pack_id.to_string()),
+            None,
+            crate::hashing::workspace_hash_cached(&ws.root, &project_paths.workspace_hash_cache())?,
+            serde_json::json!({ "save_receipt": receipt.id.to_string() }),
+        )?;
+        match dispose_pack_metadata(&ws, &project_paths, pack_id) {
+            Ok(removed) => {
+                ledger.record(
+                    crate::event::EventKind::PackDisposed,
+                    Some(pack_id.to_string()),
+                    None,
+                    crate::hashing::workspace_hash_cached(
+                        &ws.root,
+                        &project_paths.workspace_hash_cache(),
+                    )?,
+                    serde_json::json!({ "removed_entries": removed }),
+                )?;
+            }
+            Err(e) => {
+                ledger.record(
+                    crate::event::EventKind::PackDisposalFailed,
+                    Some(pack_id.to_string()),
+                    None,
+                    crate::hashing::workspace_hash_cached(
+                        &ws.root,
+                        &project_paths.workspace_hash_cache(),
+                    )?,
+                    serde_json::json!({ "error": e.message }),
+                )?;
+                return Err(e);
+            }
+        }
         Ok(receipt)
     }
 
-    /// Upsert the canonical v0.3.2 `manifest.json`/`pack.lock.json` for `pack`
+    /// Upsert the canonical v0.3.3 `manifest.json`/`pack.lock.json` for `pack`
     /// and record a signed trust receipt for `kind`. Purely additive to the
     /// legacy changepack store; never alters legacy return values.
     fn sync_canonical_pack(
@@ -2812,10 +3227,9 @@ impl App {
         let risk_path = dir.join("risk.json");
         let mut risk_level = "unknown".to_string();
         if risk_path.exists() {
-            let risk: crate::riskv2::RiskReport = read_json(&risk_path)?;
+            let risk: crate::risk::RiskReport = read_json(&risk_path)?;
             risk_level = risk.risk_level.as_str().to_string();
-            if policy.block_on_critical_risk
-                && risk.risk_level == crate::riskv2::RiskLevel::Critical
+            if policy.block_on_critical_risk && risk.risk_level == crate::risk::RiskLevel::Critical
             {
                 return Err(DraftError::new(
                     DraftErrorKind::RiskPolicyBlocked,
@@ -2884,6 +3298,68 @@ impl App {
             }
         }
 
+        // Project-state verification (SRS-FR-083–086), symmetric with the
+        // local save path: the applied state must verify before promotion,
+        // receipts, or stable_head advancement.
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let applied_paths: Vec<String> = {
+            let mut rels = Vec::new();
+            for (p, _) in &plan.writes {
+                if let Ok(rel) = p.strip_prefix(&ws.root) {
+                    rels.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+            for p in &plan.deletes {
+                if let Ok(rel) = p.strip_prefix(&ws.root) {
+                    rels.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+            rels.sort();
+            rels.dedup();
+            rels
+        };
+        ledger.record(
+            crate::event::EventKind::ProjectStateVerificationStarted,
+            Some(pack_id.clone()),
+            None,
+            crate::hashing::workspace_hash_cached(&ws.root, &paths.workspace_hash_cache())?,
+            serde_json::json!({ "imported": true }),
+        )?;
+        let ps_report = crate::verification::verify_project_state(
+            &ws.root,
+            &paths,
+            ws.id.as_str(),
+            &applied_paths,
+            manifest.is_verified(),
+        );
+        if !ps_report.passed {
+            let failed_names = ps_report.failed_checks().join(", ");
+            ledger.record(
+                crate::event::EventKind::ProjectStateVerificationFailed,
+                Some(pack_id.clone()),
+                None,
+                if ps_report.workspace_hash.is_empty() {
+                    crate::hashing::workspace_hash(&ws.root)?
+                } else {
+                    ps_report.workspace_hash.clone()
+                },
+                serde_json::json!({
+                    "imported": true,
+                    "checks": ps_report.checks,
+                    "failed": ps_report.failed_checks(),
+                }),
+            )?;
+            return Err(DraftError::new(
+                DraftErrorKind::VerificationFailed,
+                format!(
+                    "project-state verification failed after applying the imported pack: {failed_names}"
+                ),
+            )
+            .with_suggestion(
+                "the workspace was checkpointed before apply; run `draft rollback <chk_id>` to restore it",
+            ));
+        }
+
         // Promote out of quarantine and finalize the manifest.
         if loc == crate::pack::PackLocation::Quarantine {
             store.promote_from_quarantine(&pack_id)?;
@@ -2935,8 +3411,82 @@ impl App {
         write_save_receipt(ws, &receipt)?;
         ws.events()?.append(
             "save.completed",
-            Some(pack_id),
+            Some(pack_id.clone()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
+        )?;
+        let stable_store = crate::stable::StableHeadStore::new(paths.clone());
+        let previous_head = stable_store.read().ok();
+        let save_mode = ResolvedConfig::load(ws)?.pack_disposal;
+        let project_verified = ledger.record(
+            crate::event::EventKind::ProjectStateVerified,
+            Some(pack_id.clone()),
+            None,
+            ps_report.workspace_hash.clone(),
+            serde_json::json!({
+                "imported": true,
+                "save_receipt": receipt.id.to_string(),
+                "save_mode": save_mode.as_str(),
+                "checks": ps_report.checks,
+            }),
+        )?;
+        if save_mode == crate::stable::SaveMode::MergeAndDispose {
+            let stable_head = stable_store.advance(
+                &ws.root,
+                project_verified.receipt.receipt_id.clone(),
+                previous_head,
+                Some(hash_json(&serde_json::json!({
+                    "manifest": manifest,
+                    "patch": patch,
+                    "save_receipt": receipt.id.to_string()
+                }))?),
+                Some(crate::stable::PackSummary {
+                    pack_id: pack_id.clone(),
+                    name: Some(manifest.name.clone()),
+                    affected_paths: {
+                        let mut paths = Vec::new();
+                        for (p, _) in &plan.writes {
+                            if let Ok(rel) = p.strip_prefix(&ws.root) {
+                                paths.push(rel.to_string_lossy().replace('\\', "/"));
+                            }
+                        }
+                        for p in &plan.deletes {
+                            if let Ok(rel) = p.strip_prefix(&ws.root) {
+                                paths.push(rel.to_string_lossy().replace('\\', "/"));
+                            }
+                        }
+                        paths.sort();
+                        paths.dedup();
+                        paths
+                    },
+                }),
+                save_mode,
+            )?;
+            ledger.record(
+                crate::event::EventKind::StableHeadAdvanced,
+                Some(stable_head.id.clone()),
+                None,
+                stable_head.workspace_hash.clone(),
+                serde_json::json!({
+                    "stable_head": stable_head.id,
+                    "project_state_receipt": project_verified.receipt.receipt_id,
+                    "save_receipt": receipt.id.to_string()
+                }),
+            )?;
+        }
+        ledger.record(
+            crate::event::EventKind::SaveFinalized,
+            Some(pack_id.clone()),
+            None,
+            crate::hashing::workspace_hash(&ws.root)?,
+            serde_json::json!({ "save_receipt": receipt.id.to_string(), "imported": true }),
+        )?;
+        let removed = dispose_pack_metadata(ws, &paths, &pack_id)?;
+        ledger.record(
+            crate::event::EventKind::PackDisposed,
+            Some(pack_id),
+            None,
+            crate::hashing::workspace_hash(&ws.root)?,
+            serde_json::json!({ "removed_entries": removed, "imported": true }),
         )?;
         Ok(receipt)
     }
@@ -3015,7 +3565,7 @@ impl App {
             Some(receipt.id.to_string()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
-        // v0.3.2: record a signed RollbackPerformed trust receipt.
+        // v0.3.3: record a signed RollbackPerformed trust receipt.
         let workspace_hash = crate::hashing::workspace_hash(&ws.root)?;
         let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
         ledger.record(
@@ -3499,7 +4049,7 @@ impl App {
         pack_ref: &str,
         full: bool,
         fuzz: bool,
-    ) -> DraftResult<VerifyV2Report> {
+    ) -> DraftResult<VerifyReport> {
         use crate::lsif::{LsifIndex, LSIF_BACKEND};
         use crate::pack::PackStore;
         let ws = self.open(cwd)?;
@@ -3555,11 +4105,11 @@ impl App {
             .read_all()
             .unwrap_or_default();
         let all_manifests = store.list()?;
-        let risk_inputs = crate::riskv2::RiskInputs {
+        let risk_inputs = crate::risk::RiskInputs {
             intent: manifest.intent,
             files_touched: changed.len(),
             lines_changed: changed.iter().map(|(_, c)| c.lines().count()).sum(),
-            high_risk_paths: crate::riskv2::high_risk_paths(&changed_paths),
+            high_risk_paths: crate::risk::high_risk_paths(&changed_paths),
             has_tests: !test_files.is_empty(),
             has_fuzz: fuzz && !fuzz_targets.is_empty(),
             public_api_changes: public_api.len(),
@@ -3575,10 +4125,10 @@ impl App {
                 .map(|c| candidate_rollback_rate(&ledger_events, &all_manifests, c))
                 .unwrap_or(0.0),
         };
-        let risk = crate::riskv2::assess(&risk_inputs);
+        let risk = crate::risk::assess(&risk_inputs);
 
         // Selection evidence.
-        let selection = crate::verifyv2::SelectionInput {
+        let selection = crate::verification::SelectionInput {
             changed_files: changed_paths.clone(),
             changed_symbols: changed_symbols.clone(),
             test_files: test_files.clone(),
@@ -3586,11 +4136,46 @@ impl App {
             full,
             fuzz,
         };
-        let evidence = crate::verifyv2::plan(&selection);
+        let mut evidence = crate::verification::plan(&selection);
+
+        // Deterministic verification cache key (SRS-FR-144): associates this
+        // result with the exact workspace, config, toolchain, command set, and
+        // environment that produced it.
+        let wsh = crate::hashing::workspace_hash_cached(&ws.root, &paths.workspace_hash_cache())?;
+        let key_commands: Vec<String> = evidence
+            .selected_tests
+            .iter()
+            .map(|t| t.command.clone())
+            .chain(
+                evidence
+                    .selected_fuzz_targets
+                    .iter()
+                    .map(|t| t.command.clone()),
+            )
+            .collect();
+        let verification_key = crate::verification::VerificationKey::compose(
+            wsh.clone(),
+            crate::hashing::config_hash(&paths),
+            crate::verification::toolchain_hash(&ws.root),
+            crate::verification::verification_command_hash(&key_commands),
+            crate::verification::environment_hash(),
+        );
+        evidence.verification_key = Some(verification_key.clone());
 
         // Persist canonical evidence.
         write_json(&paths.pack_risk(&pack_id), &risk)?;
         write_json(&paths.pack_verify(&pack_id), &evidence)?;
+        crate::index::VerificationCacheManifest::record(
+            &paths,
+            crate::index::VerificationCacheEntry {
+                verification_key: verification_key.key.clone(),
+                pack_id: pack_id.clone(),
+                result_hash: evidence.result_hash.clone(),
+                passed: evidence.passed(),
+                recorded_at: now().to_rfc3339(),
+            },
+        )?;
+        crate::index::AffectedPathIndex::upsert(&paths, &pack_id, changed_paths.clone())?;
         let lsif_summary = serde_json::json!({
             "backend": LSIF_BACKEND,
             "symbols_touched": changed_symbols,
@@ -3601,7 +4186,6 @@ impl App {
         write_json(&paths.pack_lsif(&pack_id), &lsif_summary)?;
 
         // Update manifest hashes and record PackVerified.
-        let wsh = crate::hashing::workspace_hash(&ws.root)?;
         let mut manifest = manifest;
         manifest.target_workspace_hash = wsh.clone();
         manifest.risk_hash = crate::hashing::canonical_hash(&risk);
@@ -3620,7 +4204,7 @@ impl App {
             }),
         )?;
 
-        Ok(VerifyV2Report {
+        Ok(VerifyReport {
             pack_id,
             risk_level: risk.risk_level.as_str().to_string(),
             risk_score: risk.risk_score,
@@ -3653,7 +4237,7 @@ impl App {
         manifest: crate::pack::PackManifest,
         full: bool,
         fuzz: bool,
-    ) -> DraftResult<VerifyV2Report> {
+    ) -> DraftResult<VerifyReport> {
         use crate::lsif::{LsifIndex, LSIF_BACKEND};
         use crate::pack::ImportState;
 
@@ -3719,11 +4303,11 @@ impl App {
         let dependency_count = read_json::<crate::pack::PackLockfile>(&dir.join("pack.lock.json"))
             .map(|l| l.dependency_pack_hashes.len())
             .unwrap_or(0);
-        let risk_inputs = crate::riskv2::RiskInputs {
+        let risk_inputs = crate::risk::RiskInputs {
             intent: manifest.intent,
             files_touched: changed.len(),
             lines_changed: changed.iter().map(|(_, c)| c.lines().count()).sum(),
-            high_risk_paths: crate::riskv2::high_risk_paths(&changed_paths),
+            high_risk_paths: crate::risk::high_risk_paths(&changed_paths),
             has_tests: !test_files.is_empty(),
             has_fuzz: fuzz && !fuzz_targets.is_empty(),
             public_api_changes: public_api.len(),
@@ -3732,9 +4316,9 @@ impl App {
             semantic_impact: changed_symbols.len(),
             candidate_rollback_rate: 0.0,
         };
-        let risk = crate::riskv2::assess(&risk_inputs);
+        let risk = crate::risk::assess(&risk_inputs);
 
-        let selection = crate::verifyv2::SelectionInput {
+        let selection = crate::verification::SelectionInput {
             changed_files: changed_paths.clone(),
             changed_symbols: changed_symbols.clone(),
             test_files: test_files.clone(),
@@ -3742,12 +4326,43 @@ impl App {
             full,
             fuzz,
         };
-        let evidence = crate::verifyv2::plan(&selection);
+        let mut evidence = crate::verification::plan(&selection);
+        let wsh = crate::hashing::workspace_hash_cached(&ws.root, &paths.workspace_hash_cache())?;
+        let key_commands: Vec<String> = evidence
+            .selected_tests
+            .iter()
+            .map(|t| t.command.clone())
+            .chain(
+                evidence
+                    .selected_fuzz_targets
+                    .iter()
+                    .map(|t| t.command.clone()),
+            )
+            .collect();
+        let verification_key = crate::verification::VerificationKey::compose(
+            wsh.clone(),
+            crate::hashing::config_hash(paths),
+            crate::verification::toolchain_hash(&ws.root),
+            crate::verification::verification_command_hash(&key_commands),
+            crate::verification::environment_hash(),
+        );
+        evidence.verification_key = Some(verification_key.clone());
 
         // Persist local evidence beside the pack (replacing origin evidence;
         // the origin's signed receipts remain as provenance).
         write_json(&dir.join("risk.json"), &risk)?;
         write_json(&dir.join("verify.json"), &evidence)?;
+        crate::index::VerificationCacheManifest::record(
+            paths,
+            crate::index::VerificationCacheEntry {
+                verification_key: verification_key.key.clone(),
+                pack_id: pack_id.clone(),
+                result_hash: evidence.result_hash.clone(),
+                passed: evidence.passed(),
+                recorded_at: now().to_rfc3339(),
+            },
+        )?;
+        crate::index::AffectedPathIndex::upsert(paths, &pack_id, changed_paths.clone())?;
         let lsif_summary = serde_json::json!({
             "backend": LSIF_BACKEND,
             "symbols_touched": changed_symbols,
@@ -3757,7 +4372,6 @@ impl App {
         });
         write_json(&dir.join("lsif.json"), &lsif_summary)?;
 
-        let wsh = crate::hashing::workspace_hash(&ws.root)?;
         let mut manifest = manifest;
         manifest.target_workspace_hash = wsh.clone();
         manifest.risk_hash = crate::hashing::canonical_hash(&risk);
@@ -3781,7 +4395,7 @@ impl App {
             }),
         )?;
 
-        Ok(VerifyV2Report {
+        Ok(VerifyReport {
             pack_id,
             risk_level: risk.risk_level.as_str().to_string(),
             risk_score: risk.risk_score,
@@ -4007,26 +4621,67 @@ impl App {
             ApprovalState, ImportState, PackLockfile, PackManifest, PackStore, SaveState,
         };
         let ws = self.open(cwd)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        let wsh = crate::hashing::workspace_hash_cached(&ws.root, &paths.workspace_hash_cache())?;
+        let base_stable_head = crate::stable::StableHeadStore::new(paths.clone())
+            .read()
+            .map(|h| h.id)
+            .unwrap_or_else(|_| "none".to_string());
         let conflict_report = self.pack_conflicts(cwd, a_ref, b_ref)?;
-        if conflict_report.blocking {
-            let details: Vec<String> = conflict_report
-                .conflicts
-                .iter()
-                .filter(|c| c.blocking)
-                .map(|c| format!("{}: {}", c.kind, c.detail))
-                .collect();
+        let a = conflict_report.pack_a.clone();
+        let b = conflict_report.pack_b.clone();
+        let store = PackStore::new(paths.clone());
+        // Canonical composition validation (SRS-FR-028–036): the hunk-aware
+        // conflict report is authoritative; the composition object carries
+        // dependency order and a deterministic composition_hash.
+        let manifests = vec![store.read_manifest(&a)?, store.read_manifest(&b)?];
+        let locks: Vec<PackLockfile> = [&a, &b]
+            .iter()
+            .filter_map(|id| store.read_lockfile(id).ok())
+            .collect();
+        let blocking_conflicts: Vec<String> = conflict_report
+            .conflicts
+            .iter()
+            .filter(|c| c.blocking)
+            .map(|c| format!("{}: {}", c.kind, c.detail))
+            .collect();
+        ledger.record(
+            crate::event::EventKind::CompositionCreated,
+            Some(format!("{a}+{b}")),
+            None,
+            wsh.clone(),
+            serde_json::json!({ "sources": [a.clone(), b.clone()], "base_stable_head": base_stable_head }),
+        )?;
+        let composition = crate::composition::validate(
+            &base_stable_head,
+            &manifests,
+            &locks,
+            Some(blocking_conflicts.clone()),
+        )?;
+        if composition.status == crate::composition::CompositionStatus::Failed {
+            ledger.record(
+                crate::event::EventKind::CompositionFailed,
+                Some(composition.id.clone()),
+                None,
+                wsh.clone(),
+                serde_json::to_value(&composition).unwrap_or(Value::Null),
+            )?;
             return Err(DraftError::new(
                 DraftErrorKind::ConflictDetected,
                 format!(
                     "cannot compose — blocking conflicts: {}",
-                    details.join("; ")
+                    composition.conflicts.join("; ")
                 ),
             ));
         }
-        let a = conflict_report.pack_a;
-        let b = conflict_report.pack_b;
-        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
-        let store = PackStore::new(paths.clone());
+        ledger.record(
+            crate::event::EventKind::CompositionVerified,
+            Some(composition.id.clone()),
+            None,
+            wsh.clone(),
+            serde_json::to_value(&composition).unwrap_or(Value::Null),
+        )?;
         if store.name_taken(name)? {
             return Err(DraftError::invalid_config(format!(
                 "pack name '{name}' already exists"
@@ -4044,14 +4699,18 @@ impl App {
                 }
             }
         }
-        let wsh = crate::hashing::workspace_hash(&ws.root)?;
-        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
         let outcome = ledger.record(
             crate::event::EventKind::PackComposed,
             Some(new_id.clone()),
             None,
             wsh.clone(),
-            serde_json::json!({ "sources": [a, b], "name": name }),
+            serde_json::json!({
+                "sources": [a, b],
+                "name": name,
+                "composition_id": composition.id,
+                "composition_hash": composition.composition_hash,
+                "dependency_order": composition.dependency_order,
+            }),
         )?;
         let manifest = PackManifest {
             schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
@@ -4097,6 +4756,7 @@ impl App {
             name: name.to_string(),
             dependencies: vec![a, b],
             requires_reverification: true,
+            composition_hash: composition.composition_hash,
         })
     }
 
@@ -4338,6 +4998,92 @@ impl App {
             removed,
             "unreachable objects removed",
         ))
+    }
+
+    pub fn gc(&self, cwd: &Path) -> DraftResult<crate::gc::GcReport> {
+        let ws = self.open(cwd)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let _lock = FileGuard::acquire(&paths.lock_file("gc"), Duration::from_secs(30))?;
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::GcStarted,
+            None,
+            None,
+            crate::hashing::workspace_hash(&ws.root)?,
+            serde_json::json!({}),
+        )?;
+        match crate::gc::run(&paths) {
+            Ok(report) => {
+                ledger.record(
+                    crate::event::EventKind::GcCompleted,
+                    None,
+                    None,
+                    crate::hashing::workspace_hash(&ws.root)?,
+                    serde_json::to_value(&report).unwrap_or(Value::Null),
+                )?;
+                Ok(report)
+            }
+            Err(e) => {
+                let _ = ledger.record(
+                    crate::event::EventKind::GcFailed,
+                    None,
+                    None,
+                    crate::hashing::workspace_hash(&ws.root).unwrap_or_default(),
+                    serde_json::json!({ "error": e.message }),
+                );
+                Err(e)
+            }
+        }
+    }
+
+    pub fn close(&self, cwd: &Path, force: bool) -> DraftResult<CloseReport> {
+        let ws = self.open(cwd)?;
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let _lock = FileGuard::acquire(&paths.lock_file("close"), Duration::from_secs(30))?;
+        let pending_packs =
+            unsafe_pending_pack_count(&paths)? + unsafe_legacy_pending_pack_count(&ws)?;
+        if pending_packs > 0 && !force {
+            let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+            let _ = ledger.record(
+                crate::event::EventKind::CloseFailed,
+                None,
+                None,
+                crate::hashing::workspace_hash(&ws.root)?,
+                serde_json::json!({
+                    "reason": "pending changepacks",
+                    "pending_packs": pending_packs
+                }),
+            );
+            return Err(DraftError::new(
+                DraftErrorKind::RiskPolicyBlocked,
+                format!("draft close refused: {pending_packs} pending changepack(s) remain"),
+            )
+            .with_suggestion("save, delete, or export pending packs first; use --force only when you intend to discard Draft metadata"));
+        }
+        let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
+        ledger.record(
+            crate::event::EventKind::CloseStarted,
+            None,
+            None,
+            crate::hashing::workspace_hash(&ws.root)?,
+            serde_json::json!({ "forced": force, "pending_packs": pending_packs }),
+        )?;
+        ledger.record(
+            crate::event::EventKind::CloseCompleted,
+            None,
+            None,
+            crate::hashing::workspace_hash(&ws.root)?,
+            serde_json::json!({ "forced": force, "pending_packs": pending_packs }),
+        )?;
+        let draft_dir = ws.layout.draft_dir.display().to_string();
+        std::fs::remove_dir_all(&ws.layout.draft_dir)
+            .map_err(|e| DraftError::storage(format!("remove .draft: {e}")))?;
+        Ok(CloseReport {
+            closed: true,
+            forced: force,
+            draft_dir,
+            pending_packs,
+        })
     }
 
     pub fn storage_compact(&self, cwd: &Path) -> DraftResult<StorageMaintenanceReport> {
@@ -4597,6 +5343,17 @@ pub struct InitReport {
     pub root: String,
     pub created: bool,
     pub draft_dir: String,
+    pub stable_head_id: String,
+    pub stable_head_receipt_id: String,
+    pub workspace_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloseReport {
+    pub closed: bool,
+    pub forced: bool,
+    pub draft_dir: String,
+    pub pending_packs: usize,
 }
 
 const DEFAULT_IGNORE: &str = "# Draft private metadata is always excluded.\n.draft/\n";
@@ -4637,7 +5394,11 @@ impl DraftConfig {
             "identity.username" => self.identity.username = value.to_string(),
             "identity.email" => self.identity.email = value.to_string(),
             "save.message_template" => self.save.message_template = value.to_string(),
-            "hooks.save" => self.hooks.save = Some(HookConfig::Raw(value.to_string())),
+            "save.pack_disposal" => {
+                crate::stable::SaveMode::parse(value)?;
+                self.save.pack_disposal = value.to_string();
+            }
+            "hooks.save" => self.hooks.save = Some(SaveHookConfig::Raw(value.to_string())),
             "hooks.verify" => self.hooks.verify = Some(HookConfig::Raw(value.to_string())),
             _ => {
                 return Err(DraftError::invalid_config(format!(
@@ -4660,21 +5421,45 @@ pub struct IdentityConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveConfig {
+    #[serde(default)]
     pub message_template: String,
+    #[serde(default = "default_pack_disposal")]
+    pub pack_disposal: String,
 }
 
 impl Default for SaveConfig {
     fn default() -> Self {
         Self {
             message_template: "{{title}}\n\n{{description}}\n\nDraft-Task: {{task_id}}\nDraft-Run: {{run_id}}\nDraft-Changepack: {{changepack_id}}\nDraft-Verified: {{verified}}\nDraft-Risk: {{risk_level}}\nDraft-Receipt: {{receipt_id}}\nDraft-Actor: {{actor_name}} <{{actor_email}}>".to_string(),
+            pack_disposal: "merge_and_dispose".to_string(),
         }
     }
 }
 
+fn default_pack_disposal() -> String {
+    "merge_and_dispose".to_string()
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HooksConfig {
-    pub save: Option<HookConfig>,
+    pub save: Option<SaveHookConfig>,
     pub verify: Option<HookConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SaveHookConfig {
+    Raw(String),
+    Entry(HookEntry),
+    Phases(SaveHookPhases),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SaveHookPhases {
+    #[serde(default)]
+    pub before: Vec<HookConfig>,
+    #[serde(default)]
+    pub after: Vec<HookConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4682,6 +5467,50 @@ pub struct HooksConfig {
 pub enum HookConfig {
     Raw(String),
     Entry(HookEntry),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SaveHookPhase {
+    Before,
+    After,
+}
+
+impl SaveHookPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            SaveHookPhase::Before => "before",
+            SaveHookPhase::After => "after",
+        }
+    }
+}
+
+impl SaveHookConfig {
+    fn entries(&self, phase: SaveHookPhase) -> Vec<HookEntry> {
+        match self {
+            SaveHookConfig::Raw(command) if phase == SaveHookPhase::Before => {
+                HookConfig::Raw(command.clone())
+                    .entry()
+                    .map(|entry| vec![entry])
+                    .unwrap_or_default()
+            }
+            SaveHookConfig::Raw(_) => Vec::new(),
+            SaveHookConfig::Entry(entry)
+                if phase == SaveHookPhase::Before
+                    && entry.enabled
+                    && !entry.command.trim().is_empty() =>
+            {
+                vec![entry.clone()]
+            }
+            SaveHookConfig::Entry(_) => Vec::new(),
+            SaveHookConfig::Phases(phases) => {
+                let configs = match phase {
+                    SaveHookPhase::Before => &phases.before,
+                    SaveHookPhase::After => &phases.after,
+                };
+                configs.iter().filter_map(HookConfig::entry).collect()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4784,11 +5613,24 @@ fn hook_config_command(hook: &HookConfig) -> String {
     }
 }
 
+fn save_hook_config_command(hook: &SaveHookConfig) -> String {
+    match hook {
+        SaveHookConfig::Raw(command) => command.clone(),
+        SaveHookConfig::Entry(entry) => entry.command.clone(),
+        SaveHookConfig::Phases(phases) => {
+            let before = phases.before.len();
+            let after = phases.after.len();
+            format!("{before} before hook(s), {after} after hook(s)")
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedConfig {
     identity_username: String,
     identity_email: String,
     save_message_template: String,
+    pack_disposal: crate::stable::SaveMode,
     hooks: HooksConfig,
 }
 
@@ -4814,22 +5656,35 @@ impl ResolvedConfig {
             identity_username: cfg.identity.username,
             identity_email: cfg.identity.email,
             save_message_template: cfg.save.message_template,
+            pack_disposal: crate::stable::SaveMode::parse(&cfg.save.pack_disposal)?,
             hooks: cfg.hooks,
         })
     }
     fn hook(&self, name: &str) -> Option<HookEntry> {
         match name {
-            "save" => self.hooks.save.as_ref().and_then(HookConfig::entry),
             "verify" => self.hooks.verify.as_ref().and_then(HookConfig::entry),
+            "save" => self
+                .hooks
+                .save
+                .as_ref()
+                .and_then(|hooks| hooks.entries(SaveHookPhase::Before).into_iter().next()),
             _ => None,
         }
+    }
+    fn save_hooks(&self, phase: SaveHookPhase) -> Vec<HookEntry> {
+        self.hooks
+            .save
+            .as_ref()
+            .map(|hooks| hooks.entries(phase))
+            .unwrap_or_default()
     }
     fn get(&self, key: &str) -> Option<String> {
         match key {
             "identity.username" => Some(self.identity_username.clone()),
             "identity.email" => Some(self.identity_email.clone()),
             "save.message_template" => Some(self.save_message_template.clone()),
-            "hooks.save" => self.hooks.save.as_ref().map(hook_config_command),
+            "save.pack_disposal" => Some(self.pack_disposal.as_str().to_string()),
+            "hooks.save" => self.hooks.save.as_ref().map(save_hook_config_command),
             "hooks.verify" => self.hooks.verify.as_ref().map(hook_config_command),
             _ => None,
         }
@@ -4840,6 +5695,7 @@ impl ResolvedConfig {
             "identity.username",
             "identity.email",
             "save.message_template",
+            "save.pack_disposal",
             "hooks.save",
             "hooks.verify",
         ] {
@@ -4858,6 +5714,9 @@ fn merge_config(mut base: DraftConfig, overlay: DraftConfig) -> DraftConfig {
     }
     if !overlay.save.message_template.is_empty() {
         base.save.message_template = overlay.save.message_template;
+    }
+    if !overlay.save.pack_disposal.is_empty() {
+        base.save.pack_disposal = overlay.save.pack_disposal;
     }
     if overlay.hooks.save.is_some() {
         base.hooks.save = overlay.hooks.save;
@@ -6210,7 +7069,7 @@ fn find_workspace_root(cwd: &Path) -> Option<PathBuf> {
 fn reject_remote_key(key: &str) -> DraftResult<()> {
     if key.starts_with("target.") {
         return Err(DraftError::invalid_config(
-            "retired external-action config keys are not supported in Draft v0.3.2; use hooks.*",
+            "retired external-action config keys are not supported in Draft v0.3.3; use hooks.*",
         ));
     }
     Ok(())
@@ -6751,6 +7610,105 @@ fn save_pack_manifest(ws: &Workspace, pack: &mut Changepack) -> DraftResult<()> 
     write_json(&ws.layout.pack_dir(&pack.id).join("manifest.json"), pack)
 }
 
+fn dispose_pack_metadata(
+    ws: &Workspace,
+    paths: &crate::layout::ProjectPaths,
+    pack_id: &str,
+) -> DraftResult<usize> {
+    validate_pack_id(pack_id)?;
+    let mut removed = 0;
+    let legacy_dir = ws.layout.changepacks_dir().join(pack_id);
+    if legacy_dir.exists() {
+        std::fs::remove_dir_all(&legacy_dir)
+            .map_err(|e| DraftError::storage(format!("dispose pack {pack_id}: {e}")))?;
+        removed += 1;
+    }
+    let canonical_dir = paths.pack_dir(pack_id);
+    if canonical_dir.exists() {
+        std::fs::remove_dir_all(&canonical_dir)
+            .map_err(|e| DraftError::storage(format!("dispose canonical pack {pack_id}: {e}")))?;
+        removed += 1;
+    }
+    let selected = ws.layout.selected_pack_file();
+    if selected.exists()
+        && std::fs::read_to_string(&selected)
+            .map(|s| s.trim() == pack_id)
+            .unwrap_or(false)
+    {
+        std::fs::remove_file(&selected)
+            .map_err(|e| DraftError::storage(format!("clear selected pack: {e}")))?;
+        removed += 1;
+    }
+    crate::index::AffectedPathIndex::remove(paths, pack_id)?;
+    Ok(removed)
+}
+
+fn unsafe_pending_pack_count(paths: &crate::layout::ProjectPaths) -> DraftResult<usize> {
+    if !paths.packs_dir().exists() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    for entry in std::fs::read_dir(paths.packs_dir())? {
+        let manifest_path = entry?.path().join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+        let manifest: serde_json::Value = match read_json(&manifest_path) {
+            Ok(value) => value,
+            Err(_) => {
+                count += 1;
+                continue;
+            }
+        };
+        let is_internal_base = manifest
+            .get("description")
+            .and_then(Value::as_str)
+            .map(|s| s == "base pack")
+            .unwrap_or(false);
+        let save_state = manifest
+            .get("save_state")
+            .and_then(Value::as_str)
+            .unwrap_or("unsaved");
+        if !is_internal_base && save_state != "disposed" && save_state != "saved" {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn unsafe_legacy_pending_pack_count(ws: &Workspace) -> DraftResult<usize> {
+    let dir = ws.layout.changepacks_dir();
+    if !dir.exists() {
+        return Ok(0);
+    }
+    let mut count = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let manifest_path = entry?.path().join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+        let pack: Changepack = match read_json(&manifest_path) {
+            Ok(pack) => pack,
+            Err(_) => {
+                count += 1;
+                continue;
+            }
+        };
+        let safe_terminal = matches!(
+            pack.status,
+            ChangepackStatus::Saved | ChangepackStatus::Rejected | ChangepackStatus::RolledBack
+        ) || !pack.active;
+        let internal_base = pack.name.as_deref() == Some("base")
+            && pack.patch_refs.is_empty()
+            && pack.verification_refs.is_empty()
+            && pack.decision_refs.is_empty();
+        if !safe_terminal && !internal_base {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 fn load_patch(ws: &Workspace, pack: &Changepack) -> DraftResult<PatchSet> {
     read_json(&ws.layout.pack_dir(&pack.id).join("patch.json"))
 }
@@ -6872,8 +7830,8 @@ fn validate_canonical_risk_gate(
         }
         return Ok(());
     }
-    let risk: crate::riskv2::RiskReport = read_json(&risk_path)?;
-    if policy.block_on_critical_risk && risk.risk_level == crate::riskv2::RiskLevel::Critical {
+    let risk: crate::risk::RiskReport = read_json(&risk_path)?;
+    if policy.block_on_critical_risk && risk.risk_level == crate::risk::RiskLevel::Critical {
         return Err(DraftError::new(
             DraftErrorKind::RiskPolicyBlocked,
             "unresolved critical risk blocks save",
@@ -6883,7 +7841,7 @@ fn validate_canonical_risk_gate(
     if policy.require_approval_on_high_risk
         && matches!(
             risk.risk_level,
-            crate::riskv2::RiskLevel::High | crate::riskv2::RiskLevel::Critical
+            crate::risk::RiskLevel::High | crate::risk::RiskLevel::Critical
         )
         && manifest.approval_state != crate::pack::ApprovalState::Approved
     {
@@ -7243,7 +8201,7 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
         conn.execute(
             "INSERT INTO receipts (id, kind, status, subject_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                // Legacy receipts use `id`; v0.3.2 signed receipts use `receipt_id`.
+                // Legacy receipts use `id`; v0.3.3 signed receipts use `receipt_id`.
                 receipt
                     .get("id")
                     .or_else(|| receipt.get("receipt_id"))
@@ -7604,7 +8562,7 @@ fn read_imported_object(pack_dir: &Path, object_ref: &str) -> DraftResult<Vec<u8
             DraftErrorKind::VerificationFailed,
             format!("imported pack is missing content object '{hex}'"),
         )
-        .with_suggestion("re-export the pack with draft v0.3.2 or newer (format draftpack/2)"));
+        .with_suggestion("re-export the pack with draft v0.3.3 or newer (format draftpack/2)"));
     }
     let bytes = fs::read(&path)?;
     if blake3_hex(&bytes) != hex {
@@ -7616,6 +8574,60 @@ fn read_imported_object(pack_dir: &Path, object_ref: &str) -> DraftResult<Vec<u8
     Ok(bytes)
 }
 
+/// SRS-FR-129: rolling back to a pack that was saved and disposed must fail
+/// clearly and point to the receipt-anchored stable state when it is known.
+/// Falls back to the original load error when the pack simply never existed.
+fn disposed_pack_rollback_error(ws: &Workspace, pack_id: &str, original: DraftError) -> DraftError {
+    let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+    let mut saved_receipt: Option<String> = None;
+    let mut disposed = false;
+    if let Ok(files) = crate::fsutil::list_with_extension(&paths.receipts_dir(), "json") {
+        for file in files {
+            let Ok(record) = crate::fsutil::read_json::<crate::receipt::ReceiptRecord>(&file)
+            else {
+                continue;
+            };
+            if record.subject_id.as_deref() != Some(pack_id) {
+                continue;
+            }
+            match record.event_type.as_str() {
+                "PackSaved" => saved_receipt = Some(record.receipt_id.clone()),
+                "PackDisposed" => disposed = true,
+                _ => {}
+            }
+        }
+    }
+    if !disposed && saved_receipt.is_none() {
+        if let Ok(head) = crate::stable::StableHeadStore::new(paths).read() {
+            if head
+                .finalized_pack_summary
+                .as_ref()
+                .map(|s| s.pack_id.as_str())
+                == Some(pack_id)
+            {
+                disposed = true;
+            }
+        }
+    }
+    if disposed || saved_receipt.is_some() {
+        let err = DraftError::new(
+            DraftErrorKind::NotFound,
+            format!(
+                "pack '{pack_id}' was saved and disposed; disposed packs are not rollback targets"
+            ),
+        );
+        return match saved_receipt {
+            Some(rcp) => err.with_suggestion(format!(
+                "roll back to its receipt instead: draft rollback {rcp}"
+            )),
+            None => err.with_suggestion(
+                "roll back to a stable receipt (rcp_<id>) from `draft event` instead",
+            ),
+        };
+    }
+    original
+}
+
 fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Snapshot> {
     if reference.starts_with("chk_") {
         validate_checkpoint_id(reference)?;
@@ -7623,7 +8635,10 @@ fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Sn
     }
     if reference.starts_with("pck_") {
         validate_pack_id(reference)?;
-        let pack = load_pack(ws, reference)?;
+        let pack = match load_pack(ws, reference) {
+            Ok(pack) => pack,
+            Err(original) => return Err(disposed_pack_rollback_error(ws, reference, original)),
+        };
         return load_snapshot(ws, &pack.base_snapshot_id);
     }
     if reference.starts_with("rcp_") {
@@ -7957,6 +8972,12 @@ fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
                 continue;
             }
         };
+        // Canonical signed receipts (Ed25519 ReceiptRecord) are verified via
+        // the trust ledger; the legacy receipt_hash rule applies only to
+        // legacy receipts.
+        if serde_json::from_value::<crate::receipt::ReceiptRecord>(value.clone()).is_ok() {
+            continue;
+        }
         let Some(expected) = value
             .get("receipt_hash")
             .and_then(Value::as_str)

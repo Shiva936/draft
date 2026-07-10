@@ -1,0 +1,25 @@
+{
+  "name": "close-clean-repo",
+  "expect": "closed",
+  "object": "close",
+  "pending_packs": 0,
+  "payload_schema": "event.schema.json",
+  "payload": {
+    "event_id": "evt_0a1b2c3d4e5f",
+    "event_type": "CloseCompleted",
+    "timestamp": "2026-07-01T00:00:00Z",
+    "subject_id": null,
+    "receipt_id": "rcp_0a1b2c3d4e5f",
+    "payload_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "invalid_payload": {
+    "event_id": "close-event-1",
+    "event_type": "CloseCompleted",
+    "timestamp": "2026-07-01T00:00:00Z",
+    "payload_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

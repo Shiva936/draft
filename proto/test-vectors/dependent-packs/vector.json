@@ -1,0 +1,17 @@
+{
+  "name": "dependent-packs",
+  "expect": "composition_verified",
+  "object": "composition",
+  "notes": "declared dependency requires topological order",
+  "payload_schema": "composition.schema.json",
+  "payload": {
+    "id": "cmp_2c3d4e5f6a7b",
+    "base_stable_head": "rcp_0a1b2c3d4e5f",
+    "pack_ids": ["pck_bbbbbbbbbbbb", "pck_aaaaaaaaaaaa"],
+    "composition_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dependency_order": ["pck_aaaaaaaaaaaa", "pck_bbbbbbbbbbbb"],
+    "status": "verified",
+    "affected_paths": ["src/a.rs", "src/b.rs"],
+    "conflicts": []
+  }
+}

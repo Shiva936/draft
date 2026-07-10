@@ -2,22 +2,27 @@
 
 Draft is pre-1.0. This roadmap describes current direction without promising delivery dates.
 
-## Current Focus: v0.3.2
+## Current Focus: v0.3.3 — Stable Base Finalization
 
-- Verified changepack system: signed receipts, hash-chained events, transparency.
-- Two hidden `.draft/` stores (global + project) with config/policy precedence.
-- Portable `.draftpack` import/export with quarantine and hardened validation.
-- Explainable risk, basic LSIF impact, and evidence-based test/fuzz selection.
-- Pack algebra (inspect/depends/conflicts/compose), AG-UI cockpit, MCP/ACP/A2A.
+- Branchless stability: verified stable base states and `stable_head`, advanced
+  only after project-state verification.
+- `draft save` as verified finalization with configurable disposal
+  (`merge_and_dispose` / `dispose_only`) and phased before/after hooks.
+- Changepack disposal with compact provenance (receipts, events, indexes) so
+  `.draft/` never becomes a duplicate history store.
+- `draft close` and `draft gc` for safe metadata removal and maintenance.
+- Composition validation: independent/dependent/conflicting packs, dependency
+  ordering, deterministic composition hashes.
+- Top-level `proto/` contract layer (specs, schemas, test vectors) and
+  deterministic verification cache keys.
+- Human-readable CLI output by default; JSON only via `--json`/`--raw`.
 - Keep local-first and daemonless; `.draft/` always hard-excluded; no `draft log`.
 
-## Previous Focus: v0.3.1
+## Next: v0.4.0 — DraftHub (deferred by design)
 
-- Keep CLI flows local-first and daemonless by default.
-- Maintain the ChangePack lifecycle: checkpoint, create, verify, risk, review, approve or reject, save, receipt, rollback.
-- Keep `.draft/` hard-excluded from user change candidates.
-- Improve documentation, command clarity, event UX, and release readiness.
-- Keep hooks opaque and user-owned.
+- Remote changepack hosting, review, CI runners, CD, deployment receipts, and
+  environment heads (`staging_head`, `production_head`) building on v0.3.3's
+  deterministic receipts, hashes, and `stable_head` metadata.
 
 ## Near-Term Areas
 
@@ -29,7 +34,6 @@ Draft is pre-1.0. This roadmap describes current direction without promising del
 ## Explicit Non-Goals
 
 - Replacing Git or other VCS tools.
-- Hosted review, hosted collaboration, pull requests, or merge queues.
-- Native remote sync, push, publish, or deployment behavior.
+- Hosted review, hosted collaboration, pull requests, or merge queues (until DraftHub).
+- Native remote sync, push, publish, or deployment behavior in v0.3.x.
 - Inferring external tool semantics from hook command strings.
-
