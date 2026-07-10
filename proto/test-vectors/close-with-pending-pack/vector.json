@@ -1,0 +1,17 @@
+{
+  "name": "close-with-pending-pack",
+  "expect": "blocked",
+  "object": "close",
+  "pending_packs": 1,
+  "payload_schema": "event.schema.json",
+  "payload": {
+    "event_id": "evt_1b2c3d4e5f6a",
+    "event_type": "CloseFailed",
+    "timestamp": "2026-07-01T00:00:00Z",
+    "subject_id": "pck_aaaaaaaaaaaa",
+    "receipt_id": null,
+    "payload_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

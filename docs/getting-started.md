@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks through a complete Draft v0.3.2 workflow using only local files and the CLI.
+This guide walks through a complete Draft v0.3.3 workflow using only local files and the CLI.
 
 ## Create A Workspace
 

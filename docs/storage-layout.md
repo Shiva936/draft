@@ -1,6 +1,6 @@
 # Storage Layout
 
-Draft stores private state in two hidden `.draft/` stores. The global store (`~/.draft/`) holds user/device identity, signing keys, trust data, adapter config, and reusable cache state. The project store (`<workspace>/.draft/`) holds workspace changepacks, events, receipts, transparency data, checkpoints, evidence, and indexes. Both stores are native to Draft v0.3.2 and independent of external tools.
+Draft stores private state in two hidden `.draft/` stores. The global store (`~/.draft/`) holds user/device identity, signing keys, trust data, adapter config, and reusable cache state. The project store (`<workspace>/.draft/`) holds workspace changepacks, events, receipts, transparency data, checkpoints, evidence, and indexes. Both stores are native to Draft v0.3.3 and independent of external tools.
 
 ## Global Store
 
@@ -32,7 +32,7 @@ The global store never stores project pack data.
 - `.draft/evidence/`: verification and run evidence.
 - `.draft/receipts/`: durable action receipts.
 - `.draft/transparency/`: local tamper-evident receipt/event chain.
-- `.draft/packs/`: canonical v0.3.2 pack manifests, lockfiles, patches, and evidence summaries.
+- `.draft/packs/`: canonical v0.3.3 pack manifests, lockfiles, patches, and evidence summaries.
 - `.draft/imports/quarantine/`: untrusted imported `.draftpack` artifacts, including their embedded content objects (`objects/<hash>`). A quarantined pack's whole directory moves to `.draft/packs/` when the import is saved.
 - `.draft/exports/`: local export outputs when requested.
 - `.draft/lsif/`: basic offline symbol index.

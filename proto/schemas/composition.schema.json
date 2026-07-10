@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Composition",
+  "type": "object",
+  "required": ["id", "base_stable_head", "pack_ids", "composition_hash", "dependency_order", "status", "affected_paths"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^cmp_[A-Za-z0-9_-]+$" },
+    "base_stable_head": { "type": "string" },
+    "pack_ids": { "type": "array", "items": { "type": "string", "pattern": "^pck_[A-Za-z0-9_-]+$" } },
+    "composition_hash": { "type": "string" },
+    "dependency_order": { "type": "array", "items": { "type": "string" } },
+    "status": { "enum": ["created", "verified", "failed"] },
+    "affected_paths": { "type": "array", "items": { "type": "string" } },
+    "conflicts": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

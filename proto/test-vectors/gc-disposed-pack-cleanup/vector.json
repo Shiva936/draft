@@ -1,0 +1,17 @@
+{
+  "name": "gc-disposed-pack-cleanup",
+  "expect": "cleaned",
+  "object": "gc",
+  "preserve_active": true,
+  "payload_schema": "event.schema.json",
+  "payload": {
+    "event_id": "evt_2c3d4e5f6a7b",
+    "event_type": "GcCompleted",
+    "timestamp": "2026-07-01T00:00:00Z",
+    "subject_id": null,
+    "receipt_id": "rcp_1b2c3d4e5f6a",
+    "payload_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

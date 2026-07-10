@@ -91,6 +91,24 @@ fn write_json_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
+/// Canonical hash of the project's Draft configuration (SRS-FR-096/097).
+/// `config.toml` and `policy.toml` are parsed to values before hashing so
+/// formatting and comments never affect the digest; a missing file hashes as
+/// null.
+pub fn config_hash(paths: &crate::layout::ProjectPaths) -> String {
+    let read = |p: &Path| -> serde_json::Value {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|s| toml::from_str::<toml::Value>(&s).ok())
+            .and_then(|v| serde_json::to_value(v).ok())
+            .unwrap_or(serde_json::Value::Null)
+    };
+    canonical_hash(&serde_json::json!({
+        "config": read(&paths.config_toml()),
+        "policy": read(&paths.policy_toml()),
+    }))
+}
+
 /// A single file's contribution to the workspace hash.
 struct FileEntry {
     rel: String,
@@ -102,6 +120,37 @@ struct FileEntry {
 /// The digest is over `sha256:<hex>` lines of `path\0content_hash`, sorted by
 /// path, so it is stable regardless of filesystem traversal order.
 pub fn workspace_hash(root: &Path) -> DraftResult<String> {
+    workspace_hash_inner(root, None)
+}
+
+/// Per-file content-hash cache entry keyed by size and mtime (NFR-PF-001).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct CachedFileHash {
+    size: u64,
+    mtime_ns: u128,
+    hash: String,
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct WorkspaceHashCache {
+    #[serde(default)]
+    files: std::collections::BTreeMap<String, CachedFileHash>,
+}
+
+/// [`workspace_hash`] with a changed-file cache: produces the identical digest
+/// but reuses per-file content hashes whose (size, mtime) are unchanged, so
+/// repeated hashing of a large, mostly-unchanged tree avoids full re-reads.
+/// The cache lives under `.draft/cache/` (excluded from the walk) and cache
+/// read/write failures degrade to full hashing.
+pub fn workspace_hash_cached(root: &Path, cache_file: &Path) -> DraftResult<String> {
+    workspace_hash_inner(root, Some(cache_file))
+}
+
+fn workspace_hash_inner(root: &Path, cache_file: Option<&Path>) -> DraftResult<String> {
+    let mut cache = cache_file
+        .map(|p| crate::fsutil::read_json::<WorkspaceHashCache>(p).unwrap_or_default())
+        .unwrap_or_default();
+    let mut next_cache = WorkspaceHashCache::default();
     let mut entries: Vec<FileEntry> = Vec::new();
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
@@ -125,11 +174,41 @@ pub fn workspace_hash(root: &Path) -> DraftResult<String> {
         if rel.is_empty() {
             continue;
         }
-        let bytes = std::fs::read(path).unwrap_or_default();
-        entries.push(FileEntry {
-            rel,
-            content_hash: sha256_hex(&bytes),
+        let stat = std::fs::metadata(path).ok().and_then(|m| {
+            let mtime_ns = m
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos();
+            Some((m.len(), mtime_ns))
         });
+        let content_hash = match (cache_file.is_some(), stat, cache.files.remove(&rel)) {
+            (true, Some((size, mtime_ns)), Some(hit))
+                if hit.size == size && hit.mtime_ns == mtime_ns =>
+            {
+                hit.hash
+            }
+            _ => {
+                let bytes = std::fs::read(path).unwrap_or_default();
+                sha256_hex(&bytes)
+            }
+        };
+        if let (true, Some((size, mtime_ns))) = (cache_file.is_some(), stat) {
+            next_cache.files.insert(
+                rel.clone(),
+                CachedFileHash {
+                    size,
+                    mtime_ns,
+                    hash: content_hash.clone(),
+                },
+            );
+        }
+        entries.push(FileEntry { rel, content_hash });
+    }
+    if let Some(cache_path) = cache_file {
+        // Best effort: a failed cache write never fails the hash.
+        let _ = crate::fsutil::write_json(cache_path, &next_cache);
     }
     entries.sort_by(|a, b| a.rel.cmp(&b.rel));
     let mut hasher = Sha256::new();
@@ -137,7 +216,7 @@ pub fn workspace_hash(root: &Path) -> DraftResult<String> {
         hasher.update(e.rel.as_bytes());
         hasher.update([0u8]);
         hasher.update(e.content_hash.as_bytes());
-        hasher.update([b'\n']);
+        hasher.update(*b"\n");
     }
     let digest = hasher.finalize();
     let mut s = String::from("sha256:");
@@ -166,6 +245,54 @@ mod tests {
         let a = json!({"x": 1, "y": [1, 2, 3]});
         let b = json!({"y": [1, 2, 3], "x": 1});
         assert_eq!(canonical_json(&a), canonical_json(&b));
+    }
+
+    #[test]
+    fn cached_workspace_hash_matches_full_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("a.txt"), "hello").unwrap();
+        std::fs::write(root.join("b.txt"), "there").unwrap();
+        std::fs::create_dir_all(root.join(".draft/cache/hashes")).unwrap();
+        let cache = root.join(".draft/cache/hashes/workspace-hash.json");
+        let full = workspace_hash(root).unwrap();
+        // Cold cache, warm cache, and full hash must all agree.
+        assert_eq!(workspace_hash_cached(root, &cache).unwrap(), full);
+        assert!(cache.exists());
+        assert_eq!(workspace_hash_cached(root, &cache).unwrap(), full);
+        // A content change (different size) is picked up through the cache.
+        std::fs::write(root.join("a.txt"), "hello world").unwrap();
+        assert_eq!(
+            workspace_hash_cached(root, &cache).unwrap(),
+            workspace_hash(root).unwrap()
+        );
+    }
+
+    #[test]
+    fn config_hash_ignores_formatting_and_detects_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = crate::layout::ProjectPaths::for_root(tmp.path());
+        std::fs::create_dir_all(paths.draft_dir()).unwrap();
+        std::fs::write(
+            paths.config_toml(),
+            "[save]\npack_disposal = \"merge_and_dispose\"\n",
+        )
+        .unwrap();
+        let h1 = config_hash(&paths);
+        // Reformatting (comments/whitespace) must not change the hash.
+        std::fs::write(
+            paths.config_toml(),
+            "# comment\n[save]\n\npack_disposal   =   \"merge_and_dispose\"\n",
+        )
+        .unwrap();
+        assert_eq!(h1, config_hash(&paths));
+        // A value change must.
+        std::fs::write(
+            paths.config_toml(),
+            "[save]\npack_disposal = \"dispose_only\"\n",
+        )
+        .unwrap();
+        assert_ne!(h1, config_hash(&paths));
     }
 
     #[test]

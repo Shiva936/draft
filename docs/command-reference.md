@@ -1,15 +1,17 @@
 # Command Reference
 
-The Draft CLI is the primary v0.3.2 interface. Core workflows are local-first and work without a daemon.
+The Draft CLI is the primary v0.3.3 interface. Core workflows are local-first and work without a daemon.
 
-Most read commands support `--json`. Human output is intended for terminals; JSON output is intended for scripts and TUI integration.
+Human-readable output is the default CLI contract. Machine-readable JSON is
+available only through existing supported `--raw` command surfaces; v0.3.3 does
+not add `--raw` or JSON output to every command.
 
-The stable v0.3.2 contract centers on `init`, `doctor`, `identity`, `config`,
+The stable v0.3.3 contract centers on `init`, `doctor`, `identity`, `config`,
 `event`, `receipt verify`, `pack` import/export/algebra, `verify`, `save`,
-`rollback`, `cockpit`, and adapter commands. Earlier local workflow commands
+`rollback`, `close`, `gc`, `cockpit`, and adapter commands. Earlier local workflow commands
 such as `status`, `checkpoint`, `create`, `review`, `approve`, and `risk` remain
 available as compatibility commands and route trust-relevant state through the
-canonical v0.3.2 ledger.
+canonical v0.3.3 ledger.
 
 ## Workspace
 
@@ -46,7 +48,7 @@ Manages `.draft/.ignore`. `.draft/` remains hard-excluded even if ignore rules a
 
 ## Events
 
-### `draft event [--page <page>] [--limit <entries>] [--raw] [--json]`
+### `draft event [--page <page>] [--limit <entries>] [--raw]`
 
 Renders a clean human-readable timeline derived from `.draft/events/event.log`. `--raw` prints the underlying compact JSONL event envelopes for audit, debugging, replay, and tooling. Use `draft doctor` or `draft receipt verify --all` to verify event, receipt, and transparency integrity. There is no `draft log`, and `draft event` accepts only long `--page` and `--limit` pagination flags.
 
@@ -108,9 +110,29 @@ Saves an approved, verified ChangePack and optionally runs `hooks.save`. Before 
 
 Saving an **imported** pack additionally requires local re-verification and approval, applies the pack's embedded content to the workspace (fail closed: nothing is written if any touched file differs from the change's recorded base version), checkpoints the workspace first, and moves the pack out of quarantine. Save hooks do not run for import saves.
 
+Successful saves advance `stable_head` only after project-state verification and
+dispose changepack metadata as the final step. Export portable packs before
+save if you need to retain the full payload outside active Draft storage.
+Save behavior is configured by `[save].pack_disposal` in `.draft/config.toml` —
+`merge_and_dispose` (default) merges into Draft's stable base and advances
+`stable_head`; `dispose_only` delegates permanence to configured hooks and does
+not advance `stable_head`. See [Protocol Contracts](protocol.md).
+
 ### `draft rollback <chk-id|pck-id|rcp-id> [--dry-run]`
 
 Rolls back by inferring target type from the ID prefix. `rcp_` references resolve both legacy rollback receipts and canonical signed receipts; a canonical receipt must verify and carry a rollback-eligible event type (`CheckpointCreated`, `PackCreated`, `PackVerified`, `PackApproved`, `PackSaved`), and resolves through its subject. Rollback protects `.draft/`.
+
+### `draft close [--force]`
+
+Removes Draft metadata from the workspace without deleting project files.
+Refuses pending unsafe state by default. `--force` discards Draft metadata even
+with pending packs but still leaves user files untouched.
+
+### `draft gc`
+
+Runs safe local maintenance: validates `stable_head`, preserves active and
+recoverable packs, removes safe temp/cache metadata, rebuilds indexes, and
+records gc receipts/events.
 
 ## Evidence Verification, Import/Export, And Pack Algebra
 

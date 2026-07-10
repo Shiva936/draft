@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Stable Head",
+  "type": "object",
+  "required": ["schema_version", "id", "receipt_id", "workspace_hash", "base_hash", "verification_result", "timestamp", "stable_head_hash"],
+  "properties": {
+    "schema_version": { "const": "0.3.3" },
+    "id": { "type": "string" },
+    "receipt_id": { "type": "string", "pattern": "^rcp_[A-Za-z0-9_-]+$" },
+    "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "base_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "previous_stable_head": { "type": ["string", "null"] },
+    "finalized_pack_digest": { "type": ["string", "null"] },
+    "finalized_pack_summary": { "type": ["object", "null"] },
+    "verification_result": { "enum": ["verified", "failed"] },
+    "save_mode": { "enum": ["merge_and_dispose", "dispose_only", null] },
+    "timestamp": { "type": "string" },
+    "stable_head_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

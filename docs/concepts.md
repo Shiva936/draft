@@ -1,6 +1,6 @@
 # Concepts
 
-Draft v0.3.2 is organized around local, reviewable, signed changepacks.
+Draft v0.3.3 is organized around local, reviewable, signed changepacks.
 
 ## Workspace
 

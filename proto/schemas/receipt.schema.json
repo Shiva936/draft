@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Receipt",
+  "type": "object",
+  "required": ["receipt_id", "receipt_type", "workspace_hash", "verification_result", "timestamp", "event_hash", "previous_event_hash"],
+  "properties": {
+    "receipt_id": { "type": "string", "pattern": "^rcp_[A-Za-z0-9_-]+$" },
+    "receipt_type": { "type": "string" },
+    "base_before": { "type": ["string", "null"] },
+    "base_after": { "type": ["string", "null"] },
+    "stable_head_before": { "type": ["string", "null"] },
+    "stable_head_after": { "type": ["string", "null"] },
+    "pack_digest": { "type": ["string", "null"] },
+    "pack_summary": { "type": ["object", "null"] },
+    "composition_hash": { "type": ["string", "null"] },
+    "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "verification_result": { "enum": ["verified", "failed"] },
+    "hook_results": { "type": "array" },
+    "save_mode": { "enum": ["merge_and_dispose", "dispose_only", null] },
+    "timestamp": { "type": "string" },
+    "signer": { "type": ["string", "null"] },
+    "event_hash": { "type": "string" },
+    "previous_event_hash": { "type": "string" }
+  },
+  "additionalProperties": true
+}

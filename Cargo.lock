@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "draft-adapters"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "draft-core",
  "serde",
@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "draft-agui"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "axum",
  "draft-core",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "draft-cli"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "draft-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "draft-ipc"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "draft-locks"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "draft-core",
  "tempfile",
@@ -717,11 +717,11 @@ dependencies = [
 
 [[package]]
 name = "draft-sessions"
-version = "0.3.2"
+version = "0.3.3"
 
 [[package]]
 name = "draft-store"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "serde",
@@ -730,11 +730,11 @@ dependencies = [
 
 [[package]]
 name = "draft-sync"
-version = "0.3.2"
+version = "0.3.3"
 
 [[package]]
 name = "draft-tui"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "crossterm",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "draft-watcher"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "notify",
  "tempfile",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "draftd"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "clap",

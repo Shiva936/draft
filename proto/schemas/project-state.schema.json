@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Project State",
+  "type": "object",
+  "required": ["schema_version", "workspace_hash", "base_hash", "stable_head"],
+  "properties": {
+    "schema_version": { "const": "0.3.3" },
+    "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "base_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "stable_head": { "type": "string" }
+  },
+  "additionalProperties": true
+}

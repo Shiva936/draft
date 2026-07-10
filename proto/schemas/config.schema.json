@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Config",
+  "type": "object",
+  "properties": {
+    "save": {
+      "type": "object",
+      "properties": {
+        "pack_disposal": { "enum": ["merge_and_dispose", "dispose_only"] },
+        "message_template": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "hooks": {
+      "type": "object",
+      "properties": {
+        "save": { "type": "object" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

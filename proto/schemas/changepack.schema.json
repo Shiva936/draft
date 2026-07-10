@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft ChangePack",
+  "type": "object",
+  "required": ["schema_version", "pack_id", "name", "base_workspace_hash", "target_workspace_hash", "changes_hash", "receipt_hashes", "approval_state", "save_state"],
+  "properties": {
+    "schema_version": { "const": "0.3.3" },
+    "pack_id": { "type": "string", "pattern": "^pck_[A-Za-z0-9_-]+$" },
+    "name": { "type": "string" },
+    "base_workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "target_workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "changes_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "risk_hash": { "type": "string" },
+    "verify_hash": { "type": "string" },
+    "receipt_hashes": { "type": "array", "items": { "type": "string" } },
+    "approval_state": { "enum": ["pending", "approved", "rejected"] },
+    "save_state": { "enum": ["unsaved", "saved", "disposed", "disposal_failed", "rolled_back"] }
+  },
+  "additionalProperties": true
+}

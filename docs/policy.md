@@ -32,7 +32,7 @@ still honored by the legacy save gates; canonical keys are top-level.
 
 ## Default Gates
 
-The default v0.3.2 policy requires:
+The default v0.3.3 policy requires:
 
 - verification before save;
 - approval before save;

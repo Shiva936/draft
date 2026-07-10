@@ -5,15 +5,20 @@
 //! >15% slowdown warrants investigation; >25% blocks release unless accepted.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use draft_core::composition;
 use draft_core::event::{EventKind, EventLog, NewEvent};
+use draft_core::gc;
 use draft_core::hashing;
+use draft_core::index::AffectedPathIndex;
 use draft_core::layout::ProjectPaths;
 use draft_core::lsif::LsifIndex;
-use draft_core::pack::PackIntent;
+use draft_core::pack::{
+    ApprovalState, ImportState, PackIntent, PackLockfile, PackManifest, SaveState,
+};
 use draft_core::pathguard;
-use draft_core::riskv2;
+use draft_core::risk;
 use draft_core::signing::{self, Keypair};
-use draft_core::verifyv2::{self, SelectionInput};
+use draft_core::verification::{self, SelectionInput};
 use std::collections::BTreeSet;
 
 /// Materialize a temp repo of `n` files for scan/hash benchmarks.
@@ -33,10 +38,26 @@ fn make_repo(n: usize) -> tempfile::TempDir {
 
 fn bench_workspace_hash(c: &mut Criterion) {
     let mut g = c.benchmark_group("workspace_hash");
-    for &n in &[100usize, 1000, 5000] {
+    // 10k changed files is the NFR-SC-002 large-change simulation target.
+    for &n in &[100usize, 1000, 5000, 10000] {
         let repo = make_repo(n);
         g.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| hashing::workspace_hash(black_box(repo.path())).unwrap())
+        });
+    }
+    g.finish();
+
+    // Warm changed-file cache (NFR-PF-001): identical digest, cached re-reads.
+    let mut g = c.benchmark_group("workspace_hash_cached");
+    for &n in &[1000usize, 10000] {
+        let repo = make_repo(n);
+        let cache = repo.path().join(".draft/cache/hashes/workspace-hash.json");
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        hashing::workspace_hash_cached(repo.path(), &cache).unwrap();
+        g.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                hashing::workspace_hash_cached(black_box(repo.path()), black_box(&cache)).unwrap()
+            })
         });
     }
     g.finish();
@@ -96,7 +117,7 @@ fn bench_pathguard(c: &mut Criterion) {
 }
 
 fn bench_risk(c: &mut Criterion) {
-    let inputs = riskv2::RiskInputs {
+    let inputs = risk::RiskInputs {
         intent: PackIntent::Security,
         files_touched: 40,
         lines_changed: 1500,
@@ -106,7 +127,7 @@ fn bench_risk(c: &mut Criterion) {
         ..Default::default()
     };
     c.bench_function("risk_assess", |b| {
-        b.iter(|| riskv2::assess(black_box(&inputs)))
+        b.iter(|| risk::assess(black_box(&inputs)))
     });
 }
 
@@ -120,7 +141,7 @@ fn bench_verify_plan(c: &mut Criterion) {
         fuzz: true,
     };
     c.bench_function("verify_plan", |b| {
-        b.iter(|| verifyv2::plan(black_box(&input)))
+        b.iter(|| verification::plan(black_box(&input)))
     });
 }
 
@@ -150,6 +171,146 @@ fn bench_lsif(c: &mut Criterion) {
     });
 }
 
+/// Build `n` canonical pack lockfiles + manifests. Every fourth pack depends
+/// on its predecessor so the graph mixes independent and dependent packs.
+fn make_packs(n: usize) -> (Vec<PackManifest>, Vec<PackLockfile>) {
+    let mut manifests = Vec::with_capacity(n);
+    let mut locks = Vec::with_capacity(n);
+    for i in 0..n {
+        let id = format!("pck_{i:05}");
+        manifests.push(PackManifest {
+            schema_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            pack_id: id.clone(),
+            name: id.clone(),
+            description: String::new(),
+            intent: PackIntent::Feature,
+            origin: "local".to_string(),
+            actor: "bench".to_string(),
+            candidate: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            base_workspace_hash: String::new(),
+            target_workspace_hash: String::new(),
+            changes_hash: String::new(),
+            risk_hash: String::new(),
+            verify_hash: String::new(),
+            lsif_hash: String::new(),
+            receipt_hashes: Vec::new(),
+            import_state: ImportState::None,
+            approval_state: ApprovalState::Pending,
+            save_state: SaveState::Unsaved,
+        });
+        let deps = if i % 4 == 3 {
+            vec![format!("pck_{:05}", i - 1)]
+        } else {
+            Vec::new()
+        };
+        locks.push(PackLockfile {
+            schema_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            pack_id: id.clone(),
+            workspace_hash: hashing::sha256_hex(id.as_bytes()),
+            file_hashes: [(
+                format!("src/mod{i}/file.rs"),
+                hashing::sha256_hex(id.as_bytes()),
+            )]
+            .into_iter()
+            .collect(),
+            policy_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            risk_engine_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            verification_commands: Vec::new(),
+            lsif_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            test_selector_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            fuzz_selector_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            dependency_pack_hashes: deps,
+            receipt_hashes: Vec::new(),
+        });
+    }
+    (manifests, locks)
+}
+
+/// 1k-active-pack composition validation (NFR-SC-001, SRS-FR-145).
+fn bench_composition(c: &mut Criterion) {
+    let mut g = c.benchmark_group("composition_validate");
+    g.sample_size(10);
+    for &n in &[100usize, 1000] {
+        let (manifests, locks) = make_packs(n);
+        g.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| {
+                composition::validate(
+                    black_box("rcp_base"),
+                    black_box(&manifests),
+                    black_box(&locks),
+                    Some(Vec::new()),
+                )
+                .unwrap()
+            })
+        });
+    }
+    g.finish();
+}
+
+/// Pairwise conflict classification and indexed path-overlap filtering
+/// (SRS-FR-146: conflict detection scales with affected paths).
+fn bench_conflict_detection(c: &mut Criterion) {
+    let (_, locks) = make_packs(1000);
+    c.bench_function("conflict_classify_1k_packs", |b| {
+        b.iter(|| {
+            let mut conflicts = 0usize;
+            for pair in locks.windows(2) {
+                if composition::classify(black_box(&pair[0]), black_box(&pair[1]))
+                    == composition::Relationship::Conflicting
+                {
+                    conflicts += 1;
+                }
+            }
+            conflicts
+        })
+    });
+
+    let mut index = AffectedPathIndex::default();
+    for lock in &locks {
+        index.packs.insert(
+            lock.pack_id.clone(),
+            lock.file_hashes.keys().cloned().collect(),
+        );
+    }
+    let candidate = vec!["src/mod500/file.rs".to_string()];
+    c.bench_function("affected_path_index_lookup_1k", |b| {
+        b.iter(|| index.packs_touching(black_box(&candidate)))
+    });
+}
+
+/// `draft gc` cleanup throughput over disposed pack metadata (NFR-PF-006).
+fn bench_gc(c: &mut Criterion) {
+    let mut g = c.benchmark_group("gc_cleanup");
+    g.sample_size(10);
+    g.bench_function("gc_100_disposed_packs", |b| {
+        b.iter_batched(
+            || {
+                let dir = tempfile::tempdir().unwrap();
+                let paths = ProjectPaths::for_root(dir.path());
+                paths.create_all().unwrap();
+                let (mut manifests, _) = make_packs(100);
+                for m in &mut manifests {
+                    m.save_state = SaveState::Saved;
+                    std::fs::create_dir_all(paths.pack_dir(&m.pack_id)).unwrap();
+                    draft_core::fsutil::write_json(&paths.pack_manifest(&m.pack_id), m).unwrap();
+                }
+                for i in 0..50 {
+                    std::fs::write(paths.tmp_dir().join(format!("orphan{i}")), "x").unwrap();
+                }
+                (dir, paths)
+            },
+            |(dir, paths)| {
+                let report = gc::run(black_box(&paths)).unwrap();
+                drop(dir);
+                report
+            },
+            criterion::BatchSize::PerIteration,
+        )
+    });
+    g.finish();
+}
+
 criterion_group!(
     benches,
     bench_workspace_hash,
@@ -159,6 +320,9 @@ criterion_group!(
     bench_pathguard,
     bench_risk,
     bench_verify_plan,
-    bench_lsif
+    bench_lsif,
+    bench_composition,
+    bench_conflict_detection,
+    bench_gc
 );
 criterion_main!(benches);

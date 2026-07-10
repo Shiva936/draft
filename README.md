@@ -34,7 +34,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.3.2-7c3aed?style=flat-square" />
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.3-7c3aed?style=flat-square" />
   <img alt="status" src="https://img.shields.io/badge/status-pre--1.0-0ea5e9?style=flat-square" />
   <img alt="local-first" src="https://img.shields.io/badge/local--first-yes-10b981?style=flat-square" />
   <img alt="offline capable" src="https://img.shields.io/badge/offline--capable-yes-14b8a6?style=flat-square" />
@@ -214,7 +214,7 @@ draft verify -p "update app"
 
 ## Commands
 
-The v0.3.2 command surface is intentionally local and workspace-oriented.
+The v0.3.3 command surface is intentionally local and workspace-oriented.
 
 ```text
 init       doctor     identity   config     hook
@@ -222,16 +222,20 @@ ignore     status     event      checkpoint create
 pack       list       candidate  task       verify
 risk       review     approve    reject     compare
 compose    disperse   save       receipt    storage
-rollback   cockpit    mcp        acp        a2a
+rollback   close      gc         cockpit    mcp
+acp        a2a
 ```
 
-New in v0.3.2: `init --global`, `doctor`, `identity status`, `receipt verify`,
-`pack --export/--import`, `pack inspect/depends/conflicts/compose`,
-`verify <pck_id> --explain/--full/--fuzz`, `save --dry-run`, `rollback --dry-run`,
-`cockpit`, and the `mcp`/`acp`/`a2a` adapters. Draft treats each changepack as an
-independent, composable, portable, **signed**, locally verifiable unit of change.
-Event history is `draft event` — there is no `log` command; only `--page` and
-`--limit` apply. See [CHANGELOG.md](CHANGELOG.md).
+New in v0.3.3: the verified stable-base model — `draft init` creates a verified
+stable base and `stable_head`, `draft save` finalizes packs with configurable
+disposal (`merge_and_dispose`/`dispose_only`) gated by project-state
+verification, save hooks run in before/after phases, saved packs are disposed
+leaving compact receipt provenance, and `draft close`/`draft gc` handle safe
+metadata removal and maintenance. A top-level `proto/` directory defines the
+protocol contracts. Draft treats each changepack as an independent, composable,
+portable, **signed**, locally verifiable unit of change — temporary until
+saved. Event history is `draft event` — there is no `log` command; only
+`--page` and `--limit` apply. See [CHANGELOG.md](CHANGELOG.md).
 
 ### ChangePack Commands
 
@@ -294,7 +298,7 @@ Draft stores provenance as append-only hash-chained event records linked to sign
 
 ### Candidate And Task Commands
 
-Candidates are named execution profiles. They do not represent roles in v0.3.2.
+Candidates are named execution profiles. They do not represent roles in v0.3.3.
 
 Run a task with an explicit instruction boundary:
 
@@ -391,12 +395,11 @@ Start with [docs/README.md](docs/README.md).
 | Storage Layout     | [docs/storage-layout.md](docs/storage-layout.md)         |
 | Event Model        | [docs/event-model.md](docs/event-model.md)               |
 | ChangePacks        | [docs/changepack.md](docs/changepack.md)                 |
+| Protocol Contracts | [docs/protocol.md](docs/protocol.md)                     |
 | Checkpoints        | [docs/checkpoints.md](docs/checkpoints.md)               |
 | Verification       | [docs/verification.md](docs/verification.md)             |
 | Review & Approval  | [docs/review-and-approval.md](docs/review-and-approval.md) |
 | Policy             | [docs/policy.md](docs/policy.md)                         |
-| Receipts           | [docs/receipts.md](docs/receipts.md)                     |
-| Rollback           | [docs/rollback.md](docs/rollback.md)                     |
 | Candidates & Tasks | [docs/candidates-and-tasks.md](docs/candidates-and-tasks.md) |
 | Safety Model       | [docs/safety-model.md](docs/safety-model.md)             |
 | Services           | [docs/services.md](docs/services.md)                     |
@@ -427,7 +430,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, development 
 
 ## Project Status
 
-Draft is pre-1.0 software. The current focus is v0.3.2 production readiness:
+Draft is pre-1.0 software. The current focus is v0.3.3 production readiness:
 
 * CLI ergonomics;
 * verified, signed, portable changepacks;

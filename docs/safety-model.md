@@ -41,4 +41,4 @@ Hooks are local shell commands configured by the user. Draft captures results an
 
 ## Non-Goals
 
-Draft v0.3.2 does not provide hosted collaboration, pull requests, native merge behavior, remote sync, deployment, marketplace behavior, or credential exchange.
+Draft v0.3.3 does not provide hosted collaboration, pull requests, native merge behavior, remote sync, deployment, marketplace behavior, or credential exchange.

@@ -1,0 +1,26 @@
+{
+  "name": "conflicting-packs",
+  "expect": "composition_failed",
+  "object": "composition",
+  "notes": "same path/hunk overlap is a blocking conflict",
+  "payload_schema": "composition.schema.json",
+  "payload": {
+    "id": "cmp_0a1b2c3d4e5f",
+    "base_stable_head": "rcp_0a1b2c3d4e5f",
+    "pack_ids": ["pck_aaaaaaaaaaaa", "pck_bbbbbbbbbbbb"],
+    "composition_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dependency_order": [],
+    "status": "failed",
+    "affected_paths": ["src/lib.rs"],
+    "conflicts": ["src/lib.rs: overlapping hunks between pck_aaaaaaaaaaaa and pck_bbbbbbbbbbbb"]
+  },
+  "invalid_payload": {
+    "id": "cmp_0a1b2c3d4e5f",
+    "base_stable_head": "rcp_0a1b2c3d4e5f",
+    "pack_ids": ["pck_aaaaaaaaaaaa"],
+    "composition_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dependency_order": [],
+    "status": "exploded",
+    "affected_paths": []
+  }
+}

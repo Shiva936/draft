@@ -1,7 +1,7 @@
-//! Project `.draft/` canonical v0.3.2 layout (PRD §9.1, TDD §7).
+//! Project `.draft/` canonical v0.3.3 layout (PRD §9.1, TDD §7).
 //!
 //! This is the authoritative map of the project metadata store as specified for
-//! v0.3.2. It coexists with the legacy [`crate::DraftLayout`] (which still owns
+//! v0.3.3. It coexists with the legacy [`crate::DraftLayout`] (which still owns
 //! the content-addressed object/snapshot store); both point at the same
 //! `<root>/.draft` directory. New trust artifacts — the event log, receipts,
 //! the transparency chain, pack manifests/lockfiles, import quarantine, exports,
@@ -83,6 +83,45 @@ impl ProjectPaths {
         self.transparency_dir().join("chain.log")
     }
 
+    // ---- Stable head / indexes / operation state ------------------------
+
+    pub fn stable_head_dir(&self) -> PathBuf {
+        self.draft_dir.join("stable_head")
+    }
+    pub fn stable_head_file(&self) -> PathBuf {
+        self.stable_head_dir().join("head.json")
+    }
+    pub fn stable_head_receipt_file(&self) -> PathBuf {
+        self.stable_head_dir().join("receipt.json")
+    }
+    pub fn index_dir(&self) -> PathBuf {
+        self.draft_dir.join("index")
+    }
+    pub fn stable_graph_index(&self) -> PathBuf {
+        self.index_dir().join("stable-graph.json")
+    }
+    pub fn affected_path_index(&self) -> PathBuf {
+        self.index_dir().join("affected-paths.json")
+    }
+    pub fn verification_cache_manifest(&self) -> PathBuf {
+        self.index_dir().join("verification-cache.json")
+    }
+    pub fn workspace_hash_cache(&self) -> PathBuf {
+        self.cache_sub("hashes").join("workspace-hash.json")
+    }
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.draft_dir.join("tmp")
+    }
+    pub fn op_tmp_dir(&self, op_id: &str) -> PathBuf {
+        self.tmp_dir().join(op_id)
+    }
+    pub fn locks_dir(&self) -> PathBuf {
+        self.draft_dir.join("locks")
+    }
+    pub fn lock_file(&self, name: &str) -> PathBuf {
+        self.locks_dir().join(format!("{name}.lock"))
+    }
+
     // ---- Packs -----------------------------------------------------------
 
     pub fn packs_dir(&self) -> PathBuf {
@@ -155,7 +194,7 @@ impl ProjectPaths {
         self.adapters_dir().join("project-overrides")
     }
 
-    /// Create the full v0.3.2 project tree and mark `.draft/` hidden.
+    /// Create the full v0.3.3 project tree and mark `.draft/` hidden.
     /// Idempotent; leaves existing files untouched.
     pub fn create_all(&self) -> DraftResult<HiddenStatus> {
         for dir in [
@@ -163,8 +202,12 @@ impl ProjectPaths {
             self.events_dir(),
             self.receipts_dir(),
             self.transparency_dir(),
+            self.stable_head_dir(),
             self.packs_dir(),
             self.checkpoints_dir(),
+            self.index_dir(),
+            self.tmp_dir(),
+            self.locks_dir(),
             self.imports_dir(),
             self.quarantine_dir(),
             self.exports_dir(),

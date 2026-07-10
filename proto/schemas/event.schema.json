@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Event",
+  "type": "object",
+  "required": ["event_id", "event_type", "timestamp", "payload_hash", "previous_event_hash", "event_hash"],
+  "properties": {
+    "event_id": { "type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$" },
+    "event_type": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "subject_id": { "type": ["string", "null"] },
+    "receipt_id": { "type": ["string", "null"] },
+    "payload_hash": { "type": "string" },
+    "previous_event_hash": { "type": "string" },
+    "event_hash": { "type": "string" }
+  },
+  "additionalProperties": true
+}

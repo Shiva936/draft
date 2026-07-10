@@ -130,6 +130,65 @@ block_if_tests_fail = true
     std::fs::write(dir.join(".draft/config.toml"), content).unwrap();
 }
 
+fn write_phased_hook_config(dir: &std::path::Path, before: &str, after: &str) {
+    let content = format!(
+        r#"[identity]
+username = "Ada"
+email = "ada@example.com"
+
+[save]
+message_template = "{{{{title}}}}"
+
+[hooks.save]
+before = [{{ command = "{}", enabled = true, shell = "default", cwd = "workspace" }}]
+after = [{{ command = "{}", enabled = true, shell = "default", cwd = "workspace" }}]
+
+[verification]
+default_profile = "standard"
+
+[policy]
+require_verification = true
+require_approval = true
+require_human_approval_for_high_risk = true
+block_if_tests_fail = true
+"#,
+        before.replace('\\', "\\\\").replace('"', "\\\""),
+        after.replace('\\', "\\\\").replace('"', "\\\""),
+    );
+    std::fs::write(dir.join(".draft/config.toml"), content).unwrap();
+}
+
+fn write_dispose_only_config(dir: &std::path::Path) {
+    std::fs::write(
+        dir.join(".draft/config.toml"),
+        r#"[identity]
+username = "Ada"
+email = "ada@example.com"
+
+[save]
+message_template = "{{title}}"
+pack_disposal = "dispose_only"
+
+[verification]
+default_profile = "standard"
+
+[policy]
+require_verification = true
+require_approval = true
+require_human_approval_for_high_risk = true
+block_if_tests_fail = true
+"#,
+    )
+    .unwrap();
+}
+
+fn stable_head_id(dir: &std::path::Path) -> String {
+    let head: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join(".draft/stable_head/head.json")).unwrap())
+            .unwrap();
+    head["id"].as_str().unwrap().to_string()
+}
+
 fn collect_files(path: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
     if path.is_file() {
         files.push(path.to_path_buf());
@@ -189,6 +248,45 @@ fn init_status_ignore_and_events_work_without_vcs() {
         .assert()
         .success()
         .stdout(contains("event-chain"));
+}
+
+#[test]
+fn close_and_gc_follow_local_maintenance_contracts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let clean = tmp.path().join("clean");
+    let dirty = tmp.path().join("dirty");
+    std::fs::create_dir_all(&clean).unwrap();
+    std::fs::create_dir_all(&dirty).unwrap();
+
+    draft(&clean).args(["init"]).assert().success();
+    draft(&clean)
+        .args(["gc"])
+        .assert()
+        .success()
+        .stdout(contains("Stable head valid"));
+    draft(&clean)
+        .args(["close"])
+        .assert()
+        .success()
+        .stdout(contains("Draft closed"));
+    assert!(!clean.join(".draft").exists());
+
+    draft(&dirty).args(["init"]).assert().success();
+    std::fs::write(dirty.join("app.txt"), "v1\n").unwrap();
+    draft(&dirty)
+        .args(["checkpoint", "base"])
+        .assert()
+        .success();
+    std::fs::write(dirty.join("app.txt"), "v2\n").unwrap();
+    draft(&dirty).args(["create", "pending"]).assert().success();
+    draft(&dirty)
+        .args(["close"])
+        .assert()
+        .failure()
+        .stderr(contains("pending changepack"));
+    assert!(dirty.join(".draft").exists());
+    draft(&dirty).args(["close", "--force"]).assert().success();
+    assert!(!dirty.join(".draft").exists());
 }
 
 #[test]
@@ -361,7 +459,7 @@ fn init_fails_when_workspace_already_initialized() {
 }
 
 #[test]
-fn event_command_supports_v032_contract_and_rejects_legacy_flags() {
+fn event_command_supports_pagination_and_rejects_legacy_flags() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
@@ -790,6 +888,57 @@ fn rich_hooks_save_supports_dynamic_vars_and_env() {
 }
 
 #[test]
+fn phased_save_hooks_run_before_disposal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let before = if cfg!(windows) {
+        "echo before> before-hook.txt"
+    } else {
+        "printf before > before-hook.txt"
+    };
+    let after = if cfg!(windows) {
+        "echo after> after-hook.txt"
+    } else {
+        "printf after > after-hook.txt"
+    };
+    write_phased_hook_config(dir, before, after);
+    let pack_id = create_verified_approved_pack(dir, "phased-hooks");
+
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
+
+    assert_eq!(
+        std::fs::read_to_string(dir.join("before-hook.txt"))
+            .unwrap()
+            .trim(),
+        "before"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("after-hook.txt"))
+            .unwrap()
+            .trim(),
+        "after"
+    );
+    assert!(!dir.join(".draft/packs").join(&pack_id).exists());
+}
+
+#[test]
+fn dispose_only_does_not_advance_stable_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    write_dispose_only_config(dir);
+    let before = stable_head_id(dir);
+    let pack_id = create_verified_approved_pack(dir, "dispose-only");
+
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
+
+    assert_eq!(stable_head_id(dir), before);
+    assert!(!dir.join(".draft/packs").join(&pack_id).exists());
+    assert!(!dir.join(".draft/changepacks").join(&pack_id).exists());
+}
+
+#[test]
 fn hooks_save_failure_obeys_continue_on_error() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
@@ -1007,11 +1156,17 @@ fn storage_doctor_checks_rebuildable_state() {
         .success()
         .stdout(contains("Storage compact complete"));
     assert!(dir.join(".draft/objects/packs/index.json").exists());
+    // Default output is human-readable; machine assertions use --json.
     draft(dir)
         .args(["storage", "doctor"])
         .assert()
         .success()
-        .stdout(contains("Storage doctor complete").and(contains("\"objects_ok\": true")));
+        .stdout(contains("Storage doctor complete"));
+    draft(dir)
+        .args(["storage", "doctor", "--json"])
+        .assert()
+        .success()
+        .stdout(contains("\"objects_ok\": true"));
 }
 
 #[test]
@@ -1061,9 +1216,13 @@ fn storage_doctor_checks_receipt_references_and_draft_exclusion() {
         .success()
         .stdout(contains("missing hook receipt ref rcp_missing"));
 
-    let patch_path = dir
+    let tmp2 = tempfile::tempdir().unwrap();
+    let dir2 = tmp2.path();
+    draft(dir2).args(["init"]).assert().success();
+    let active_pack_id = create_verified_approved_pack(dir2, "doctor-active");
+    let patch_path = dir2
         .join(".draft/changepacks")
-        .join(&pack_id)
+        .join(&active_pack_id)
         .join("patch.json");
     let mut patch: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&patch_path).unwrap()).unwrap();
@@ -1080,8 +1239,8 @@ fn storage_doctor_checks_receipt_references_and_draft_exclusion() {
             "new_hash": "b3:abc"
         }));
     std::fs::write(&patch_path, serde_json::to_string_pretty(&patch).unwrap()).unwrap();
-    draft(dir)
-        .args(["storage", "doctor"])
+    draft(dir2)
+        .args(["storage", "doctor", "--json"])
         .assert()
         .success()
         .stdout(contains("\"draft_hard_excluded\": false"));
@@ -1218,13 +1377,11 @@ fn pack_export_import_quarantine_name_conflicts_and_security() {
     std::fs::create_dir_all(&dst).unwrap();
     let artifact = root.path().join("pack.draftpack");
 
-    // Source: create, verify, approve, save a pack, then export it.
+    // Source: create, verify, approve, export the portable pack, then save it.
+    // v0.3.3 disposes saved pack metadata, so export must happen before save
+    // unless the pack was retained explicitly outside active storage.
     draft(&src).args(["init"]).assert().success();
     let pack_id = create_verified_approved_pack(&src, "portable");
-    draft(&src)
-        .args(["save", "-p", &pack_id])
-        .assert()
-        .success();
     draft(&src)
         .args([
             "pack",
@@ -1236,6 +1393,11 @@ fn pack_export_import_quarantine_name_conflicts_and_security() {
         .assert()
         .success();
     assert!(artifact.exists());
+    draft(&src)
+        .args(["save", "-p", &pack_id])
+        .assert()
+        .success();
+    assert!(!src.join(".draft/packs").join(&pack_id).exists());
 
     // Destination: import enters quarantine (imported_quarantined).
     draft(&dst).args(["init"]).assert().success();
@@ -1283,7 +1445,7 @@ fn pack_export_import_quarantine_name_conflicts_and_security() {
 }
 
 #[test]
-fn verify_v2_produces_risk_lsif_and_selection_evidence() {
+fn verification_produces_risk_lsif_and_selection_evidence() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
@@ -1579,7 +1741,7 @@ fn old_target_keys_are_rejected() {
 }
 
 #[test]
-fn remote_push_commands_are_not_present_in_v03() {
+fn remote_push_commands_are_not_present() {
     let tmp = tempfile::tempdir().unwrap();
     draft(tmp.path())
         .args(["push"])
@@ -1771,13 +1933,9 @@ fn imported_pack_full_lifecycle_to_save() {
     std::fs::create_dir_all(&dst).unwrap();
     let artifact = root.path().join("pack.draftpack");
 
-    // Workspace A: full local trust path, then export.
+    // Workspace A: full local trust path, export, then save/dispose.
     draft(&src).args(["init"]).assert().success();
     let pack_id = create_verified_approved_pack(&src, "lifecycle");
-    draft(&src)
-        .args(["save", "-p", &pack_id])
-        .assert()
-        .success();
     draft(&src)
         .args([
             "pack",
@@ -1788,6 +1946,11 @@ fn imported_pack_full_lifecycle_to_save() {
         ])
         .assert()
         .success();
+    draft(&src)
+        .args(["save", "-p", &pack_id])
+        .assert()
+        .success();
+    assert!(!src.join(".draft/packs").join(&pack_id).exists());
 
     // Workspace B: same baseline so the change applies cleanly.
     draft(&dst).args(["init"]).assert().success();
@@ -1844,19 +2007,14 @@ fn imported_pack_full_lifecycle_to_save() {
     draft(&dst).args(["approve", "-p", &id]).assert().success();
     assert_eq!(inspect(&dst, &id)["lifecycle"], "import_approved");
 
-    // Save applies the embedded content and promotes out of quarantine.
+    // Save applies the embedded content and disposes active import metadata.
     draft(&dst).args(["save", "-p", &id]).assert().success();
     assert_eq!(
         std::fs::read_to_string(dst.join("app.txt")).unwrap(),
         "v2\n"
     );
     assert!(!dst.join(".draft/imports/quarantine").join(&id).exists());
-    assert!(dst
-        .join(".draft/packs")
-        .join(&id)
-        .join("manifest.json")
-        .exists());
-    assert_eq!(inspect(&dst, &id)["lifecycle"], "import_saved");
+    assert!(!dst.join(".draft/packs").join(&id).exists());
 
     // The full trust chain in B verifies, and every lifecycle event exists.
     draft(&dst)
@@ -2148,4 +2306,229 @@ fn pack_depends_reports_shared_symbol_packs() {
         shared.contains_key(&b_id),
         "pack-b should be shortlisted as touching shared_api: {report}"
     );
+}
+
+// ---- v0.3.3 pipeline, migration, and rollback-guidance contracts ----------
+
+fn canonical_event_log(dir: &std::path::Path) -> String {
+    std::fs::read_to_string(dir.join(".draft/events/event.log")).unwrap_or_default()
+}
+
+#[test]
+fn save_records_canonical_pipeline_events_in_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let before = if cfg!(windows) {
+        "echo before> b.txt"
+    } else {
+        "printf before > b.txt"
+    };
+    let after = if cfg!(windows) {
+        "echo after> a.txt"
+    } else {
+        "printf after > a.txt"
+    };
+    write_phased_hook_config(dir, before, after);
+    let pack_id = create_verified_approved_pack(dir, "pipeline-events");
+
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
+
+    let events = canonical_event_log(dir);
+    for kind in [
+        "SaveStarted",
+        "SaveHookStarted",
+        "SaveHookCompleted",
+        "ProjectStateVerificationStarted",
+        "ProjectStateVerified",
+        "StableHeadAdvanced",
+        "SaveFinalized",
+        "PackDisposed",
+    ] {
+        assert!(events.contains(kind), "missing canonical event {kind}");
+    }
+    // TDD §13.1 ordering: verification gates stable_head; after hooks run
+    // post-advance but before disposal; disposal is last.
+    let idx = |kind: &str| events.find(kind).unwrap();
+    assert!(idx("SaveStarted") < idx("ProjectStateVerificationStarted"));
+    assert!(idx("ProjectStateVerificationStarted") < idx("ProjectStateVerified"));
+    assert!(idx("ProjectStateVerified") < idx("StableHeadAdvanced"));
+    assert!(idx("StableHeadAdvanced") < idx("SaveFinalized"));
+    assert!(idx("SaveFinalized") < idx("PackDisposed"));
+    let last_hook_completed = events.rfind("SaveHookCompleted").unwrap();
+    assert!(
+        last_hook_completed > idx("StableHeadAdvanced"),
+        "after hooks must run after stable_head advancement"
+    );
+    assert!(
+        last_hook_completed < idx("PackDisposed"),
+        "after hooks must run before disposal"
+    );
+    // Performance-ready index artifacts (SRS-FR-143) exist after verify/save.
+    assert!(dir.join(".draft/index/verification-cache.json").exists());
+    assert!(dir.join(".draft/index/affected-paths.json").exists());
+    assert!(dir.join(".draft/cache/hashes/workspace-hash.json").exists());
+}
+
+#[test]
+fn project_state_verification_failure_preserves_pack_and_reports_checks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let pack_id = create_verified_approved_pack(dir, "ps-verify-fail");
+
+    // Corrupt stable_head metadata: project-state verification must fail the
+    // save, preserve the pack, and record ProjectStateVerificationFailed.
+    let head_path = dir.join(".draft/stable_head/head.json");
+    let tampered = std::fs::read_to_string(&head_path)
+        .unwrap()
+        .replace("\"verification_result\"", "\"verification_result_x\"");
+    std::fs::write(&head_path, tampered).unwrap();
+
+    draft(dir)
+        .args(["save", "-p", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("project-state verification failed").and(contains("stable_head")));
+
+    assert!(
+        dir.join(".draft/packs").join(&pack_id).exists()
+            || dir.join(".draft/changepacks").join(&pack_id).exists(),
+        "failed project-state verification must preserve the pack"
+    );
+    let events = canonical_event_log(dir);
+    assert!(events.contains("ProjectStateVerificationFailed"));
+    assert!(!events.contains("StableHeadAdvanced"));
+}
+
+#[test]
+fn rollback_to_disposed_pack_fails_clearly_and_points_to_receipt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    let pack_id = create_verified_approved_pack(dir, "disposed-rollback");
+    draft(dir).args(["save", "-p", &pack_id]).assert().success();
+    assert!(!dir.join(".draft/packs").join(&pack_id).exists());
+
+    draft(dir)
+        .args(["rollback", &pack_id])
+        .assert()
+        .failure()
+        .stderr(contains("saved and disposed").and(contains("rcp_")));
+}
+
+#[test]
+fn migration_from_previous_state_initializes_stable_head_and_preserves_packs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
+    draft(dir)
+        .args(["create", "pending-pack"])
+        .assert()
+        .success();
+
+    // A v0.3.2 workspace has no stable_head store: removing it simulates the
+    // old on-disk state. Any subsequent open must migrate non-destructively.
+    std::fs::remove_dir_all(dir.join(".draft/stable_head")).unwrap();
+    draft(dir).args(["status"]).assert().success();
+
+    assert!(dir.join(".draft/stable_head/head.json").exists());
+    let events = canonical_event_log(dir);
+    assert!(
+        events.contains("MigrationCompleted"),
+        "migration must record a MigrationCompleted event"
+    );
+    assert!(events.contains("\"packs_preserved\":true") || events.contains("packs_preserved"));
+    // The pending pack survived the migration.
+    draft(dir)
+        .args(["list"])
+        .assert()
+        .success()
+        .stdout(contains("pending-pack"));
+}
+
+#[test]
+fn event_default_output_is_human_readable_not_json() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+
+    let out = draft(dir).args(["event"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(stdout.trim()).is_err(),
+        "default `draft event` output must not be JSON: {stdout}"
+    );
+
+    let raw = draft(dir).args(["event", "--raw"]).output().unwrap();
+    assert!(raw.status.success());
+    let raw_stdout = String::from_utf8_lossy(&raw.stdout);
+    let lines: Vec<&str> = raw_stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    assert!(!lines.is_empty(), "`draft event --raw` must emit events");
+    for line in lines {
+        assert!(
+            serde_json::from_str::<serde_json::Value>(line).is_ok(),
+            "`draft event --raw` must emit one valid JSON event per line: {line}"
+        );
+    }
+}
+
+#[test]
+fn pack_compose_records_composition_events_and_hash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join("a.txt"), "a-v1\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "b-v1\n").unwrap();
+    draft(dir).args(["checkpoint", "base"]).assert().success();
+
+    std::fs::write(dir.join("a.txt"), "a-v2\n").unwrap();
+    let out = draft(dir)
+        .args(["create", "pack-a", "--json"])
+        .output()
+        .unwrap();
+    let a: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let a_id = a["id"].as_str().unwrap().to_string();
+    draft(dir).args(["verify", &a_id]).assert().success();
+
+    draft(dir).args(["checkpoint", "mid"]).assert().success();
+    std::fs::write(dir.join("b.txt"), "b-v2\n").unwrap();
+    let out = draft(dir)
+        .args(["create", "pack-b", "--json"])
+        .output()
+        .unwrap();
+    let b: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let b_id = b["id"].as_str().unwrap().to_string();
+    draft(dir).args(["verify", &b_id]).assert().success();
+
+    let out = draft(dir)
+        .args([
+            "pack", "compose", &a_id, &b_id, "--name", "combined", "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        report["composition_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:"),
+        "compose must report a deterministic composition_hash: {report}"
+    );
+
+    let events = canonical_event_log(dir);
+    assert!(events.contains("CompositionCreated"));
+    assert!(events.contains("CompositionVerified"));
 }
