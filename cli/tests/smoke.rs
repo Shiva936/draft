@@ -205,6 +205,38 @@ fn collect_files(path: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
 }
 
 #[test]
+fn cli_startup_and_init_are_available_in_debug_builds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+
+    draft(dir)
+        .args(["--version"])
+        .assert()
+        .success()
+        .stdout(contains("0.3.4"));
+    draft(dir)
+        .args(["--help"])
+        .assert()
+        .success()
+        .stdout(contains("Usage:"));
+    draft(dir)
+        .args(["task", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Manage tasks"));
+
+    let initialized = draft(dir).args(["init", "--json"]).output().unwrap();
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&initialized.stdout).unwrap();
+    assert_eq!(report["root"], dir.to_string_lossy().as_ref());
+    assert_eq!(report["created"], true);
+}
+
+#[test]
 fn console_is_the_only_ui_command_and_extensions_are_management_only() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();

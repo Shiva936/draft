@@ -17,6 +17,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(flatten)]
+    Workspace(WorkspaceCommand),
+    #[command(flatten)]
+    Tasks(TaskCommand),
+    #[command(flatten)]
+    Packs(PackCommand),
+    #[command(flatten)]
+    Review(ReviewCommand),
+    #[command(flatten)]
+    Integration(IntegrationCommand),
+    #[command(flatten)]
+    Maintenance(MaintenanceCommand),
+}
+
+#[derive(Subcommand)]
+enum WorkspaceCommand {
     /// Initialize a Draft workspace (or the global store with --global).
     Init {
         #[arg(short = 'b')]
@@ -94,6 +110,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum TaskCommand {
     /// Manage tasks.
     Task {
         #[command(subcommand)]
@@ -115,6 +135,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum PackCommand {
     /// Create a Draft-native checkpoint.
     Checkpoint {
         message: String,
@@ -166,6 +190,10 @@ enum Command {
         #[command(subcommand)]
         action: CandidateAction,
     },
+}
+
+#[derive(Subcommand)]
+enum ReviewCommand {
     /// Verify a pack: risk + evidence-based test/fuzz selection.
     Verify {
         /// Pack to verify (pck_id or name); enables v0.3.3 evidence verification.
@@ -224,6 +252,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum IntegrationCommand {
     /// Compare changepacks.
     Compare {
         left: String,
@@ -280,6 +312,10 @@ enum Command {
         #[command(subcommand)]
         action: ReceiptAction,
     },
+}
+
+#[derive(Subcommand)]
+enum MaintenanceCommand {
     /// Remove Draft metadata from this workspace.
     Close {
         #[arg(long)]
@@ -478,6 +514,16 @@ enum IgnoreAction {
 
 #[derive(Subcommand)]
 enum TaskAction {
+    #[command(flatten)]
+    Definition(TaskDefinitionAction),
+    #[command(flatten)]
+    Execution(TaskExecutionAction),
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
+
+#[derive(Subcommand)]
+enum TaskDefinitionAction {
     /// Create a stored deterministic task definition.
     Create {
         name: String,
@@ -497,29 +543,6 @@ enum TaskAction {
         risk: Option<String>,
         #[arg(long, value_parser = ["normal", "safe", "plan-first"])]
         mode: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    Spawn {
-        name: String,
-        #[arg(short = 'p')]
-        pack: Option<String>,
-        #[arg(short = 'c')]
-        candidates: Vec<String>,
-        #[arg(long)]
-        preset: Option<String>,
-        #[arg(long)]
-        resume: Option<String>,
-        #[arg(long)]
-        cancel: Option<String>,
-        #[arg(long)]
-        retry: Option<String>,
-        #[arg(long)]
-        reason: Option<String>,
-        #[arg(long)]
-        cron: Option<String>,
-        #[arg(last = true)]
-        instruction: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -580,8 +603,33 @@ enum TaskAction {
         #[arg(long)]
         json: bool,
     },
-    #[command(external_subcommand)]
-    External(Vec<String>),
+}
+
+#[derive(Subcommand)]
+enum TaskExecutionAction {
+    Spawn {
+        name: String,
+        #[arg(short = 'p')]
+        pack: Option<String>,
+        #[arg(short = 'c')]
+        candidates: Vec<String>,
+        #[arg(long)]
+        preset: Option<String>,
+        #[arg(long)]
+        resume: Option<String>,
+        #[arg(long)]
+        cancel: Option<String>,
+        #[arg(long)]
+        retry: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
+        cron: Option<String>,
+        #[arg(last = true)]
+        instruction: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -692,20 +740,31 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), DraftError> {
     let cwd = std::env::current_dir().map_err(DraftError::from)?;
-    ensure_project_scope(&cli.command, &cwd)?;
+    ensure_project_scope(&cli.command, cwd.as_path())?;
     let app = App::new();
     match cli.command {
-        Command::Init { base, global, json } => {
+        Command::Workspace(command) => run_workspace(&app, cwd.as_path(), command),
+        Command::Tasks(command) => run_tasks(&app, cwd.as_path(), command),
+        Command::Packs(command) => run_packs(&app, cwd.as_path(), command),
+        Command::Review(command) => run_review(&app, cwd.as_path(), command),
+        Command::Integration(command) => run_integration(&app, cwd.as_path(), command),
+        Command::Maintenance(command) => run_maintenance(&app, cwd.as_path(), command),
+    }
+}
+
+fn run_workspace(app: &App, cwd: &Path, command: WorkspaceCommand) -> Result<(), DraftError> {
+    match command {
+        WorkspaceCommand::Init { base, global, json } => {
             if global {
                 render_init_global(app.init_global()?, json)
             } else {
                 render_init(
-                    app.init_with_base(&cwd, base.as_deref().unwrap_or("base"))?,
+                    app.init_with_base(cwd, base.as_deref().unwrap_or("base"))?,
                     json,
                 )
             }
         }
-        Command::Doctor {
+        WorkspaceCommand::Doctor {
             action: Some(DoctorAction::Sync { fix, json }),
             ..
         } => {
@@ -726,23 +785,23 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 },
             )
         }
-        Command::Doctor {
+        WorkspaceCommand::Doctor {
             action: Some(DoctorAction::Stats { json }),
             ..
-        } => render_json_or_text(app.storage_stats(&cwd)?, json, "Storage statistics"),
-        Command::Doctor {
+        } => render_json_or_text(app.storage_stats(cwd)?, json, "Storage statistics"),
+        WorkspaceCommand::Doctor {
             action: Some(DoctorAction::Gc { json }),
             ..
-        } => render_json_or_text(app.gc(&cwd)?, json, "Doctor GC complete"),
-        Command::Doctor {
+        } => render_json_or_text(app.gc(cwd)?, json, "Doctor GC complete"),
+        WorkspaceCommand::Doctor {
             action: Some(DoctorAction::Compact { json }),
             ..
-        } => render_json_or_text(app.storage_compact(&cwd)?, json, "Doctor compact complete"),
-        Command::Doctor {
+        } => render_json_or_text(app.storage_compact(cwd)?, json, "Doctor compact complete"),
+        WorkspaceCommand::Doctor {
             action: Some(DoctorAction::Prune { json }),
             ..
-        } => render_json_or_text(app.storage_prune(&cwd)?, json, "Doctor prune complete"),
-        Command::Doctor {
+        } => render_json_or_text(app.storage_prune(cwd)?, json, "Doctor prune complete"),
+        WorkspaceCommand::Doctor {
             action:
                 Some(DoctorAction::Index {
                     refresh,
@@ -754,15 +813,15 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             let report = if global {
                 app.doctor_index_global(refresh)?
             } else {
-                app.doctor_index(&cwd, refresh)?
+                app.doctor_index(cwd, refresh)?
             };
             render_json_or_text(report, json, "Index status")
         }
-        Command::Doctor {
+        WorkspaceCommand::Doctor {
             action: Some(DoctorAction::Migrate { check, json }),
             ..
-        } => render_json_or_text(app.doctor_migrate(&cwd, check)?, json, "Migration status"),
-        Command::Doctor {
+        } => render_json_or_text(app.doctor_migrate(cwd, check)?, json, "Migration status"),
+        WorkspaceCommand::Doctor {
             action: None,
             global,
             json,
@@ -770,20 +829,20 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             let report = if global {
                 app.doctor_global()?
             } else {
-                app.doctor(&cwd)?
+                app.doctor(cwd)?
             };
             render_doctor(report, json)
         }
-        Command::Identity { action } => match action {
+        WorkspaceCommand::Identity { action } => match action {
             IdentityAction::Status { json } => render_identity(app.identity_status()?, json),
         },
-        Command::Console { port } => {
+        WorkspaceCommand::Console { port } => {
             // Ensure we are inside a workspace before starting the server.
-            app.status(&cwd)?;
-            draft_agui::serve(cwd.clone(), "127.0.0.1", port)
+            app.status(cwd)?;
+            draft_agui::serve(cwd.to_path_buf(), "127.0.0.1", port)
                 .map_err(|e| DraftError::new(DraftErrorKind::Internal, e))
         }
-        Command::Extension { action } => match action {
+        WorkspaceCommand::Extension { action } => match action {
             ExtensionAction::List { json } => {
                 render_json_or_text(draft_adapters::extension::list()?, json, "Extensions")
             }
@@ -811,12 +870,12 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 "Extension disabled",
             ),
         },
-        Command::Config { key, action } => match action {
+        WorkspaceCommand::Config { key, action } => match action {
             Some(ConfigAction::Get { key, global, json }) => {
                 let report = if global {
                     app.config_get_global(&key)?
                 } else {
-                    app.config_get_layered(&cwd, &key)?
+                    app.config_get_layered(cwd, &key)?
                 };
                 render_config(report, json)
             }
@@ -829,7 +888,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 let report = if global {
                     app.config_set_global(&key, &value)?
                 } else {
-                    app.config_set(&cwd, &key, &value)?
+                    app.config_set(cwd, &key, &value)?
                 };
                 render_config(report, json)
             }
@@ -837,46 +896,46 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 let report = if global {
                     app.config_unset_global(&key)?
                 } else {
-                    app.config_unset(&cwd, &key)?
+                    app.config_unset(cwd, &key)?
                 };
                 render_config(report, json)
             }
             None => {
                 if let Some(key) = key {
-                    render_config(app.config_get(&cwd, &key)?, false)
+                    render_config(app.config_get(cwd, &key)?, false)
                 } else {
-                    render_config(app.config_list(&cwd)?, false)
+                    render_config(app.config_list(cwd)?, false)
                 }
             }
         },
-        Command::Hook { key, action } => match action {
+        WorkspaceCommand::Hook { key, action } => match action {
             Some(HookAction::Set { key, value, json }) => {
-                render_config(app.hook_set(&cwd, &key, &value)?, json)
+                render_config(app.hook_set(cwd, &key, &value)?, json)
             }
             Some(HookAction::Unset { key, json }) => {
-                render_config(app.hook_unset(&cwd, &key)?, json)
+                render_config(app.hook_unset(cwd, &key)?, json)
             }
             Some(HookAction::Run { hook_name, json }) => {
-                render_json_or_text(app.hook_run(&cwd, &hook_name)?, json, "Hook complete")
+                render_json_or_text(app.hook_run(cwd, &hook_name)?, json, "Hook complete")
             }
             None => {
                 if let Some(key) = key {
-                    render_config(app.hook_get(&cwd, &key)?, false)
+                    render_config(app.hook_get(cwd, &key)?, false)
                 } else {
-                    render_config(app.hook_list(&cwd)?, false)
+                    render_config(app.hook_list(cwd)?, false)
                 }
             }
         },
-        Command::Ignore { action } => match action {
+        WorkspaceCommand::Ignore { action } => match action {
             IgnoreAction::Add { pattern, json } => {
-                render_ignore(app.ignore_add(&cwd, &pattern)?, json)
+                render_ignore(app.ignore_add(cwd, &pattern)?, json)
             }
             IgnoreAction::Remove { pattern, json } => {
-                render_ignore(app.ignore_remove(&cwd, &pattern)?, json)
+                render_ignore(app.ignore_remove(cwd, &pattern)?, json)
             }
-            IgnoreAction::List { json } => render_ignore(app.ignore_list(&cwd)?, json),
+            IgnoreAction::List { json } => render_ignore(app.ignore_list(cwd)?, json),
         },
-        Command::Status {
+        WorkspaceCommand::Status {
             pack,
             component,
             full,
@@ -889,7 +948,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                     .transpose()?;
                 render_status_report(
                     app.status_with_options(
-                        &cwd,
+                        cwd,
                         draft_core::StatusOptions {
                             pack,
                             component,
@@ -899,21 +958,26 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                     json,
                 )
             } else {
-                render_status(app.status(&cwd)?, json)
+                render_status(app.status(cwd)?, json)
             }
         }
-        Command::Event {
+        WorkspaceCommand::Event {
             page,
             limit,
             raw,
             json,
         } => render_events(
-            app.events_page(&cwd, false, false, page, limit, None)?,
+            app.events_page(cwd, false, false, page, limit, None)?,
             json,
             raw,
         ),
-        Command::Task { action } => match action {
-            Some(TaskAction::Create {
+    }
+}
+
+fn run_tasks(app: &App, cwd: &Path, command: TaskCommand) -> Result<(), DraftError> {
+    match command {
+        TaskCommand::Task { action } => match action {
+            Some(TaskAction::Definition(TaskDefinitionAction::Create {
                 name,
                 goal,
                 template,
@@ -924,9 +988,9 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 risk,
                 mode,
                 json,
-            }) => render_json_or_text(
+            })) => render_json_or_text(
                 app.task_define(
-                    &cwd,
+                    cwd,
                     &name,
                     &goal,
                     template,
@@ -940,7 +1004,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 json,
                 "Task created",
             ),
-            Some(TaskAction::Spawn {
+            Some(TaskAction::Execution(TaskExecutionAction::Spawn {
                 name,
                 pack,
                 candidates,
@@ -952,31 +1016,31 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 cron,
                 instruction,
                 json,
-            }) => {
+            })) => {
                 if let Some(execution_id) = cancel {
                     return render_json_or_text(
-                        app.task_cancel_execution(&cwd, &execution_id, reason)?,
+                        app.task_cancel_execution(cwd, &execution_id, reason)?,
                         json,
                         "Execution cancelled",
                     );
                 }
                 if let Some(execution_id) = resume {
                     return render_json_or_text(
-                        app.task_resume_execution(&cwd, &execution_id)?,
+                        app.task_resume_execution(cwd, &execution_id)?,
                         json,
                         "Execution resume queued",
                     );
                 }
                 if let Some(execution_id) = retry {
                     return render_json_or_text(
-                        app.task_retry_execution(&cwd, &execution_id)?,
+                        app.task_retry_execution(cwd, &execution_id)?,
                         json,
                         "Execution retry queued",
                     );
                 }
                 render_json_or_text(
                     app.task_spawn_with_preset(
-                        &cwd,
+                        cwd,
                         &name,
                         pack.as_deref(),
                         candidates,
@@ -988,25 +1052,27 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                     "Task spawned",
                 )
             }
-            Some(TaskAction::Wizard { json }) => {
-                let task = run_task_wizard(&app, &cwd, json)?;
+            Some(TaskAction::Definition(TaskDefinitionAction::Wizard { json })) => {
+                let task = run_task_wizard(app, cwd, json)?;
                 render_json_or_text(task, json, "Task created")
             }
-            Some(TaskAction::Drop { task, hard, json }) => {
-                render_json_or_text(app.task_drop(&cwd, &task, hard)?, json, "Task dropped")
+            Some(TaskAction::Definition(TaskDefinitionAction::Drop { task, hard, json })) => {
+                render_json_or_text(app.task_drop(cwd, &task, hard)?, json, "Task dropped")
             }
-            Some(TaskAction::Export { task, output, json }) => render_json_or_text(
-                app.task_export(&cwd, &task, output.as_deref())?,
-                json,
-                "Task exported",
-            ),
-            Some(TaskAction::Import { path, name, json }) => {
-                render_json_or_text(app.task_import(&cwd, &path, name)?, json, "Task imported")
+            Some(TaskAction::Definition(TaskDefinitionAction::Export { task, output, json })) => {
+                render_json_or_text(
+                    app.task_export(cwd, &task, output.as_deref())?,
+                    json,
+                    "Task exported",
+                )
             }
-            Some(TaskAction::List { json }) => {
-                render_json_or_text(app.task_definitions(&cwd)?, json, "Tasks")
+            Some(TaskAction::Definition(TaskDefinitionAction::Import { path, name, json })) => {
+                render_json_or_text(app.task_import(cwd, &path, name)?, json, "Task imported")
             }
-            Some(TaskAction::Show {
+            Some(TaskAction::Definition(TaskDefinitionAction::List { json })) => {
+                render_json_or_text(app.task_definitions(cwd)?, json, "Tasks")
+            }
+            Some(TaskAction::Definition(TaskDefinitionAction::Show {
                 task,
                 full,
                 executions,
@@ -1019,7 +1085,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 decompose,
                 diff_stable,
                 json,
-            }) => {
+            })) => {
                 let options = draft_core::TaskViewOptions {
                     full,
                     executions,
@@ -1044,62 +1110,67 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                     || diff_stable
                 {
                     render_json_or_text(
-                        app.task_view_with_options(&cwd, &task, options)?,
+                        app.task_view_with_options(cwd, &task, options)?,
                         json,
                         "Task",
                     )
                 } else {
-                    render_json_or_text(app.task_view(&cwd, &task)?, json, "Task")
+                    render_json_or_text(app.task_view(cwd, &task)?, json, "Task")
                 }
             }
             Some(TaskAction::External(args)) => {
                 let task_id = args
                     .first()
                     .ok_or_else(|| DraftError::invalid_config("missing task id"))?;
-                render_json_or_text(app.task_view(&cwd, task_id)?, false, "Task")
+                render_json_or_text(app.task_view(cwd, task_id)?, false, "Task")
             }
-            None => render_json_or_text(app.task_current(&cwd)?, false, "Task"),
+            None => render_json_or_text(app.task_current(cwd)?, false, "Task"),
         },
-        Command::Inbox { json } => render_json_or_text(app.inbox(&cwd)?, json, "Inbox"),
-        Command::Waive {
+        TaskCommand::Inbox { json } => render_json_or_text(app.inbox(cwd)?, json, "Inbox"),
+        TaskCommand::Waive {
             pack_id,
             finding_id,
             reason,
             expires,
             json,
         } => render_json_or_text(
-            app.waive(&cwd, &pack_id, &finding_id, &reason, &expires)?,
+            app.waive(cwd, &pack_id, &finding_id, &reason, &expires)?,
             json,
             "Waiver created",
         ),
-        Command::Checkpoint { message, json } => {
-            render_json_or_text(app.checkpoint(&cwd, &message)?, json, "Checkpoint created")
+    }
+}
+
+fn run_packs(app: &App, cwd: &Path, command: PackCommand) -> Result<(), DraftError> {
+    match command {
+        PackCommand::Checkpoint { message, json } => {
+            render_json_or_text(app.checkpoint(cwd, &message)?, json, "Checkpoint created")
         }
-        Command::Create {
+        PackCommand::Create {
             name,
             base_pack,
             json,
         } => render_json_or_text(
-            app.pack_create_from_base(&cwd, name, base_pack)?,
+            app.pack_create_from_base(cwd, name, base_pack)?,
             json,
             "ChangePack created",
         ),
-        Command::Pack {
+        PackCommand::Pack {
             algebra: Some(action),
             ..
         } => match action {
             PackAlgebra::Inspect { pack_id, json } => {
-                render_json_or_text(app.pack_inspect(&cwd, &pack_id)?, json, "Pack")
+                render_json_or_text(app.pack_inspect(cwd, &pack_id)?, json, "Pack")
             }
             PackAlgebra::Depends { pack_id, json } => {
-                render_json_or_text(app.pack_depends(&cwd, &pack_id)?, json, "Dependencies")
+                render_json_or_text(app.pack_depends(cwd, &pack_id)?, json, "Dependencies")
             }
             PackAlgebra::Conflicts {
                 pack_a,
                 pack_b,
                 json,
             } => {
-                let report = app.pack_conflicts(&cwd, &pack_a, &pack_b)?;
+                let report = app.pack_conflicts(cwd, &pack_a, &pack_b)?;
                 let blocking = report.blocking;
                 render_json_or_text(report, json, "Conflicts")?;
                 if blocking {
@@ -1116,12 +1187,12 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 name,
                 json,
             } => render_json_or_text(
-                app.pack_compose(&cwd, &pack_a, &pack_b, &name)?,
+                app.pack_compose(cwd, &pack_a, &pack_b, &name)?,
                 json,
                 "Pack composed (re-verify required)",
             ),
         },
-        Command::Pack {
+        PackCommand::Pack {
             algebra: None,
             select,
             delete,
@@ -1148,13 +1219,13 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             }
             if let Some(reference) = export {
                 render_json_or_text(
-                    app.pack_export(&cwd, &reference, output.as_deref().map(Path::new))?,
+                    app.pack_export(cwd, &reference, output.as_deref().map(Path::new))?,
                     json,
                     "Pack exported",
                 )
             } else if let Some(artifact) = import {
                 render_json_or_text(
-                    app.pack_import(&cwd, Path::new(&artifact), name.as_deref(), dry_run)?,
+                    app.pack_import(cwd, Path::new(&artifact), name.as_deref(), dry_run)?,
                     json,
                     if dry_run {
                         "Import dry run"
@@ -1164,40 +1235,36 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 )
             } else if let Some(reference) = select {
                 render_json_or_text(
-                    app.pack_select_ref(&cwd, &reference)?,
+                    app.pack_select_ref(cwd, &reference)?,
                     json,
                     "ChangePack selected",
                 )
             } else if let Some(reference) = delete {
-                let report = app.pack_show(&cwd, &reference)?;
+                let report = app.pack_show(cwd, &reference)?;
                 if !confirm_pack_delete(&report.pack)? {
                     return Err(DraftError::invalid_config("ChangePack deletion aborted"));
                 }
                 render_json_or_text(
-                    app.pack_delete_ref(&cwd, &reference)?,
+                    app.pack_delete_ref(cwd, &reference)?,
                     json,
                     "ChangePack deleted",
                 )
             } else {
-                render_json_or_text(app.pack_show_selected(&cwd)?, json, "ChangePack")
+                render_json_or_text(app.pack_show_selected(cwd)?, json, "ChangePack")
             }
         }
-        Command::List { json } => render_json_or_text(app.pack_list(&cwd)?, json, "ChangePacks"),
-        Command::Candidate { action } => match action {
+        PackCommand::List { json } => render_json_or_text(app.pack_list(cwd)?, json, "ChangePacks"),
+        PackCommand::Candidate { action } => match action {
             CandidateAction::List { json } => {
-                render_json_or_text(app.candidate_list(&cwd)?, json, "Candidates")
+                render_json_or_text(app.candidate_list(cwd)?, json, "Candidates")
             }
             CandidateAction::Show {
                 candidate_name,
                 json,
-            } => render_json_or_text(
-                app.candidate_show(&cwd, &candidate_name)?,
-                json,
-                "Candidate",
-            ),
+            } => render_json_or_text(app.candidate_show(cwd, &candidate_name)?, json, "Candidate"),
             CandidateAction::Add(args) => render_json_or_text(
                 app.candidate_add(
-                    &cwd,
+                    cwd,
                     &args.candidate_name,
                     args.kind.as_deref(),
                     args.template,
@@ -1207,7 +1274,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             ),
             CandidateAction::Update(args) => render_json_or_text(
                 app.candidate_update(
-                    &cwd,
+                    cwd,
                     &args.candidate_name,
                     args.kind.as_deref(),
                     args.template,
@@ -1219,7 +1286,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 candidate_name,
                 json,
             } => render_json_or_text(
-                app.candidate_remove(&cwd, &candidate_name)?,
+                app.candidate_remove(cwd, &candidate_name)?,
                 json,
                 "Candidate removed",
             ),
@@ -1228,12 +1295,17 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 candidate,
                 json,
             } => render_json_or_text(
-                app.candidate_packs(&cwd, pack.as_deref(), candidate.as_deref())?,
+                app.candidate_packs(cwd, pack.as_deref(), candidate.as_deref())?,
                 json,
                 "Candidate packs",
             ),
         },
-        Command::Verify {
+    }
+}
+
+fn run_review(app: &App, cwd: &Path, command: ReviewCommand) -> Result<(), DraftError> {
+    match command {
+        ReviewCommand::Verify {
             target,
             pack,
             explain,
@@ -1249,17 +1321,17 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 // Legacy changepacks also need the legacy verification receipt
                 // so the legacy submit gate passes (same as `verify -p`).
                 // Imported packs are canonical-only and skip it.
-                if app.is_legacy_pack_ref(&cwd, refstr) {
-                    app.verify_selected(&cwd, Some(refstr))?;
+                if app.is_legacy_pack_ref(cwd, refstr) {
+                    app.verify_selected(cwd, Some(refstr))?;
                 }
-                let report = app.verify_pack_v2(&cwd, refstr, full, fuzz)?;
+                let report = app.verify_pack_v2(cwd, refstr, full, fuzz)?;
                 render_verify(report, explain, json)
             } else {
-                let reference = app.resolve_pack_arg(&cwd, pack.as_deref())?;
+                let reference = app.resolve_pack_arg(cwd, pack.as_deref())?;
                 render_json_or_text(
                     {
-                        let report = app.verify_selected(&cwd, Some(&reference))?;
-                        app.verify_pack_v2(&cwd, &reference, false, false)?;
+                        let report = app.verify_selected(cwd, Some(&reference))?;
+                        app.verify_pack_v2(cwd, &reference, false, false)?;
                         report
                     },
                     json,
@@ -1267,65 +1339,70 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 )
             }
         }
-        Command::Risk {
+        ReviewCommand::Risk {
             pack,
             explain,
             include_evidence,
             json,
         } => render_json_or_text(
-            app.risk_selected_with_options(&cwd, pack.as_deref(), explain, include_evidence)?,
+            app.risk_selected_with_options(cwd, pack.as_deref(), explain, include_evidence)?,
             json,
             "Risk assessed",
         ),
-        Command::Review {
+        ReviewCommand::Review {
             pack,
             tui,
             comment,
             json,
         } => {
             if tui {
-                return draft_tui::run_console(&cwd)
+                return draft_tui::run_console(cwd)
                     .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
             }
             render_json_or_text(
-                app.review_selected(&cwd, pack.as_deref(), comment)?,
+                app.review_selected(cwd, pack.as_deref(), comment)?,
                 json,
                 "Review recorded",
             )
         }
-        Command::Approve { pack, reason, json } => render_json_or_text(
+        ReviewCommand::Approve { pack, reason, json } => render_json_or_text(
             app.decide_pack(
-                &cwd,
-                app.resolve_pack_arg(&cwd, pack.as_deref())?.as_str(),
+                cwd,
+                app.resolve_pack_arg(cwd, pack.as_deref())?.as_str(),
                 true,
                 reason,
             )?,
             json,
             "ChangePack approved",
         ),
-        Command::Reject { pack, reason, json } => render_json_or_text(
+        ReviewCommand::Reject { pack, reason, json } => render_json_or_text(
             app.decide_pack(
-                &cwd,
-                app.resolve_pack_arg(&cwd, pack.as_deref())?.as_str(),
+                cwd,
+                app.resolve_pack_arg(cwd, pack.as_deref())?.as_str(),
                 false,
                 reason,
             )?,
             json,
             "ChangePack rejected",
         ),
-        Command::Compare {
+    }
+}
+
+fn run_integration(app: &App, cwd: &Path, command: IntegrationCommand) -> Result<(), DraftError> {
+    match command {
+        IntegrationCommand::Compare {
             left,
             right,
             tui,
             json,
         } => {
             if tui {
-                return draft_tui::run_console(&cwd)
+                return draft_tui::run_console(cwd)
                     .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
             }
-            render_json_or_text(app.compare(&cwd, &left, &right)?, json, "Compare complete")
+            render_json_or_text(app.compare(cwd, &left, &right)?, json, "Compare complete")
         }
-        Command::Compose {
+        IntegrationCommand::Compose {
             left,
             right,
             output: out,
@@ -1334,68 +1411,68 @@ fn run(cli: Cli) -> Result<(), DraftError> {
         } => render_json_or_text(
             {
                 if tui {
-                    return draft_tui::run_console(&cwd)
+                    return draft_tui::run_console(cwd)
                         .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
                 }
-                app.compose(&cwd, &left, &right, &out)?
+                app.compose(cwd, &left, &right, &out)?
             },
             json,
             "Compose complete",
         ),
-        Command::Disperse {
+        IntegrationCommand::Disperse {
             pack,
             output,
             tui,
             json,
         } => {
             if tui {
-                return draft_tui::run_console(&cwd)
+                return draft_tui::run_console(cwd)
                     .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
             }
             render_json_or_text(
-                app.disperse(&cwd, &pack, &output[0], &output[1])?,
+                app.disperse(cwd, &pack, &output[0], &output[1])?,
                 json,
                 "Disperse complete",
             )
         }
-        Command::Submit {
+        IntegrationCommand::Submit {
             pack,
             vars,
             dry_run,
             json,
         } => {
             if dry_run {
-                render_dry_run(app.submit_dry_run(&cwd, pack.as_deref())?, json)
+                render_dry_run(app.submit_dry_run(cwd, pack.as_deref())?, json)
             } else {
                 let vars = draft_core::parse_hook_vars(vars)?;
                 render_json_or_text(
-                    app.submit_selected(&cwd, pack.as_deref(), vars)?,
+                    app.submit_selected(cwd, pack.as_deref(), vars)?,
                     json,
                     "ChangePack submitted",
                 )
             }
         }
-        Command::Rollback {
+        IntegrationCommand::Rollback {
             reference,
             dry_run,
             json,
         } => {
             if dry_run {
-                render_dry_run(app.rollback_dry_run(&cwd, &reference)?, json)
+                render_dry_run(app.rollback_dry_run(cwd, &reference)?, json)
             } else {
                 render_json_or_text(
-                    app.rollback(&cwd, &reference, true)?,
+                    app.rollback(cwd, &reference, true)?,
                     json,
                     "Rollback complete",
                 )
             }
         }
-        Command::Receipt { action } => match action {
+        IntegrationCommand::Receipt { action } => match action {
             ReceiptAction::List { json } => {
-                render_json_or_text(app.receipts(&cwd)?, json, "Receipts")
+                render_json_or_text(app.receipts(cwd)?, json, "Receipts")
             }
             ReceiptAction::Show { receipt_id, json } => {
-                render_receipt_show(app.receipt_show(&cwd, &receipt_id)?, json)
+                render_receipt_show(app.receipt_show(cwd, &receipt_id)?, json)
             }
             ReceiptAction::Verify {
                 receipt_id,
@@ -1403,10 +1480,10 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 json,
             } => {
                 if all {
-                    let v = app.receipt_verify_all(&cwd)?;
+                    let v = app.receipt_verify_all(cwd)?;
                     render_ledger_verification(v, json)
                 } else if let Some(id) = receipt_id {
-                    let v = app.receipt_verify(&cwd, &id)?;
+                    let v = app.receipt_verify(cwd, &id)?;
                     render_receipt_verification(v, json)
                 } else {
                     Err(DraftError::invalid_config(
@@ -1415,23 +1492,28 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 }
             }
         },
-        Command::Close { force } => render_close(app.close(&cwd, force)?),
-        Command::Gc => render_gc(app.gc(&cwd)?),
-        Command::Storage { action } => match action {
+    }
+}
+
+fn run_maintenance(app: &App, cwd: &Path, command: MaintenanceCommand) -> Result<(), DraftError> {
+    match command {
+        MaintenanceCommand::Close { force } => render_close(app.close(cwd, force)?),
+        MaintenanceCommand::Gc => render_gc(app.gc(cwd)?),
+        MaintenanceCommand::Storage { action } => match action {
             StorageAction::Stats { json } => {
-                render_json_or_text(app.storage_stats(&cwd)?, json, "Storage stats")
+                render_json_or_text(app.storage_stats(cwd)?, json, "Storage stats")
             }
             StorageAction::Gc { json } => {
-                render_json_or_text(app.storage_gc(&cwd)?, json, "Storage GC complete")
+                render_json_or_text(app.storage_gc(cwd)?, json, "Storage GC complete")
             }
             StorageAction::Compact { json } => {
-                render_json_or_text(app.storage_compact(&cwd)?, json, "Storage compact complete")
+                render_json_or_text(app.storage_compact(cwd)?, json, "Storage compact complete")
             }
             StorageAction::Prune { json } => {
-                render_json_or_text(app.storage_prune(&cwd)?, json, "Storage prune complete")
+                render_json_or_text(app.storage_prune(cwd)?, json, "Storage prune complete")
             }
             StorageAction::Doctor { json } => {
-                render_json_or_text(app.storage_doctor(&cwd)?, json, "Storage doctor complete")
+                render_json_or_text(app.storage_doctor(cwd)?, json, "Storage doctor complete")
             }
         },
     }
@@ -1451,16 +1533,26 @@ fn ensure_project_scope(command: &Command, cwd: &Path) -> Result<(), DraftError>
 
 fn requires_project_scope(command: &Command) -> bool {
     match command {
-        Command::Init { .. } => false,
-        Command::Doctor {
+        Command::Workspace(command) => requires_workspace_scope(command),
+        Command::Maintenance(MaintenanceCommand::Storage {
+            action: StorageAction::Doctor { .. },
+        }) => false,
+        _ => true,
+    }
+}
+
+fn requires_workspace_scope(command: &WorkspaceCommand) -> bool {
+    match command {
+        WorkspaceCommand::Init { .. } => false,
+        WorkspaceCommand::Doctor {
             action: Some(DoctorAction::Sync { .. }),
             ..
         }
-        | Command::Doctor { global: true, .. } => false,
-        Command::Doctor { .. } => true,
-        Command::Identity { .. } => false,
-        Command::Extension { .. } => false,
-        Command::Config {
+        | WorkspaceCommand::Doctor { global: true, .. } => false,
+        WorkspaceCommand::Doctor { .. } => true,
+        WorkspaceCommand::Identity { .. } => false,
+        WorkspaceCommand::Extension { .. } => false,
+        WorkspaceCommand::Config {
             action:
                 Some(ConfigAction::Get { global: true, .. })
                 | Some(ConfigAction::Set { global: true, .. })
@@ -1468,11 +1560,8 @@ fn requires_project_scope(command: &Command) -> bool {
                 | None,
             ..
         } => false,
-        Command::Config { .. } => true,
-        Command::Status { .. } => false,
-        Command::Storage {
-            action: StorageAction::Doctor { .. },
-        } => false,
+        WorkspaceCommand::Config { .. } => true,
+        WorkspaceCommand::Status { .. } => false,
         _ => true,
     }
 }
