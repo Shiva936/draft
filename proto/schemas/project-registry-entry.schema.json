@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Project Registry Entry",
+  "type": "object",
+  "required": ["schema_version", "project_id", "name", "repository_path", "storage_path", "draft_version", "health"],
+  "properties": {
+    "schema_version": { "const": "0.3.4" },
+    "project_id": { "type": "string" },
+    "name": { "type": "string" },
+    "repository_path": { "type": "string" },
+    "storage_path": { "type": "string" },
+    "draft_version": { "const": "0.3.4" },
+    "health": { "type": "string" }
+  },
+  "additionalProperties": true
+}

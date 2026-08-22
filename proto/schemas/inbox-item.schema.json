@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Inbox Item",
+  "type": "object",
+  "required": ["id", "kind", "subject_id", "status", "summary", "next_action"],
+  "properties": {
+    "id": { "type": "string" },
+    "kind": { "type": "string" },
+    "subject_id": { "type": "string" },
+    "status": { "type": "string" },
+    "summary": { "type": "string" },
+    "next_action": { "type": "string" }
+  },
+  "additionalProperties": true
+}

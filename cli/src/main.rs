@@ -1,7 +1,7 @@
 mod output;
 
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
@@ -9,7 +9,7 @@ use draft_core::error::{DraftError, DraftErrorKind};
 use draft_core::App;
 
 #[derive(Parser)]
-#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft v0.3.3 - Verified Composable Changepacks")]
+#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft v0.3.4 - Task-centered verified change review")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -29,6 +29,8 @@ enum Command {
     },
     /// Validate global and project Draft state.
     Doctor {
+        #[command(subcommand)]
+        action: Option<DoctorAction>,
         /// Validate only the global store.
         #[arg(long)]
         global: bool,
@@ -40,23 +42,16 @@ enum Command {
         #[command(subcommand)]
         action: IdentityAction,
     },
-    /// Launch the local AG-UI Review Cockpit in a browser.
-    Cockpit {
+    /// Launch the local Draft Console in a browser.
+    Console {
         /// Port to bind (loopback only).
         #[arg(long, default_value_t = 4317)]
         port: u16,
     },
-    /// Run the MCP adapter (JSON-RPC over stdio) for AI tools.
-    Mcp,
-    /// ACP adapter: approval workflow operations.
-    Acp {
+    /// Manage Draft extensions.
+    Extension {
         #[command(subcommand)]
-        action: AcpCliAction,
-    },
-    /// A2A adapter: candidate/actor coordination.
-    A2a {
-        #[command(subcommand)]
-        action: A2aCliAction,
+        action: ExtensionAction,
     },
     /// Manage workspace config.
     Config {
@@ -103,6 +98,22 @@ enum Command {
     Task {
         #[command(subcommand)]
         action: Option<TaskAction>,
+    },
+    /// Show items requiring attention and their next safe action.
+    Inbox {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create an audited, expiring waiver for a pack finding.
+    Waive {
+        pack_id: String,
+        finding_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        expires: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Create a Draft-native checkpoint.
     Checkpoint {
@@ -243,13 +254,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Save an approved changepack into .draft/ and optionally run hooks.save.
-    Save {
+    /// Submit an approved changepack into stable_head and optionally run hooks.submit.
+    Submit {
         #[arg(short = 'p')]
         pack: Option<String>,
         #[arg(long = "var", num_args = 1.., allow_hyphen_values = true, value_name = "key=value")]
         vars: Vec<String>,
-        /// Show what would be saved and which checks pass, without saving.
+        /// Show what would be submitted and which checks pass, without submitting.
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -288,6 +299,9 @@ enum ConfigAction {
     /// Read a config value using CLI > project > global > default precedence.
     Get {
         key: String,
+        /// Read only from the global `~/.draft/config.toml` layer.
+        #[arg(long)]
+        global: bool,
         #[arg(long)]
         json: bool,
     },
@@ -302,6 +316,49 @@ enum ConfigAction {
     },
     Unset {
         key: String,
+        /// Clear the value in the global `~/.draft/config.toml` layer.
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DoctorAction {
+    Sync {
+        #[arg(long)]
+        fix: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Stats {
+        #[arg(long)]
+        json: bool,
+    },
+    Gc {
+        #[arg(long)]
+        json: bool,
+    },
+    Compact {
+        #[arg(long)]
+        json: bool,
+    },
+    Prune {
+        #[arg(long)]
+        json: bool,
+    },
+    Index {
+        #[arg(long)]
+        refresh: bool,
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Migrate {
+        #[arg(long)]
+        check: bool,
         #[arg(long)]
         json: bool,
     },
@@ -349,39 +406,36 @@ enum IdentityAction {
 }
 
 #[derive(Subcommand)]
-enum AcpCliAction {
-    /// Show the evidence needed to decide on a pack.
-    RequestApproval { pack_id: String },
-    /// Approve a pack (emits a signed receipt).
-    Approve {
-        pack_id: String,
+enum ExtensionAction {
+    List {
         #[arg(long)]
-        reason: Option<String>,
+        json: bool,
     },
-    /// Reject a pack (emits a signed receipt).
-    Reject {
-        pack_id: String,
+    Show {
+        id: String,
         #[arg(long)]
-        reason: Option<String>,
+        json: bool,
     },
-    /// List packs awaiting approval.
-    ListPending,
-}
-
-#[derive(Subcommand)]
-enum A2aCliAction {
-    /// Register a candidate in the global registry.
-    Register {
-        name: String,
-        #[arg(long, default_value = "ai")]
-        kind: String,
-        #[arg(long, default_value = "local")]
-        provider: String,
+    Install {
+        path: String,
+        #[arg(long)]
+        json: bool,
     },
-    /// List registered candidates.
-    List,
-    /// Link a candidate to a pack (provenance only).
-    Link { candidate: String, pack_id: String },
+    Uninstall {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Enable {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Disable {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -424,6 +478,28 @@ enum IgnoreAction {
 
 #[derive(Subcommand)]
 enum TaskAction {
+    /// Create a stored deterministic task definition.
+    Create {
+        name: String,
+        #[arg(long)]
+        goal: String,
+        #[arg(long)]
+        template: Option<String>,
+        #[arg(long = "allow")]
+        allowed_zones: Vec<String>,
+        #[arg(long = "forbid")]
+        forbidden_zones: Vec<String>,
+        #[arg(long = "success")]
+        success_criteria: Vec<String>,
+        #[arg(long = "candidate-preset")]
+        candidate_preset: Option<String>,
+        #[arg(long, value_parser = ["low", "medium", "high", "critical"])]
+        risk: Option<String>,
+        #[arg(long, value_parser = ["normal", "safe", "plan-first"])]
+        mode: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     Spawn {
         name: String,
         #[arg(short = 'p')]
@@ -431,13 +507,76 @@ enum TaskAction {
         #[arg(short = 'c')]
         candidates: Vec<String>,
         #[arg(long)]
+        preset: Option<String>,
+        #[arg(long)]
+        resume: Option<String>,
+        #[arg(long)]
+        cancel: Option<String>,
+        #[arg(long)]
+        retry: Option<String>,
+        #[arg(long)]
+        reason: Option<String>,
+        #[arg(long)]
         cron: Option<String>,
-        #[arg(last = true, required = true)]
+        #[arg(last = true)]
         instruction: Vec<String>,
         #[arg(long)]
         json: bool,
     },
+    /// Create a task through deterministic stdin prompts.
+    Wizard {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear task runtime state, or remove the definition too with --hard.
+    Drop {
+        task: String,
+        #[arg(long)]
+        hard: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Export {
+        task: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Import {
+        path: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a task by id or name.
+    Show {
+        task: String,
+        #[arg(long)]
+        full: bool,
+        #[arg(long)]
+        executions: bool,
+        #[arg(long)]
+        packs: bool,
+        #[arg(long)]
+        conflicts: bool,
+        #[arg(long)]
+        lanes: bool,
+        #[arg(long)]
+        evidence: bool,
+        #[arg(long)]
+        timeline: bool,
+        #[arg(long)]
+        explain: bool,
+        #[arg(long)]
+        decompose: bool,
+        #[arg(long = "diff-stable")]
+        diff_stable: bool,
         #[arg(long)]
         json: bool,
     },
@@ -540,7 +679,9 @@ fn main() -> ExitCode {
                 DraftErrorKind::VerificationFailed => ExitCode::from(5),
                 DraftErrorKind::RiskPolicyBlocked => ExitCode::from(6),
                 DraftErrorKind::ReviewRequired => ExitCode::from(7),
-                DraftErrorKind::SaveFailed => ExitCode::from(8),
+                DraftErrorKind::SubmitFailed | DraftErrorKind::SubmitReadinessBlocked => {
+                    ExitCode::from(8)
+                }
                 DraftErrorKind::Storage => ExitCode::from(9),
                 DraftErrorKind::ConflictDetected => ExitCode::from(2),
                 _ => ExitCode::FAILURE,
@@ -551,6 +692,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), DraftError> {
     let cwd = std::env::current_dir().map_err(DraftError::from)?;
+    ensure_project_scope(&cli.command, &cwd)?;
     let app = App::new();
     match cli.command {
         Command::Init { base, global, json } => {
@@ -563,7 +705,68 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 )
             }
         }
-        Command::Doctor { global, json } => {
+        Command::Doctor {
+            action: Some(DoctorAction::Sync { fix, json }),
+            ..
+        } => {
+            let registry = draft_core::registry::ProjectRegistry::global()?;
+            let report = if fix {
+                serde_json::to_value(registry.fix_stale()?)
+            } else {
+                serde_json::to_value(registry.inspect()?)
+            }
+            .map_err(|e| DraftError::storage(e.to_string()))?;
+            render_json_or_text(
+                report,
+                json,
+                if fix {
+                    "Registry synchronized"
+                } else {
+                    "Registry status"
+                },
+            )
+        }
+        Command::Doctor {
+            action: Some(DoctorAction::Stats { json }),
+            ..
+        } => render_json_or_text(app.storage_stats(&cwd)?, json, "Storage statistics"),
+        Command::Doctor {
+            action: Some(DoctorAction::Gc { json }),
+            ..
+        } => render_json_or_text(app.gc(&cwd)?, json, "Doctor GC complete"),
+        Command::Doctor {
+            action: Some(DoctorAction::Compact { json }),
+            ..
+        } => render_json_or_text(app.storage_compact(&cwd)?, json, "Doctor compact complete"),
+        Command::Doctor {
+            action: Some(DoctorAction::Prune { json }),
+            ..
+        } => render_json_or_text(app.storage_prune(&cwd)?, json, "Doctor prune complete"),
+        Command::Doctor {
+            action:
+                Some(DoctorAction::Index {
+                    refresh,
+                    global,
+                    json,
+                }),
+            ..
+        } => {
+            let report = if global {
+                app.doctor_index_global(refresh)?
+            } else {
+                app.doctor_index(&cwd, refresh)?
+            };
+            render_json_or_text(report, json, "Index status")
+        }
+        Command::Doctor {
+            action: Some(DoctorAction::Migrate { check, json }),
+            ..
+        } => render_json_or_text(app.doctor_migrate(&cwd, check)?, json, "Migration status"),
+        Command::Doctor {
+            action: None,
+            global,
+            json,
+        } => {
             let report = if global {
                 app.doctor_global()?
             } else {
@@ -574,71 +777,48 @@ fn run(cli: Cli) -> Result<(), DraftError> {
         Command::Identity { action } => match action {
             IdentityAction::Status { json } => render_identity(app.identity_status()?, json),
         },
-        Command::Cockpit { port } => {
+        Command::Console { port } => {
             // Ensure we are inside a workspace before starting the server.
             app.status(&cwd)?;
             draft_agui::serve(cwd.clone(), "127.0.0.1", port)
                 .map_err(|e| DraftError::new(DraftErrorKind::Internal, e))
         }
-        Command::Mcp => draft_adapters::mcp::serve_stdio(cwd.clone())
-            .map_err(|e| DraftError::new(DraftErrorKind::Internal, e)),
-        Command::Acp { action } => {
-            use draft_adapters::acp::{run, AcpOp};
-            let value = match action {
-                AcpCliAction::RequestApproval { pack_id } => {
-                    run(&cwd, AcpOp::RequestApproval { pack_id: &pack_id })
-                }
-                AcpCliAction::Approve { pack_id, reason } => run(
-                    &cwd,
-                    AcpOp::Approve {
-                        pack_id: &pack_id,
-                        reason,
-                    },
-                ),
-                AcpCliAction::Reject { pack_id, reason } => run(
-                    &cwd,
-                    AcpOp::Reject {
-                        pack_id: &pack_id,
-                        reason,
-                    },
-                ),
-                AcpCliAction::ListPending => run(&cwd, AcpOp::ListPending),
+        Command::Extension { action } => match action {
+            ExtensionAction::List { json } => {
+                render_json_or_text(draft_adapters::extension::list()?, json, "Extensions")
             }
-            .map_err(|e| DraftError::new(DraftErrorKind::Internal, e))?;
-            output::print_json(&value);
-            Ok(())
-        }
-        Command::A2a { action } => {
-            use draft_adapters::a2a::{run, A2aOp};
-            let value = match action {
-                A2aCliAction::Register {
-                    name,
-                    kind,
-                    provider,
-                } => run(
-                    &cwd,
-                    A2aOp::RegisterCandidate {
-                        name: &name,
-                        kind: &kind,
-                        provider: &provider,
-                    },
-                ),
-                A2aCliAction::List => run(&cwd, A2aOp::ListCandidates),
-                A2aCliAction::Link { candidate, pack_id } => run(
-                    &cwd,
-                    A2aOp::Link {
-                        candidate: &candidate,
-                        pack_id: &pack_id,
-                    },
-                ),
+            ExtensionAction::Show { id, json } => {
+                render_json_or_text(draft_adapters::extension::show(&id)?, json, "Extension")
             }
-            .map_err(|e| DraftError::new(DraftErrorKind::Internal, e))?;
-            output::print_json(&value);
-            Ok(())
-        }
+            ExtensionAction::Install { path, json } => render_json_or_text(
+                draft_adapters::extension::install(Path::new(&path))?,
+                json,
+                "Extension installed",
+            ),
+            ExtensionAction::Uninstall { id, json } => render_json_or_text(
+                draft_adapters::extension::uninstall(&id)?,
+                json,
+                "Extension uninstalled",
+            ),
+            ExtensionAction::Enable { id, json } => render_json_or_text(
+                draft_adapters::extension::set_enabled(&id, true)?,
+                json,
+                "Extension enabled",
+            ),
+            ExtensionAction::Disable { id, json } => render_json_or_text(
+                draft_adapters::extension::set_enabled(&id, false)?,
+                json,
+                "Extension disabled",
+            ),
+        },
         Command::Config { key, action } => match action {
-            Some(ConfigAction::Get { key, json }) => {
-                render_config(app.config_get_layered(&cwd, &key)?, json)
+            Some(ConfigAction::Get { key, global, json }) => {
+                let report = if global {
+                    app.config_get_global(&key)?
+                } else {
+                    app.config_get_layered(&cwd, &key)?
+                };
+                render_config(report, json)
             }
             Some(ConfigAction::Set {
                 key,
@@ -653,8 +833,13 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 };
                 render_config(report, json)
             }
-            Some(ConfigAction::Unset { key, json }) => {
-                render_config(app.config_unset(&cwd, &key)?, json)
+            Some(ConfigAction::Unset { key, global, json }) => {
+                let report = if global {
+                    app.config_unset_global(&key)?
+                } else {
+                    app.config_unset(&cwd, &key)?
+                };
+                render_config(report, json)
             }
             None => {
                 if let Some(key) = key {
@@ -692,11 +877,31 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             IgnoreAction::List { json } => render_ignore(app.ignore_list(&cwd)?, json),
         },
         Command::Status {
-            pack: _pack,
-            component: _component,
-            full: _full,
+            pack,
+            component,
+            full,
             json,
-        } => render_status(app.status(&cwd)?, json),
+        } => {
+            if pack.is_some() || component.is_some() || full {
+                let component = component
+                    .as_deref()
+                    .map(draft_core::StatusComponent::parse)
+                    .transpose()?;
+                render_status_report(
+                    app.status_with_options(
+                        &cwd,
+                        draft_core::StatusOptions {
+                            pack,
+                            component,
+                            full,
+                        },
+                    )?,
+                    json,
+                )
+            } else {
+                render_status(app.status(&cwd)?, json)
+            }
+        }
         Command::Event {
             page,
             limit,
@@ -708,29 +913,165 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             raw,
         ),
         Command::Task { action } => match action {
+            Some(TaskAction::Create {
+                name,
+                goal,
+                template,
+                allowed_zones,
+                forbidden_zones,
+                success_criteria,
+                candidate_preset,
+                risk,
+                mode,
+                json,
+            }) => render_json_or_text(
+                app.task_define(
+                    &cwd,
+                    &name,
+                    &goal,
+                    template,
+                    allowed_zones,
+                    forbidden_zones,
+                    success_criteria,
+                    risk.as_deref(),
+                    mode.as_deref(),
+                    candidate_preset,
+                )?,
+                json,
+                "Task created",
+            ),
             Some(TaskAction::Spawn {
                 name,
                 pack,
                 candidates,
+                preset,
+                resume,
+                cancel,
+                retry,
+                reason,
                 cron,
                 instruction,
                 json,
-            }) => render_json_or_text(
-                app.task_spawn(&cwd, &name, pack.as_deref(), candidates, cron, instruction)?,
+            }) => {
+                if let Some(execution_id) = cancel {
+                    return render_json_or_text(
+                        app.task_cancel_execution(&cwd, &execution_id, reason)?,
+                        json,
+                        "Execution cancelled",
+                    );
+                }
+                if let Some(execution_id) = resume {
+                    return render_json_or_text(
+                        app.task_resume_execution(&cwd, &execution_id)?,
+                        json,
+                        "Execution resume queued",
+                    );
+                }
+                if let Some(execution_id) = retry {
+                    return render_json_or_text(
+                        app.task_retry_execution(&cwd, &execution_id)?,
+                        json,
+                        "Execution retry queued",
+                    );
+                }
+                render_json_or_text(
+                    app.task_spawn_with_preset(
+                        &cwd,
+                        &name,
+                        pack.as_deref(),
+                        candidates,
+                        preset,
+                        cron,
+                        instruction,
+                    )?,
+                    json,
+                    "Task spawned",
+                )
+            }
+            Some(TaskAction::Wizard { json }) => {
+                let task = run_task_wizard(&app, &cwd, json)?;
+                render_json_or_text(task, json, "Task created")
+            }
+            Some(TaskAction::Drop { task, hard, json }) => {
+                render_json_or_text(app.task_drop(&cwd, &task, hard)?, json, "Task dropped")
+            }
+            Some(TaskAction::Export { task, output, json }) => render_json_or_text(
+                app.task_export(&cwd, &task, output.as_deref())?,
                 json,
-                "Task spawned",
+                "Task exported",
             ),
+            Some(TaskAction::Import { path, name, json }) => {
+                render_json_or_text(app.task_import(&cwd, &path, name)?, json, "Task imported")
+            }
             Some(TaskAction::List { json }) => {
-                render_json_or_text(app.task_list(&cwd)?, json, "Tasks")
+                render_json_or_text(app.task_definitions(&cwd)?, json, "Tasks")
+            }
+            Some(TaskAction::Show {
+                task,
+                full,
+                executions,
+                packs,
+                conflicts,
+                lanes,
+                evidence,
+                timeline,
+                explain,
+                decompose,
+                diff_stable,
+                json,
+            }) => {
+                let options = draft_core::TaskViewOptions {
+                    full,
+                    executions,
+                    packs,
+                    conflicts,
+                    lanes,
+                    evidence,
+                    timeline,
+                    explain,
+                    decompose,
+                    diff_stable,
+                };
+                if full
+                    || executions
+                    || packs
+                    || conflicts
+                    || lanes
+                    || evidence
+                    || timeline
+                    || explain
+                    || decompose
+                    || diff_stable
+                {
+                    render_json_or_text(
+                        app.task_view_with_options(&cwd, &task, options)?,
+                        json,
+                        "Task",
+                    )
+                } else {
+                    render_json_or_text(app.task_view(&cwd, &task)?, json, "Task")
+                }
             }
             Some(TaskAction::External(args)) => {
                 let task_id = args
                     .first()
                     .ok_or_else(|| DraftError::invalid_config("missing task id"))?;
-                render_json_or_text(app.task_show(&cwd, task_id)?, false, "Task")
+                render_json_or_text(app.task_view(&cwd, task_id)?, false, "Task")
             }
             None => render_json_or_text(app.task_current(&cwd)?, false, "Task"),
         },
+        Command::Inbox { json } => render_json_or_text(app.inbox(&cwd)?, json, "Inbox"),
+        Command::Waive {
+            pack_id,
+            finding_id,
+            reason,
+            expires,
+            json,
+        } => render_json_or_text(
+            app.waive(&cwd, &pack_id, &finding_id, &reason, &expires)?,
+            json,
+            "Waiver created",
+        ),
         Command::Checkpoint { message, json } => {
             render_json_or_text(app.checkpoint(&cwd, &message)?, json, "Checkpoint created")
         }
@@ -906,7 +1247,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 let reference = target.or(pack);
                 let refstr = reference.as_deref().unwrap_or("selected");
                 // Legacy changepacks also need the legacy verification receipt
-                // so the legacy save gate passes (same as `verify -p`).
+                // so the legacy submit gate passes (same as `verify -p`).
                 // Imported packs are canonical-only and skip it.
                 if app.is_legacy_pack_ref(&cwd, refstr) {
                     app.verify_selected(&cwd, Some(refstr))?;
@@ -943,7 +1284,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             json,
         } => {
             if tui {
-                return draft_tui::run_review_cockpit(&cwd)
+                return draft_tui::run_console(&cwd)
                     .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
             }
             render_json_or_text(
@@ -953,7 +1294,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             )
         }
         Command::Approve { pack, reason, json } => render_json_or_text(
-            app.cockpit_decide(
+            app.decide_pack(
                 &cwd,
                 app.resolve_pack_arg(&cwd, pack.as_deref())?.as_str(),
                 true,
@@ -963,7 +1304,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             "ChangePack approved",
         ),
         Command::Reject { pack, reason, json } => render_json_or_text(
-            app.cockpit_decide(
+            app.decide_pack(
                 &cwd,
                 app.resolve_pack_arg(&cwd, pack.as_deref())?.as_str(),
                 false,
@@ -979,7 +1320,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             json,
         } => {
             if tui {
-                return draft_tui::run_review_cockpit(&cwd)
+                return draft_tui::run_console(&cwd)
                     .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
             }
             render_json_or_text(app.compare(&cwd, &left, &right)?, json, "Compare complete")
@@ -993,7 +1334,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
         } => render_json_or_text(
             {
                 if tui {
-                    return draft_tui::run_review_cockpit(&cwd)
+                    return draft_tui::run_console(&cwd)
                         .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
                 }
                 app.compose(&cwd, &left, &right, &out)?
@@ -1008,7 +1349,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
             json,
         } => {
             if tui {
-                return draft_tui::run_review_cockpit(&cwd)
+                return draft_tui::run_console(&cwd)
                     .map_err(|e| DraftError::new(DraftErrorKind::Internal, e));
             }
             render_json_or_text(
@@ -1017,20 +1358,20 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 "Disperse complete",
             )
         }
-        Command::Save {
+        Command::Submit {
             pack,
             vars,
             dry_run,
             json,
         } => {
             if dry_run {
-                render_dry_run(app.save_dry_run(&cwd, pack.as_deref())?, json)
+                render_dry_run(app.submit_dry_run(&cwd, pack.as_deref())?, json)
             } else {
                 let vars = draft_core::parse_hook_vars(vars)?;
                 render_json_or_text(
-                    app.save_selected(&cwd, pack.as_deref(), vars)?,
+                    app.submit_selected(&cwd, pack.as_deref(), vars)?,
                     json,
-                    "ChangePack saved",
+                    "ChangePack submitted",
                 )
             }
         }
@@ -1054,7 +1395,7 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 render_json_or_text(app.receipts(&cwd)?, json, "Receipts")
             }
             ReceiptAction::Show { receipt_id, json } => {
-                render_json_or_text(app.receipt_show(&cwd, &receipt_id)?, json, "Receipt")
+                render_receipt_show(app.receipt_show(&cwd, &receipt_id)?, json)
             }
             ReceiptAction::Verify {
                 receipt_id,
@@ -1096,6 +1437,58 @@ fn run(cli: Cli) -> Result<(), DraftError> {
     }
 }
 
+fn ensure_project_scope(command: &Command, cwd: &Path) -> Result<(), DraftError> {
+    if !requires_project_scope(command) || find_workspace_root(cwd).is_some() {
+        return Ok(());
+    }
+    Err(DraftError::new(
+        DraftErrorKind::ProjectScopeRequired,
+        "this command must be run inside a Draft workspace",
+    )
+    .with_context(format!("current directory: {}", cwd.display()))
+    .with_suggestion("run `draft init` here or change into an existing Draft workspace"))
+}
+
+fn requires_project_scope(command: &Command) -> bool {
+    match command {
+        Command::Init { .. } => false,
+        Command::Doctor {
+            action: Some(DoctorAction::Sync { .. }),
+            ..
+        }
+        | Command::Doctor { global: true, .. } => false,
+        Command::Doctor { .. } => true,
+        Command::Identity { .. } => false,
+        Command::Extension { .. } => false,
+        Command::Config {
+            action:
+                Some(ConfigAction::Get { global: true, .. })
+                | Some(ConfigAction::Set { global: true, .. })
+                | Some(ConfigAction::Unset { global: true, .. })
+                | None,
+            ..
+        } => false,
+        Command::Config { .. } => true,
+        Command::Status { .. } => false,
+        Command::Storage {
+            action: StorageAction::Doctor { .. },
+        } => false,
+        _ => true,
+    }
+}
+
+fn find_workspace_root(cwd: &Path) -> Option<PathBuf> {
+    let mut cur = cwd.to_path_buf();
+    loop {
+        if cur.join(".draft").join("workspace.json").exists() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
 fn render_init(report: draft_core::InitReport, json: bool) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
@@ -1112,6 +1505,16 @@ fn render_init(report: draft_core::InitReport, json: bool) -> Result<(), DraftEr
     output::field("Stable head", &report.stable_head_id);
     output::field("Stable receipt", &report.stable_head_receipt_id);
     output::field("Workspace hash", &report.workspace_hash);
+    if !report.next_actions.is_empty() {
+        output::section("Next actions");
+        for action in &report.next_actions {
+            output::bullet(action);
+        }
+    }
+    if !report.candidate_guidance.is_empty() {
+        output::section("Candidates");
+        output::line(&report.candidate_guidance);
+    }
     Ok(())
 }
 
@@ -1228,6 +1631,47 @@ fn render_dry_run(report: draft_core::DryRunReport, json: bool) -> Result<(), Dr
         }
     }
     Ok(())
+}
+
+fn render_receipt_show(value: serde_json::Value, json: bool) -> Result<(), DraftError> {
+    if json {
+        output::print_json(&value);
+        return Ok(());
+    }
+    let receipt_id = json_string(&value, &["receipt_id", "id"]).unwrap_or("unknown");
+    output::header(&format!("Receipt {receipt_id}"));
+    output::section("Proof");
+    if let Some(event_type) = json_string(&value, &["event_type", "kind"]) {
+        output::bullet(&format!("Event: {event_type}"));
+    }
+    if let Some(subject) = json_string(&value, &["subject_id", "changepack_id", "pack_id"]) {
+        output::bullet(&format!("Subject: {subject}"));
+    }
+    if let Some(actor) = json_string(&value, &["actor_id", "actor"]) {
+        output::bullet(&format!("Actor: {actor}"));
+    }
+    if let Some(workspace_hash) = json_string(&value, &["workspace_hash"]) {
+        output::bullet(&format!("Workspace hash: {workspace_hash}"));
+    }
+    if let Some(public_key) = json_string(&value, &["public_key_id"]) {
+        output::bullet(&format!("Public key: {public_key}"));
+    }
+    if json_string(&value, &["signature"]).is_some() {
+        output::bullet("Signature: present");
+    }
+    output::section("Receipt IDs");
+    output::bullet(&format!("Receipt: {receipt_id}"));
+    if let Some(event_hash) = json_string(&value, &["event_hash"]) {
+        output::bullet(&format!("Event hash: {event_hash}"));
+    }
+    if let Some(previous) = json_string(&value, &["previous_event_hash"]) {
+        output::bullet(&format!("Previous event hash: {previous}"));
+    }
+    Ok(())
+}
+
+fn json_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|key| value.get(*key)?.as_str())
 }
 
 fn render_receipt_verification(
@@ -1373,6 +1817,27 @@ fn render_status(report: draft_core::WorkspaceStatus, json: bool) -> Result<(), 
     Ok(())
 }
 
+fn render_status_report(report: draft_core::StatusReport, json: bool) -> Result<(), DraftError> {
+    if json {
+        output::print_json(&report);
+        return Ok(());
+    }
+    output::header("Workspace Status");
+    output::field("Workspace", &report.workspace.workspace_id.to_string());
+    output::field("Changes", &report.workspace.changes.len().to_string());
+    if let Some(component) = &report.component {
+        output::field("Component", component);
+    }
+    if let Some(pack) = &report.pack {
+        output::field("Pack", pack);
+    }
+    for (name, value) in report.sections {
+        output::section(&name);
+        output::print_human(&value);
+    }
+    Ok(())
+}
+
 fn render_events(
     events: Vec<draft_core::EventEnvelope>,
     json: bool,
@@ -1397,6 +1862,81 @@ fn render_events(
         );
     }
     Ok(())
+}
+
+fn run_task_wizard(
+    app: &App,
+    cwd: &Path,
+    json: bool,
+) -> Result<draft_core::task::TaskDefinition, DraftError> {
+    let name = prompt_line("Task name", json)?;
+    let template = prompt_line("Task type/template", json)?;
+    let goal = prompt_line("Goal", json)?;
+    let should_not_change = prompt_line("What should not change?", json)?;
+    let allowed = prompt_line("Allowed zones (comma-separated)", json)?;
+    let forbidden = prompt_line("Forbidden zones (comma-separated)", json)?;
+    let success = prompt_line("Success checks (comma-separated)", json)?;
+    let risk = prompt_line("Risk [low|medium|high|critical]", json)?;
+    let plan_first = prompt_line("Plan first? [y/N]", json)?;
+    let candidate_preset = prompt_line("Candidate preset", json)?;
+    let mode = if matches!(plan_first.trim(), "y" | "Y" | "yes" | "YES") {
+        Some("plan-first".to_string())
+    } else {
+        None
+    };
+    let mut forbidden_zones = split_csv(&forbidden);
+    forbidden_zones.extend(split_csv(&should_not_change));
+    if !json {
+        output::section("Preview");
+        output::field("Name", name.trim());
+        output::field("Template", template.trim());
+        output::field("Goal", goal.trim());
+        output::field("Allowed", &split_csv(&allowed).join(", "));
+        output::field("Forbidden", &forbidden_zones.join(", "));
+        output::field("Success", &split_csv(&success).join(", "));
+        output::field("Risk", risk.trim());
+        output::field("Mode", mode.as_deref().unwrap_or("normal"));
+        output::field("Preset", candidate_preset.trim());
+    }
+    let confirm = prompt_line("Create task? [y/N]", json)?;
+    if !matches!(confirm.trim(), "y" | "Y" | "yes" | "YES") {
+        return Err(DraftError::invalid_config("task wizard cancelled"));
+    }
+    let template = (!template.trim().is_empty()).then(|| template.trim().to_string());
+    let risk = (!risk.trim().is_empty()).then(|| risk.trim().to_string());
+    let candidate_preset =
+        (!candidate_preset.trim().is_empty()).then(|| candidate_preset.trim().to_string());
+    app.task_define(
+        cwd,
+        name.trim(),
+        goal.trim(),
+        template,
+        split_csv(&allowed),
+        forbidden_zones,
+        split_csv(&success),
+        risk.as_deref(),
+        mode.as_deref(),
+        candidate_preset,
+    )
+}
+
+fn split_csv(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn prompt_line(label: &str, quiet: bool) -> Result<String, DraftError> {
+    if !quiet {
+        print!("{label}: ");
+        io::stdout().flush().map_err(DraftError::from)?;
+    }
+    let mut buf = String::new();
+    io::stdin().read_line(&mut buf).map_err(DraftError::from)?;
+    Ok(buf.trim_end().to_string())
 }
 
 fn render_json_or_text<T: serde::Serialize>(

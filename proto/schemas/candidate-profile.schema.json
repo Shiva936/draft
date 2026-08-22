@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Candidate Profile",
+  "type": "object",
+  "required": ["schema_version", "name", "kind", "capabilities", "limits", "source"],
+  "properties": {
+    "schema_version": { "const": "0.3.4" },
+    "name": { "type": "string" },
+    "kind": { "enum": ["agent", "command", "manual", "human"] },
+    "command": { "type": ["string", "null"] },
+    "capabilities": { "type": "object" },
+    "limits": { "type": "object" },
+    "source": { "type": "string" }
+  },
+  "additionalProperties": true
+}

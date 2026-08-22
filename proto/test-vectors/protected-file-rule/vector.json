@@ -1,0 +1,1 @@
+{"name":"protected-file-rule","payload_schema":"protected-file-rule.schema.json","payload":{"schema_version":"0.3.4","pattern":".env*","reason":"secret material","action":"deny"},"invalid_payload":{"schema_version":"0.3.4","pattern":".env*","reason":"secret material","action":"allow"},"expect":{"valid":true}}

@@ -1,46 +1,30 @@
 # Draft Documentation
 
-Draft v0.3.3 is organized around local verified changepacks. The docs are written for users, agent actors, contributors, and maintainers of the open-source project.
+Draft v0.3.4 is organized around local verified ChangePacks. These documents serve users, agent actors, contributors, and maintainers of the open-source project.
 
-## Start Here
+## Guides
 
-- [Getting Started](getting-started.md) walks through a complete local workflow.
-- [Installation](installation.md) covers source builds and CLI startup.
-- [Concepts](concepts.md) defines workspaces, checkpoints, ChangePacks, events, receipts, candidates, tasks, and hooks.
-- [Command Reference](command-reference.md) documents CLI behavior.
-- [Architecture](architecture.md) explains the crate and service boundaries.
-- [Storage Layout](storage-layout.md) describes the `.draft/` store.
-- [Safety Model](safety-model.md) explains Draft’s local safety boundaries.
-- [Security](security.md) documents the safety model and threat boundaries.
-- [FAQ](faq.md) answers common public-project questions.
-- [Release Compliance](release-compliance.md) tracks production-readiness against the v0.3.3 planning intent.
+- [Installation](guides/installation.md) covers release binaries, supported platforms, upgrades, and source builds.
+- [Getting Started](guides/getting-started.md) walks through a complete local workflow and answers common questions.
+- [Workflows](guides/workflows.md) covers agent, Git-integrated, and Draft-only usage.
 
-## Concept References
+## Reference
 
-- [Protocol Contracts](protocol.md)
-- [ChangePack Internals](changepack.md)
-- [Checkpoints](checkpoints.md)
-- [Candidates And Tasks](candidates-and-tasks.md)
-- [Tasks And Runs](task-run-model.md)
-- [Evidence](evidence.md)
-- [Verification](verification.md)
-- [Review And Approval](review-and-approval.md)
-- [Policy](policy.md)
-- [Review Cockpit](tui.md)
-- [Compare And Compose](compare-compose.md)
-- [Event Model Internals](event-model.md)
-- [Services](services.md)
-- [Config](config.md), [Configuration](configuration.md), and [Configuration Rules](config-rules.md)
-- [Draft Ignore Rules](ignore-rules.md)
-- [Hooks](hooks.md)
+- [Command Reference](reference/commands.md) documents the CLI surface.
+- [Concepts](reference/concepts.md) explains workspaces, checkpoints, ChangePacks, tasks, executions, evidence, comparison, and composition.
+- [Configuration](reference/configuration.md) covers config files, submit modes, hooks, precedence, and ignore rules.
+- [Review, Verification, And Policy](reference/review-and-policy.md) covers evidence gates, risk, approval, policy, and Draft Console.
 
-## Workflows
+## Internals
 
-- [Draft With Git](git-workflows.md)
-- [Draft-Only Workflows](draft-only-workflows.md)
+- [Architecture](internals/architecture.md) explains crate, service, daemon, and authority boundaries.
+- [Storage And Events](internals/storage-and-events.md) describes `.draft/` stores, objects, receipts, and the event chain.
+- [Security](internals/security.md) documents local trust and safety boundaries.
+- [Protocol Contracts](internals/protocol.md) indexes canonical specifications, schemas, and compatibility fixtures.
+- [Release Compliance](release-compliance.md) maps v0.3.4 requirements to implementation, tests, and publication gates.
 
-## v0.3.3 Boundary
+## v0.3.4 Boundary
 
-Draft v0.3.3 is local-first. It stores verified, signed, portable changepacks in `.draft/`, supports optional opaque `hooks.*` command execution, and does not implement network, hosted-service, marketplace, cloud sync, or native external-action behavior.
+Draft v0.3.4 is local-first. It stores verified, signed, portable ChangePacks in `.draft/`, supports optional opaque `hooks.*` command execution, and does not implement network, hosted-service, marketplace, cloud-sync, or native external-action behavior.
 
-Draft does not read external tool metadata to decide what changed. The workspace scanner walks files directly and applies only Draft’s own rules plus the hard `.draft/` exclusion.
+Draft does not read external tool metadata to decide what changed. The workspace scanner walks files directly and applies only Draft's own rules plus the hard `.draft/` exclusion.

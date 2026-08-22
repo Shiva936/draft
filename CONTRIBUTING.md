@@ -10,13 +10,20 @@ Install a stable Rust toolchain, then run:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo audit --deny warnings
+
+cd services/agui/web
+npm ci
+npm run typecheck
+npm audit --audit-level=high
+npm run build
 ```
 
 The workspace is split into:
 
 - `core/`: Draft-native data model and local store behavior;
 - `cli/`: command-line interface that works without a daemon;
-- `tui/`: review cockpit rendering and interaction layer;
+- `tui/`: Console rendering and interaction layer;
 - `services/`: optional local background services;
 - `docs/`: public user and maintainer documentation.
 
@@ -32,7 +39,7 @@ The workspace is split into:
 
 ## Pull Request Expectations
 
-Every functional change should include focused tests, documentation updates when user-visible behavior changes, a release-compliance note when readiness changes, and passing formatting, linting, and tests.
+Every functional change should include focused tests, documentation updates when user-visible behavior changes, an update to the [release-compliance matrix](docs/release-compliance.md) when readiness changes, and passing formatting, linting, tests, and security audits.
 
 ## Documentation Style
 

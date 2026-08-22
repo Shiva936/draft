@@ -187,7 +187,7 @@ fn manifest_parser_rejects_corrupt_and_wrong_schema() {
             "created_at":"t","base_workspace_hash":"h","target_workspace_hash":"h",
             "changes_hash":"h","risk_hash":"","verify_hash":"","lsif_hash":"",
             "receipt_hashes":[],"import_state":"none","approval_state":"pending",
-            "save_state":"unsaved"}"#,
+            "submit_state":"unsaved"}"#,
     )
     .unwrap();
     assert!(m.ensure_supported().is_err());

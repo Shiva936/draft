@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Editor Session",
+  "type": "object",
+  "required": ["schema_version", "id", "mode", "workspace_hash", "pending_edits"],
+  "properties": {
+    "schema_version": { "const": "0.3.4" },
+    "id": { "type": "string" },
+    "mode": { "enum": ["browse", "task_edit", "pack_edit"] },
+    "task_id": { "type": ["string", "null"] },
+    "pack_id": { "type": ["string", "null"] },
+    "workspace_hash": { "type": "string" },
+    "pending_edits": { "type": "array" }
+  },
+  "additionalProperties": true
+}

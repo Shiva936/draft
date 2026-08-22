@@ -155,7 +155,7 @@ fn daemon_dispatcher_covers_control_plane() {
             "decision.approve",
             json!({ "pack": pack_id, "reason": "reviewed" }),
         ),
-        ("16", "save.run", json!({ "pack": pack_id })),
+        ("16", "submit.run", json!({ "pack": pack_id })),
         ("17", "receipt.list", json!({})),
         ("18", "events.list", json!({})),
         ("19", "events.verify", json!({})),
@@ -179,7 +179,7 @@ fn daemon_dispatcher_covers_control_plane() {
     );
     assert!(receipts.ok, "{:?}", receipts.error);
     let receipt_values = receipts.result.as_ref().unwrap().as_array().unwrap();
-    for event_type in ["PackVerified", "PackApproved", "PackSaved"] {
+    for event_type in ["PackVerified", "PackApproved", "PackSubmitted"] {
         assert!(
             receipt_values.iter().any(|r| r["event_type"] == event_type),
             "missing canonical {event_type} receipt in {receipt_values:?}"
@@ -187,7 +187,7 @@ fn daemon_dispatcher_covers_control_plane() {
     }
     let save_receipt = receipt_values
         .iter()
-        .find(|r| r["event_type"] == "PackSaved")
+        .find(|r| r["event_type"] == "PackSubmitted")
         .unwrap();
     let receipt_id = save_receipt["id"]
         .as_str()

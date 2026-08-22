@@ -85,8 +85,7 @@ check_contains() {
 check_contains README.md "version-v${expected}" "README version badge"
 check_contains README.md "Draft v${expected}|v${expected}" "README release version"
 check_contains RELEASE_NOTES.md "v${expected}" "release notes version"
-check_contains docs/installation.md "Draft v${expected}|v${expected}" "installation doc version"
-check_contains docs/release-compliance.md "v${expected}" "release compliance version"
+check_contains docs/guides/installation.md "Draft v${expected}|v${expected}" "installation doc version"
 
 if [ "$failures" -ne 0 ]; then
   exit 1

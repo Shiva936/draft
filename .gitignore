@@ -1,6 +1,8 @@
 plans/
 target/
+node_modules/
 fuzz/target/
 fuzz/corpus/
 fuzz/artifacts/
 fuzz/Cargo.lock
+.prettierrc

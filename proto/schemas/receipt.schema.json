@@ -16,7 +16,7 @@
     "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "verification_result": { "enum": ["verified", "failed"] },
     "hook_results": { "type": "array" },
-    "save_mode": { "enum": ["merge_and_dispose", "dispose_only", null] },
+    "submit_mode": { "enum": ["merge_and_dispose", "dispose_only", null] },
     "timestamp": { "type": "string" },
     "signer": { "type": ["string", "null"] },
     "event_hash": { "type": "string" },

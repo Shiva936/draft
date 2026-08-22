@@ -1,0 +1,1 @@
+{"name":"activity-event","payload_schema":"activity-event.schema.json","payload":{"schema_version":"0.3.4","id":"act_demo","kind":"task.created","subject_id":"tsk_demo","created_at":"2026-07-12T00:00:00Z","summary":"Task created"},"invalid_payload":{"schema_version":"0.3.4","id":"act_demo","kind":"task.created","created_at":"2026-07-12T00:00:00Z"},"expect":{"valid":true}}

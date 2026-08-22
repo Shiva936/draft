@@ -1,6 +1,6 @@
 # Receipt Protocol
 
-Draft v0.3.3 receipts are canonical attestations for trust-relevant operations.
+Draft v0.3.4 receipts are canonical attestations for trust-relevant operations.
 Receipt IDs use `rcp_<id>`.
 
 Required stable fields:
@@ -17,7 +17,7 @@ Required stable fields:
 - `workspace_hash`
 - `verification_result`
 - `hook_results`
-- `save_mode`
+- `submit_mode`
 - `timestamp`
 - `signer`
 - `event_hash`

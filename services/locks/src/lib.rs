@@ -13,7 +13,7 @@ pub enum LockType {
     WorkspaceRead,
     WorkspaceWrite,
     OperationLogAppend,
-    Save,
+    Submit,
     CheckpointRestore,
     VerificationRun,
 }
@@ -24,7 +24,7 @@ impl LockType {
             LockType::WorkspaceRead => "workspace-read.lock",
             LockType::WorkspaceWrite => "workspace-write.lock",
             LockType::OperationLogAppend => "operation-log.lock",
-            LockType::Save => "save.lock",
+            LockType::Submit => "submit.lock",
             LockType::CheckpointRestore => "checkpoint-restore.lock",
             LockType::VerificationRun => "verification-run.lock",
         }

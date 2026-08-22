@@ -206,7 +206,7 @@ fn proto_contract_files_are_present_and_parseable() {
         "specs/composition.md",
         "specs/project-state.md",
         "specs/stability.md",
-        "specs/save-finalization.md",
+        "specs/submit-finalization.md",
         "specs/rollback.md",
         "specs/close.md",
         "specs/gc.md",
@@ -239,6 +239,20 @@ fn proto_contract_files_are_present_and_parseable() {
         "schemas/composition.schema.json",
         "schemas/verification.schema.json",
         "schemas/config.schema.json",
+        "schemas/task.schema.json",
+        "schemas/task-template.schema.json",
+        "schemas/execution.schema.json",
+        "schemas/candidate-profile.schema.json",
+        "schemas/decision-record.schema.json",
+        "schemas/waiver.schema.json",
+        "schemas/evidence-state.schema.json",
+        "schemas/inbox-item.schema.json",
+        "schemas/project-registry-entry.schema.json",
+        "schemas/ownership-record.schema.json",
+        "schemas/protected-file-rule.schema.json",
+        "schemas/doctor-operation.schema.json",
+        "schemas/editor-session.schema.json",
+        "schemas/activity-event.schema.json",
     ] {
         let path = proto.join(rel);
         let value: serde_json::Value = serde_json::from_slice(
@@ -268,11 +282,25 @@ fn proto_contract_files_are_present_and_parseable() {
         "dependent-packs",
         "stable-composition",
         "unstable-composition",
-        "save-merge-and-dispose",
-        "save-dispose-only",
+        "submit-merge-and-dispose",
+        "submit-dispose-only",
         "close-clean-repo",
         "close-with-pending-pack",
         "gc-disposed-pack-cleanup",
+        "task",
+        "task-template",
+        "execution",
+        "candidate-profile",
+        "decision-record",
+        "waiver",
+        "evidence-state",
+        "inbox-item",
+        "project-registry-entry",
+        "ownership-record",
+        "protected-file-rule",
+        "doctor-operation",
+        "editor-session",
+        "activity-event",
     ] {
         let path = proto.join("test-vectors").join(name).join("vector.json");
         let value: serde_json::Value = serde_json::from_slice(
@@ -396,7 +424,7 @@ fn validate_against_schema(schema: &serde_json::Value, value: &serde_json::Value
                 errors.push(format!("field '{key}' does not match pattern {pattern}"));
             }
         }
-        // Recurse into nested object rules (e.g. config.schema.json's [save]).
+        // Recurse into nested object rules (e.g. config.schema.json's [submit]).
         if rule.get("properties").is_some() && actual.is_object() {
             for nested in validate_against_schema(rule, actual) {
                 errors.push(format!("{key}.{nested}"));

@@ -269,7 +269,7 @@ mod tests {
         let ledger = TrustLedger::open_at(&root, "ws_x", home).unwrap();
         let out = ledger
             .record(
-                EventKind::PackSaved,
+                EventKind::PackSubmitted,
                 Some("pck_z".into()),
                 None,
                 "sha256:1".into(),

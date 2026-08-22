@@ -1,0 +1,1 @@
+{"name":"candidate-profile","payload_schema":"candidate-profile.schema.json","payload":{"schema_version":"0.3.4","name":"manual","kind":"manual","command":null,"capabilities":{"can_edit":true},"limits":{},"source":"builtin"},"invalid_payload":{"schema_version":"0.3.4","name":"manual","kind":"unknown","capabilities":{},"limits":{},"source":"builtin"},"expect":{"valid":true}}

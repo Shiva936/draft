@@ -1,7 +1,7 @@
-//! Project `.draft/` canonical v0.3.3 layout (PRD §9.1, TDD §7).
+//! Project `.draft/` canonical v0.3.4 layout (PRD §9.1, TDD §7).
 //!
 //! This is the authoritative map of the project metadata store as specified for
-//! v0.3.3. It coexists with the legacy [`crate::DraftLayout`] (which still owns
+//! v0.3.4. It coexists with the legacy [`crate::DraftLayout`] (which still owns
 //! the content-addressed object/snapshot store); both point at the same
 //! `<root>/.draft` directory. New trust artifacts — the event log, receipts,
 //! the transparency chain, pack manifests/lockfiles, import quarantine, exports,
@@ -118,6 +118,64 @@ impl ProjectPaths {
     pub fn locks_dir(&self) -> PathBuf {
         self.draft_dir.join("locks")
     }
+
+    pub fn tasks_dir(&self) -> PathBuf {
+        self.draft_dir.join("tasks")
+    }
+    pub fn task_file(&self, id: &str) -> PathBuf {
+        self.tasks_dir().join(format!("{id}.json"))
+    }
+    pub fn executions_dir(&self) -> PathBuf {
+        self.draft_dir.join("executions")
+    }
+    pub fn execution_file(&self, id: &str) -> PathBuf {
+        self.executions_dir().join(format!("{id}.json"))
+    }
+    /// Per-execution runtime state: task contract, logs, isolated workspace.
+    pub fn runtime_dir(&self) -> PathBuf {
+        self.draft_dir.join("runtime")
+    }
+    pub fn execution_runtime_dir(&self, execution_id: &str) -> PathBuf {
+        self.runtime_dir().join(execution_id)
+    }
+    pub fn execution_contract_file(&self, execution_id: &str) -> PathBuf {
+        self.execution_runtime_dir(execution_id)
+            .join("task_contract.json")
+    }
+    pub fn execution_work_dir(&self, execution_id: &str) -> PathBuf {
+        self.execution_runtime_dir(execution_id).join("work")
+    }
+    /// Canonical derived indexes tree (`.draft/indexes/`).
+    pub fn indexes_dir(&self) -> PathBuf {
+        self.draft_dir.join("indexes")
+    }
+    pub fn task_indexes_dir(&self) -> PathBuf {
+        self.indexes_dir().join("tasks")
+    }
+    pub fn task_name_index(&self) -> PathBuf {
+        self.task_indexes_dir().join("by-name.json")
+    }
+    pub fn evidence_dir(&self) -> PathBuf {
+        self.draft_dir.join("evidence")
+    }
+    pub fn decisions_dir(&self) -> PathBuf {
+        self.draft_dir.join("decisions")
+    }
+    pub fn waivers_dir(&self) -> PathBuf {
+        self.draft_dir.join("waivers")
+    }
+    pub fn editor_dir(&self) -> PathBuf {
+        self.draft_dir.join("editor")
+    }
+    pub fn journal_dir(&self) -> PathBuf {
+        self.draft_dir.join("journal")
+    }
+    pub fn backups_dir(&self) -> PathBuf {
+        self.draft_dir.join("backups")
+    }
+    pub fn task_index(&self) -> PathBuf {
+        self.index_dir().join("tasks.json")
+    }
     pub fn lock_file(&self, name: &str) -> PathBuf {
         self.locks_dir().join(format!("{name}.lock"))
     }
@@ -194,7 +252,7 @@ impl ProjectPaths {
         self.adapters_dir().join("project-overrides")
     }
 
-    /// Create the full v0.3.3 project tree and mark `.draft/` hidden.
+    /// Create the full v0.3.4 project tree and mark `.draft/` hidden.
     /// Idempotent; leaves existing files untouched.
     pub fn create_all(&self) -> DraftResult<HiddenStatus> {
         for dir in [
@@ -208,6 +266,17 @@ impl ProjectPaths {
             self.index_dir(),
             self.tmp_dir(),
             self.locks_dir(),
+            self.tasks_dir(),
+            self.executions_dir(),
+            self.runtime_dir(),
+            self.indexes_dir(),
+            self.task_indexes_dir(),
+            self.evidence_dir(),
+            self.decisions_dir(),
+            self.waivers_dir(),
+            self.editor_dir(),
+            self.journal_dir(),
+            self.backups_dir(),
             self.imports_dir(),
             self.quarantine_dir(),
             self.exports_dir(),

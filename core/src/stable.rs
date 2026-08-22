@@ -9,19 +9,19 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SaveMode {
+pub enum SubmitMode {
     #[default]
     MergeAndDispose,
     DisposeOnly,
 }
 
-impl SaveMode {
+impl SubmitMode {
     pub fn parse(raw: &str) -> DraftResult<Self> {
         match raw {
             "merge_and_dispose" => Ok(Self::MergeAndDispose),
             "dispose_only" => Ok(Self::DisposeOnly),
             other => Err(DraftError::invalid_config(format!(
-                "invalid save.pack_disposal '{other}' (expected merge_and_dispose or dispose_only)"
+                "invalid submit.pack_disposal '{other}' (expected merge_and_dispose or dispose_only)"
             ))),
         }
     }
@@ -59,7 +59,8 @@ pub struct StableHead {
     pub finalized_pack_digest: Option<String>,
     pub finalized_pack_summary: Option<PackSummary>,
     pub verification_result: VerificationStatus,
-    pub save_mode: Option<SaveMode>,
+    #[serde(alias = "submit_mode")]
+    pub submit_mode: Option<SubmitMode>,
     pub timestamp: DateTime<Utc>,
     pub stable_head_hash: String,
 }
@@ -137,7 +138,7 @@ impl StableHeadStore {
             finalized_pack_digest: None,
             finalized_pack_summary: None,
             verification_result: VerificationStatus::Verified,
-            save_mode: None,
+            submit_mode: None,
             timestamp: crate::common::now(),
             stable_head_hash: String::new(),
         };
@@ -153,7 +154,7 @@ impl StableHeadStore {
         previous: Option<StableHead>,
         pack_digest: Option<String>,
         pack_summary: Option<PackSummary>,
-        save_mode: SaveMode,
+        submit_mode: SubmitMode,
     ) -> DraftResult<StableHead> {
         let workspace_hash = hashing::workspace_hash(root)?;
         let mut head = StableHead {
@@ -166,7 +167,7 @@ impl StableHeadStore {
             finalized_pack_digest: pack_digest,
             finalized_pack_summary: pack_summary,
             verification_result: VerificationStatus::Verified,
-            save_mode: Some(save_mode),
+            submit_mode: Some(submit_mode),
             timestamp: crate::common::now(),
             stable_head_hash: String::new(),
         };
@@ -206,15 +207,15 @@ mod tests {
     }
 
     #[test]
-    fn save_mode_rejects_unknown_values() {
+    fn submit_mode_rejects_unknown_values() {
         assert_eq!(
-            SaveMode::parse("merge_and_dispose").unwrap(),
-            SaveMode::MergeAndDispose
+            SubmitMode::parse("merge_and_dispose").unwrap(),
+            SubmitMode::MergeAndDispose
         );
         assert_eq!(
-            SaveMode::parse("dispose_only").unwrap(),
-            SaveMode::DisposeOnly
+            SubmitMode::parse("dispose_only").unwrap(),
+            SubmitMode::DisposeOnly
         );
-        assert!(SaveMode::parse("keep_everything").is_err());
+        assert!(SubmitMode::parse("keep_everything").is_err());
     }
 }

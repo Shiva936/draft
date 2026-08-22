@@ -16,17 +16,17 @@ use ratatui::Terminal;
 use std::io::{self, IsTerminal};
 
 #[derive(Debug, Clone)]
-pub struct CockpitModel {
+pub struct ConsoleModel {
     pub workspace_id: String,
     pub changes: Vec<String>,
-    pub packs: Vec<CockpitPack>,
+    pub packs: Vec<ConsolePack>,
     pub service_state: String,
     pub blockers: Vec<String>,
     pub receipts: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct CockpitPack {
+pub struct ConsolePack {
     pub id: String,
     pub status: ChangepackStatus,
     pub name: String,
@@ -40,7 +40,7 @@ pub struct CockpitPack {
     pub receipt_count: usize,
 }
 
-pub fn run_review_cockpit(cwd: &Path) -> Result<(), String> {
+pub fn run_console(cwd: &Path) -> Result<(), String> {
     let model = load_model(cwd)?;
     if io::stdout().is_terminal() {
         return run_interactive(model);
@@ -49,7 +49,7 @@ pub fn run_review_cockpit(cwd: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run_interactive(model: CockpitModel) -> Result<(), String> {
+fn run_interactive(model: ConsoleModel) -> Result<(), String> {
     enable_raw_mode().map_err(|e| e.to_string())?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).map_err(|e| {
@@ -79,7 +79,7 @@ fn run_interactive(model: CockpitModel) -> Result<(), String> {
     result
 }
 
-pub fn load_model(cwd: &Path) -> Result<CockpitModel, String> {
+pub fn load_model(cwd: &Path) -> Result<ConsoleModel, String> {
     let app = App::new();
     let status = app.status(cwd).map_err(|e| e.to_string())?;
     let mut packs = Vec::new();
@@ -96,7 +96,7 @@ pub fn load_model(cwd: &Path) -> Result<CockpitModel, String> {
             .as_ref()
             .map(|id| vec![id.to_string()])
             .unwrap_or_default();
-        packs.push(CockpitPack {
+        packs.push(ConsolePack {
             id: report.pack.id.to_string(),
             status: report.pack.status,
             name: report.pack.name.unwrap_or_default(),
@@ -122,7 +122,7 @@ pub fn load_model(cwd: &Path) -> Result<CockpitModel, String> {
     let receipts = app.receipts(cwd).map_err(|e| e.to_string())?.len();
     let mut blockers = Vec::new();
     for pack in &packs {
-        match app.save_readiness_selected(cwd, Some(&pack.id)) {
+        match app.submit_readiness_selected(cwd, Some(&pack.id)) {
             Ok(readiness) => {
                 for blocker in readiness.blockers {
                     blockers.push(format!("{} {blocker}", pack.id));
@@ -131,17 +131,17 @@ pub fn load_model(cwd: &Path) -> Result<CockpitModel, String> {
             Err(_) => {
                 if !matches!(
                     pack.status,
-                    ChangepackStatus::Approved | ChangepackStatus::Saved
+                    ChangepackStatus::Approved | ChangepackStatus::Submitted
                 ) {
-                    blockers.push(format!("{} requires approval before save", pack.id));
+                    blockers.push(format!("{} requires approval before submit", pack.id));
                 }
                 if pack.verification_count == 0 {
-                    blockers.push(format!("{} requires verification before save", pack.id));
+                    blockers.push(format!("{} requires verification before submit", pack.id));
                 }
             }
         }
     }
-    Ok(CockpitModel {
+    Ok(ConsoleModel {
         workspace_id: status.workspace_id.to_string(),
         changes: status
             .changes
@@ -155,9 +155,9 @@ pub fn load_model(cwd: &Path) -> Result<CockpitModel, String> {
     })
 }
 
-pub fn render_text(model: &CockpitModel) -> String {
+pub fn render_text(model: &ConsoleModel) -> String {
     let mut out = String::new();
-    out.push_str("Draft Review Cockpit\n");
+    out.push_str("Draft Console\n");
     out.push_str(&format!("Workspace: {}\n", model.workspace_id));
     out.push_str(&format!("Service: {}\n", model.service_state));
     out.push_str(&format!("Receipts: {}\n\n", model.receipts));
@@ -218,7 +218,7 @@ pub fn render_text(model: &CockpitModel) -> String {
     for change in &model.changes {
         out.push_str(&format!("  {change}\n"));
     }
-    out.push_str("\nPolicy And Save Readiness\n");
+    out.push_str("\nPolicy And Submit Readiness\n");
     if model.blockers.is_empty() {
         out.push_str("  no blockers detected\n");
     }
@@ -226,7 +226,7 @@ pub fn render_text(model: &CockpitModel) -> String {
         out.push_str(&format!("  blocker: {blocker}\n"));
     }
     out.push_str("\nSemantic Diff\n");
-    out.push_str("  semantic analysis unavailable; raw diff fallback available\n");
+    out.push_str("  semantic impact is derived from LSIF and risk evidence\n");
     out.push_str("\nRaw Diff\n");
     out.push_str("  raw diff is lazy-loaded from pack patches\n");
     out.push_str("\nTimeline\n");
@@ -236,11 +236,11 @@ pub fn render_text(model: &CockpitModel) -> String {
     out.push_str("\nHelp\n");
     out.push_str("  overview hotspots evidence provenance timeline decision raw-diff quit\n");
     out.push_str("\nActions\n");
-    out.push_str("  refresh verify risk approve reject compare compose save rollback quit\n");
+    out.push_str("  refresh verify risk approve reject compare compose submit rollback quit\n");
     out
 }
 
-pub fn render_test_frame(model: &CockpitModel) -> Result<String, String> {
+pub fn render_test_frame(model: &ConsoleModel) -> Result<String, String> {
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).map_err(|e| e.to_string())?;
     terminal
@@ -249,7 +249,7 @@ pub fn render_test_frame(model: &CockpitModel) -> Result<String, String> {
     Ok(format!("{:?}", terminal.backend().buffer()))
 }
 
-fn render_frame(frame: &mut ratatui::Frame<'_>, model: &CockpitModel) {
+fn render_frame(frame: &mut ratatui::Frame<'_>, model: &ConsoleModel) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -257,9 +257,9 @@ fn render_frame(frame: &mut ratatui::Frame<'_>, model: &CockpitModel) {
             Constraint::Min(8),
             Constraint::Length(8),
         ])
-        .split(frame.size());
+        .split(frame.area());
     let header = Paragraph::new(vec![
-        Line::from("Draft Review Cockpit"),
+        Line::from("Draft Console"),
         Line::from(format!("Workspace: {}", model.workspace_id)),
         Line::from(format!("Service: {}", model.service_state)),
     ])
@@ -286,11 +286,11 @@ fn render_frame(frame: &mut ratatui::Frame<'_>, model: &CockpitModel) {
     );
 
     let blockers = if model.blockers.is_empty() {
-        "no blockers detected\n\nActions: refresh verify risk approve reject save rollback quit"
+        "no blockers detected\n\nActions: refresh verify risk approve reject submit rollback quit"
             .to_string()
     } else {
         format!(
-            "{}\n\nActions: refresh verify risk approve reject save rollback quit",
+            "{}\n\nActions: refresh verify risk approve reject submit rollback quit",
             model.blockers.join("\n")
         )
     };
@@ -305,11 +305,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cockpit_text_shows_blockers_and_actions() {
-        let model = CockpitModel {
+    fn console_text_shows_blockers_and_actions() {
+        let model = ConsoleModel {
             workspace_id: "ws_test".to_string(),
             changes: vec!["Modified app.txt".to_string()],
-            packs: vec![CockpitPack {
+            packs: vec![ConsolePack {
                 id: "pck_1".to_string(),
                 status: ChangepackStatus::Draft,
                 name: "demo".to_string(),
@@ -323,15 +323,13 @@ mod tests {
                 receipt_count: 0,
             }],
             service_state: "direct".to_string(),
-            blockers: vec!["pck_1 requires verification before save".to_string()],
+            blockers: vec!["pck_1 requires verification before submit".to_string()],
             receipts: 0,
         };
         let text = render_text(&model);
-        assert!(text.contains("Draft Review Cockpit"));
+        assert!(text.contains("Draft Console"));
         assert!(text.contains("blocker: pck_1"));
-        assert!(text.contains("compare compose save rollback"));
-        assert!(render_test_frame(&model)
-            .unwrap()
-            .contains("Draft Review Cockpit"));
+        assert!(text.contains("compare compose submit rollback"));
+        assert!(render_test_frame(&model).unwrap().contains("Draft Console"));
     }
 }

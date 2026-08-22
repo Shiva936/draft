@@ -8,7 +8,7 @@
 //! - [`workspace_hash`] — a deterministic digest of the project's content that
 //!   **excludes** `.draft/` (via the central path guard), normalizes path
 //!   separators, and sorts entries. It underpins pack manifests/lockfiles,
-//!   verification cache keys, receipts, and the strict save gate.
+//!   verification cache keys, receipts, and the strict submit gate.
 
 use crate::error::DraftResult;
 use crate::pathguard;

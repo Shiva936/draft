@@ -106,6 +106,58 @@ pub struct PackInspectReport {
     pub verified: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusComponent {
+    Repo,
+    Tasks,
+    Candidates,
+    Changes,
+    Hooks,
+}
+
+impl StatusComponent {
+    pub fn parse(value: &str) -> DraftResult<Self> {
+        match value {
+            "repo" => Ok(StatusComponent::Repo),
+            "tasks" => Ok(StatusComponent::Tasks),
+            "candidates" => Ok(StatusComponent::Candidates),
+            "changes" => Ok(StatusComponent::Changes),
+            "hooks" => Ok(StatusComponent::Hooks),
+            other => Err(
+                DraftError::invalid_config(format!("unknown status component '{other}'"))
+                    .with_suggestion("use one of: repo, tasks, candidates, changes, hooks"),
+            ),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            StatusComponent::Repo => "repo",
+            StatusComponent::Tasks => "tasks",
+            StatusComponent::Candidates => "candidates",
+            StatusComponent::Changes => "changes",
+            StatusComponent::Hooks => "hooks",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StatusOptions {
+    pub pack: Option<String>,
+    pub component: Option<StatusComponent>,
+    pub full: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusReport {
+    pub workspace: WorkspaceStatus,
+    pub component: Option<String>,
+    pub pack: Option<String>,
+    pub full: bool,
+    pub sections: BTreeMap<String, Value>,
+}
+
 /// Report from `draft pack depends <pck_id>`.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackDependsReport {
@@ -186,7 +238,7 @@ struct PackSyncSpec {
     kind: crate::event::EventKind,
     intent: crate::pack::PackIntent,
     approval: crate::pack::ApprovalState,
-    save: crate::pack::SaveState,
+    submit: crate::pack::SubmitState,
     metadata: Value,
 }
 
@@ -201,6 +253,72 @@ pub struct DryRunReport {
     pub checks: Vec<DoctorCheck>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorFileEntry {
+    pub path: String,
+    pub kind: String,
+    pub protected: bool,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorFileView {
+    pub path: String,
+    pub content: String,
+    pub protected: bool,
+    pub workspace_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorSaveReport {
+    pub path: String,
+    pub pack_id: String,
+    pub backup_path: Option<String>,
+    pub workspace_hash: String,
+    pub protected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorSelectionTaskReport {
+    pub task_id: String,
+    pub path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorMutationReport {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub backup_path: Option<String>,
+    pub workspace_hash: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorSearchHit {
+    pub path: String,
+    pub line: u32,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorDiffReport {
+    pub path: String,
+    pub base: String,
+    pub unified_diff: String,
+    pub workspace_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EditorWorkspaceReport {
+    pub mode: String,
+    pub workspace_hash: String,
+    pub pending_edits: usize,
+    pub files: usize,
+    pub status: crate::status::StatusDisplay,
+}
+
 impl DoctorReport {
     /// True if every present scope is healthy.
     pub fn healthy(&self) -> bool {
@@ -210,7 +328,7 @@ impl DoctorReport {
 
 /// Write a minimal canonical manifest for the implicit base pack (empty change).
 fn write_base_canonical_manifest(root: &Path, pack_id: &ChangepackId, name: &str) {
-    use crate::pack::{ApprovalState, ImportState, PackManifest, PackStore, SaveState};
+    use crate::pack::{ApprovalState, ImportState, PackManifest, PackStore, SubmitState};
     let empty = sha256_hex(b"");
     let manifest = PackManifest {
         schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
@@ -231,7 +349,7 @@ fn write_base_canonical_manifest(root: &Path, pack_id: &ChangepackId, name: &str
         receipt_hashes: Vec::new(),
         import_state: ImportState::None,
         approval_state: ApprovalState::Pending,
-        save_state: SaveState::Unsaved,
+        submit_state: SubmitState::Unsubmitted,
     };
     let store = PackStore::new(crate::layout::ProjectPaths::for_root(root));
     let _ = store.write_manifest(&manifest);
@@ -474,6 +592,13 @@ impl App {
             )?;
             stable_store.initialize(root, outcome.receipt.receipt_id)?
         };
+        if let Ok(registry) = crate::registry::ProjectRegistry::global() {
+            let _ = registry.upsert(
+                meta.id.as_str(),
+                root,
+                Some(stable_head.stable_head_hash.clone()),
+            );
+        }
         Ok(InitReport {
             workspace_id: meta.id.to_string(),
             root: root.display().to_string(),
@@ -482,6 +607,14 @@ impl App {
             stable_head_id: stable_head.id,
             stable_head_receipt_id: stable_head.receipt_id,
             workspace_hash: stable_head.workspace_hash,
+            next_actions: vec![
+                "draft task wizard".to_string(),
+                "draft task list".to_string(),
+                "draft console".to_string(),
+            ],
+            candidate_guidance:
+                "No command candidates are configured yet; use human/manual tasks or add [candidates.<name>] in .draft/config.toml."
+                    .to_string(),
         })
     }
 
@@ -631,6 +764,25 @@ impl App {
         Ok(ConfigReport::single(key, value))
     }
 
+    pub fn config_get_global(&self, key: &str) -> DraftResult<ConfigReport> {
+        reject_remote_key(key)?;
+        validate_config_key(key)?;
+        let home = crate::home::GlobalHome::locate()?;
+        Ok(ConfigReport::single(
+            key,
+            &crate::config::get_value(&home.config_toml(), key).unwrap_or_default(),
+        ))
+    }
+
+    pub fn config_unset_global(&self, key: &str) -> DraftResult<ConfigReport> {
+        reject_remote_key(key)?;
+        validate_config_key(key)?;
+        let home = crate::home::GlobalHome::locate()?;
+        home.create_all()?;
+        crate::config::set_value(&home.config_toml(), key, "")?;
+        Ok(ConfigReport::single(key, ""))
+    }
+
     /// `draft config get <key>` with full precedence: CLI > project > global >
     /// built-in default. Works outside a workspace (project layer is skipped).
     pub fn config_get_layered(&self, cwd: &Path, key: &str) -> DraftResult<ConfigReport> {
@@ -697,14 +849,6 @@ impl App {
             ));
             #[cfg(unix)]
             checks.push(key_perms_check(&home.signing_key()));
-            // Adapter status is explicit: every protocol adapter is either
-            // implemented or marked experimental (never a silent stub).
-            for adapter in crate::adapters::protocol_adapters() {
-                checks.push(DoctorCheck::ok(
-                    &format!("adapter:{}", adapter.id),
-                    format!("{} — {}", adapter.display_name, adapter.status),
-                ));
-            }
         } else {
             checks.push(DoctorCheck::fail(
                 "exists",
@@ -768,6 +912,7 @@ impl App {
             ("transparency-dir", paths.transparency_dir()),
             ("packs-dir", paths.packs_dir()),
             ("quarantine-dir", paths.quarantine_dir()),
+            ("journal-dir", paths.journal_dir()),
         ] {
             checks.push(bool_check(
                 name,
@@ -775,6 +920,25 @@ impl App {
                 format!("{} present", dir.display()),
                 format!("{} missing", dir.display()),
             ));
+        }
+        match crate::journal::JournalStore::for_root(&ws.root).recoverable() {
+            Ok(entries) if entries.is_empty() => checks.push(DoctorCheck::ok(
+                "journal-recovery",
+                "no interrupted operations",
+            )),
+            Ok(entries) => checks.push(DoctorCheck::fail(
+                "journal-recovery",
+                format!(
+                    "{} interrupted operation(s) need recovery: {}",
+                    entries.len(),
+                    entries
+                        .iter()
+                        .map(|entry| format!("{}:{}", entry.id, entry.operation))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )),
+            Err(e) => checks.push(DoctorCheck::fail("journal-recovery", e.message)),
         }
         Ok(DoctorScope {
             label: "project".to_string(),
@@ -850,7 +1014,7 @@ impl App {
             vars: BTreeMap::new(),
         };
         let result = run_hook(&ws, &store, hook_name, &hook, &ctx)
-            .map_err(|e| DraftError::new(DraftErrorKind::SaveFailed, e.message))?;
+            .map_err(|e| DraftError::new(DraftErrorKind::SubmitFailed, e.message))?;
         ws.events()?.append(
             "hook.completed",
             Some(hook_name.to_string()),
@@ -911,6 +1075,107 @@ impl App {
             }),
         )?;
         Ok(status)
+    }
+
+    pub fn status_with_options(
+        &self,
+        cwd: &Path,
+        options: StatusOptions,
+    ) -> DraftResult<StatusReport> {
+        let workspace = self.status(cwd)?;
+        let ws = self.open(cwd)?;
+        let mut sections = BTreeMap::new();
+        let include = |component: StatusComponent| {
+            options.full || options.component.map(|c| c == component).unwrap_or(false)
+        };
+        if options.component.is_none() || include(StatusComponent::Repo) {
+            sections.insert(
+                "repo".to_string(),
+                serde_json::json!({
+                    "workspace_id": workspace.workspace_id.to_string(),
+                    "root_path": workspace.root_path.clone(),
+                    "scanned_at": workspace.scanned_at,
+                    "ignored_count": workspace.ignored_count,
+                    "has_draft_dir_violation": workspace.has_draft_dir_violation,
+                }),
+            );
+        }
+        if options.component.is_none() || include(StatusComponent::Changes) {
+            sections.insert(
+                "changes".to_string(),
+                serde_json::json!({
+                    "count": workspace.changes.len(),
+                    "items": if options.full { serde_json::to_value(&workspace.changes)? } else { Value::Null },
+                }),
+            );
+        }
+        if include(StatusComponent::Tasks) {
+            let tasks = self.task_definitions(cwd)?;
+            let mut health = BTreeMap::<String, usize>::new();
+            for task in &tasks {
+                let view = self.task_view(cwd, task.id.as_str())?;
+                *health.entry(view.health).or_default() += 1;
+            }
+            sections.insert(
+                "tasks".to_string(),
+                serde_json::json!({
+                    "count": tasks.len(),
+                    "health": health,
+                    "items": if options.full { serde_json::to_value(tasks)? } else { Value::Null },
+                }),
+            );
+        }
+        if include(StatusComponent::Candidates) {
+            let profiles = self.candidate_profiles(cwd)?;
+            let presets = self.candidate_presets(cwd)?;
+            sections.insert(
+                "candidates".to_string(),
+                serde_json::json!({
+                    "profiles": profiles.len(),
+                    "presets": presets.len(),
+                    "profile_names": profiles.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+                    "preset_names": presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+                    "items": if options.full { serde_json::to_value(profiles)? } else { Value::Null },
+                }),
+            );
+        }
+        if include(StatusComponent::Hooks) {
+            let cfg = ResolvedConfig::load(&ws)?;
+            sections.insert(
+                "hooks".to_string(),
+                serde_json::json!({
+                    "submit": cfg.get("hooks.submit").unwrap_or_default(),
+                    "verify": cfg.get("hooks.verify").unwrap_or_default(),
+                    "items": if options.full { serde_json::to_value(cfg.entries())? } else { Value::Null },
+                }),
+            );
+        }
+        if let Some(pack_ref) = &options.pack {
+            let inspect = self.pack_inspect(cwd, pack_ref)?;
+            let readiness = self
+                .submit_readiness_selected(cwd, Some(&inspect.manifest.pack_id))
+                .ok();
+            sections.insert(
+                "pack".to_string(),
+                serde_json::json!({
+                    "pack_id": inspect.manifest.pack_id,
+                    "name": inspect.manifest.name,
+                    "lifecycle": inspect.lifecycle,
+                    "verified": inspect.verified,
+                    "approval_state": inspect.manifest.approval_state,
+                    "submit_state": inspect.manifest.submit_state,
+                    "readiness": readiness,
+                    "details": if options.full { serde_json::to_value(inspect)? } else { Value::Null },
+                }),
+            );
+        }
+        Ok(StatusReport {
+            workspace,
+            component: options.component.map(|c| c.as_str().to_string()),
+            pack: options.pack,
+            full: options.full,
+            sections,
+        })
     }
 
     pub fn checkpoint(&self, cwd: &Path, message: &str) -> DraftResult<CheckpointReport> {
@@ -981,6 +1246,1230 @@ impl App {
         Ok(task)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn task_define(
+        &self,
+        cwd: &Path,
+        name: &str,
+        goal: &str,
+        template: Option<String>,
+        allowed_zones: Vec<String>,
+        forbidden_zones: Vec<String>,
+        success_criteria: Vec<String>,
+        risk: Option<&str>,
+        mode: Option<&str>,
+        candidate_preset: Option<String>,
+    ) -> DraftResult<crate::task::TaskDefinition> {
+        let ws = self.open(cwd)?;
+        let stable_store =
+            crate::stable::StableHeadStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        let stable = if stable_store.exists() {
+            stable_store.read()?.stable_head_hash
+        } else {
+            "uninitialized".to_string()
+        };
+        let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir));
+        let mut task =
+            crate::task::TaskDefinition::new(name.to_string(), goal.to_string(), stable, actor)?;
+        if let Some(template) = template {
+            crate::task::apply_template(&mut task, &template)?;
+        }
+        if !allowed_zones.is_empty() {
+            task.allowed_zones = allowed_zones;
+        }
+        if !forbidden_zones.is_empty() {
+            task.forbidden_zones = forbidden_zones;
+            if !task.forbidden_zones.iter().any(|p| p == ".draft/**") {
+                task.forbidden_zones.push(".draft/**".into());
+            }
+        }
+        if !success_criteria.is_empty() {
+            task.success_criteria = success_criteria;
+        }
+        task.risk = match risk.unwrap_or("medium") {
+            "low" => crate::task::TaskRisk::Low,
+            "high" => crate::task::TaskRisk::High,
+            "critical" => crate::task::TaskRisk::Critical,
+            _ => crate::task::TaskRisk::Medium,
+        };
+        task.mode = match mode.unwrap_or("normal") {
+            "safe" => crate::task::TaskMode::Safe,
+            "plan-first" => crate::task::TaskMode::PlanFirst,
+            _ => crate::task::TaskMode::Normal,
+        };
+        if let Some(candidate_preset) = candidate_preset {
+            self.candidate_registry_for(&ws).preset(&candidate_preset)?;
+            task.candidate_preset = Some(candidate_preset);
+        }
+        validate_task_definition(&ws, &task)?;
+        crate::task::TaskStore::for_root(&ws.root).create(&task)?;
+        ws.events()?.append(
+            "task.created",
+            Some(task.id.to_string()),
+            serde_json::to_value(&task).unwrap_or(Value::Null),
+        )?;
+        Ok(task)
+    }
+
+    pub fn task_definitions(&self, cwd: &Path) -> DraftResult<Vec<crate::task::TaskDefinition>> {
+        let ws = self.open(cwd)?;
+        crate::task::TaskStore::for_root(&ws.root).list()
+    }
+
+    pub fn task_definition(
+        &self,
+        cwd: &Path,
+        id_or_name: &str,
+    ) -> DraftResult<crate::task::TaskDefinition> {
+        let ws = self.open(cwd)?;
+        crate::task::TaskStore::for_root(&ws.root)
+            .resolve(id_or_name)?
+            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))
+    }
+
+    pub fn task_view(&self, cwd: &Path, id_or_name: &str) -> DraftResult<TaskViewReport> {
+        let ws = self.open(cwd)?;
+        let task = crate::task::TaskStore::for_root(&ws.root)
+            .resolve(id_or_name)?
+            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
+        let executions = crate::task::ExecutionStore::for_root(&ws.root).list_for_task(&task.id)?;
+        let workflow = crate::workflow::WorkflowStore::for_root(&ws.root);
+        let evidence = workflow.evidence()?;
+        let decisions = workflow.decisions()?;
+        let latest_execution = executions.last().map(|e| crate::view::ExecutionView {
+            execution_id: e.id.to_string(),
+            candidate: e.candidate.clone(),
+            status: execution_status_label(e.status).to_string(),
+            produced_pack: e.produced_pack.clone(),
+            error: e
+                .failure_reason
+                .clone()
+                .or_else(|| e.cancellation_reason.clone()),
+            note: None,
+        });
+        let produced_packs = executions
+            .iter()
+            .filter_map(|e| e.produced_pack.clone())
+            .collect::<Vec<_>>();
+        let failed = executions
+            .iter()
+            .filter(|e| matches!(e.status, crate::task::ExecutionStatus::Failed))
+            .count();
+        let running = executions
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.status,
+                    crate::task::ExecutionStatus::Queued
+                        | crate::task::ExecutionStatus::Running
+                        | crate::task::ExecutionStatus::Retrying
+                )
+            })
+            .count();
+        let task_evidence = evidence
+            .iter()
+            .filter(|e| e.task_id.as_deref() == Some(task.id.as_str()))
+            .count();
+        let approved_packs = decisions
+            .iter()
+            .filter(|d| {
+                d.decision_type == crate::workflow::DecisionType::Approve
+                    && d.invalidated_at.is_none()
+                    && d.pack_id
+                        .as_ref()
+                        .map(|p| produced_packs.iter().any(|pack| pack == p))
+                        .unwrap_or(false)
+            })
+            .count();
+        let health = if failed > 0 {
+            "blocked"
+        } else if running > 0 {
+            "running"
+        } else if produced_packs.is_empty() {
+            "defined"
+        } else if approved_packs > 0 {
+            "approved"
+        } else {
+            "needs_review"
+        }
+        .to_string();
+        let review_status = if approved_packs > 0 {
+            "approved"
+        } else if produced_packs.is_empty() {
+            "no_pack"
+        } else {
+            "review_needed"
+        }
+        .to_string();
+        let recommended_action = if let Some(pack) = produced_packs.last() {
+            if approved_packs > 0 {
+                format!("draft submit {pack}")
+            } else {
+                format!("draft review {pack}")
+            }
+        } else if running > 0 {
+            format!("draft task {id_or_name} --executions")
+        } else {
+            format!("draft task spawn {} -c <candidate>", task.name)
+        };
+        let health_status = match health.as_str() {
+            "blocked" => crate::status::StatusKind::Blocked,
+            "running" => crate::status::StatusKind::Running,
+            "approved" => crate::status::StatusKind::Approved,
+            "needs_review" => crate::status::StatusKind::NeedsReview,
+            "defined" => crate::status::StatusKind::Defined,
+            _ => crate::status::StatusKind::Unknown,
+        };
+        let review_status_display = match review_status.as_str() {
+            "approved" => crate::status::StatusKind::Approved,
+            "review_needed" => crate::status::StatusKind::NeedsReview,
+            "no_pack" => crate::status::StatusKind::Pending,
+            _ => crate::status::StatusKind::Unknown,
+        };
+        Ok(TaskViewReport {
+            task,
+            health,
+            health_status: health_status.into(),
+            latest_execution,
+            review_status,
+            review_status_display: review_status_display.into(),
+            recommended_action,
+            execution_count: executions.len(),
+            evidence_count: task_evidence,
+            produced_packs,
+        })
+    }
+
+    pub fn task_view_with_options(
+        &self,
+        cwd: &Path,
+        id_or_name: &str,
+        options: TaskViewOptions,
+    ) -> DraftResult<Value> {
+        let ws = self.open(cwd)?;
+        let task = crate::task::TaskStore::for_root(&ws.root)
+            .resolve(id_or_name)?
+            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
+        let mut out = serde_json::to_value(self.task_view(cwd, id_or_name)?)?;
+        let Some(map) = out.as_object_mut() else {
+            return Ok(out);
+        };
+        let include_all = options.full;
+        let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
+        let executions = exec_store.list_for_task(&task.id)?;
+        let produced_packs = executions
+            .iter()
+            .filter_map(|execution| execution.produced_pack.clone())
+            .collect::<Vec<_>>();
+
+        if include_all || options.executions {
+            map.insert("executions".to_string(), serde_json::to_value(&executions)?);
+        }
+        if include_all || options.packs {
+            let mut packs = Vec::new();
+            for pack in &produced_packs {
+                match self.pack_inspect(cwd, pack) {
+                    Ok(inspect) => packs.push(serde_json::to_value(inspect)?),
+                    Err(err) => packs.push(serde_json::json!({
+                        "pack_id": pack,
+                        "error": err.message,
+                    })),
+                }
+            }
+            map.insert("packs".to_string(), Value::Array(packs));
+        }
+        if include_all || options.evidence {
+            let workflow = crate::workflow::WorkflowStore::for_root(&ws.root);
+            let task_id = task.id.to_string();
+            let evidence = workflow
+                .evidence()?
+                .into_iter()
+                .filter(|e| {
+                    e.task_id.as_deref() == Some(task_id.as_str())
+                        || e.pack_id
+                            .as_ref()
+                            .map(|pack| produced_packs.iter().any(|p| p == pack))
+                            .unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+            map.insert("evidence".to_string(), serde_json::to_value(evidence)?);
+        }
+        if include_all || options.conflicts {
+            let mut conflicts = Vec::new();
+            for i in 0..produced_packs.len() {
+                for j in (i + 1)..produced_packs.len() {
+                    match self.pack_conflicts(cwd, &produced_packs[i], &produced_packs[j]) {
+                        Ok(report) => conflicts.push(serde_json::to_value(report)?),
+                        Err(err) => conflicts.push(serde_json::json!({
+                            "left": produced_packs[i],
+                            "right": produced_packs[j],
+                            "error": err.message,
+                        })),
+                    }
+                }
+            }
+            map.insert("conflicts".to_string(), Value::Array(conflicts));
+        }
+        if include_all || options.lanes {
+            let lanes = executions
+                .iter()
+                .map(|execution| {
+                    serde_json::json!({
+                        "candidate": execution.candidate.clone(),
+                        "execution_id": execution.id.to_string(),
+                        "status": execution_status_label(execution.status),
+                        "produced_pack": execution.produced_pack.clone(),
+                        "attempt": execution.attempt,
+                    })
+                })
+                .collect::<Vec<_>>();
+            map.insert("lanes".to_string(), Value::Array(lanes));
+        }
+        if include_all || options.timeline {
+            let task_id = task.id.to_string();
+            let execution_ids = executions
+                .iter()
+                .map(|execution| execution.id.to_string())
+                .collect::<BTreeSet<_>>();
+            let pack_ids = produced_packs.iter().cloned().collect::<BTreeSet<_>>();
+            let events = ws
+                .events()?
+                .read_all()?
+                .into_iter()
+                .filter(|event| {
+                    event
+                        .subject_id
+                        .as_ref()
+                        .map(|id| {
+                            id == &task_id || execution_ids.contains(id) || pack_ids.contains(id)
+                        })
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+            map.insert("timeline".to_string(), serde_json::to_value(events)?);
+        }
+        if include_all || options.explain {
+            map.insert(
+                "explain".to_string(),
+                serde_json::json!({
+                    "template": task.template.clone(),
+                    "required_evidence": task.required_evidence.clone(),
+                    "review_questions": task.review_questions.clone(),
+                    "next_action": map.get("recommended_action").cloned().unwrap_or(Value::Null),
+                }),
+            );
+        }
+        if include_all || options.diff_stable {
+            let mut diffs = BTreeMap::new();
+            for pack in &produced_packs {
+                match self.pack_diff_text(cwd, pack) {
+                    Ok(diff) => {
+                        diffs.insert(pack.clone(), Value::String(diff));
+                    }
+                    Err(err) => {
+                        diffs.insert(pack.clone(), serde_json::json!({ "error": err.message }));
+                    }
+                }
+            }
+            map.insert("diff_stable".to_string(), serde_json::to_value(diffs)?);
+        }
+        if include_all || options.decompose {
+            let children = self.task_decompose(&ws, &task)?;
+            map.insert(
+                "decomposition".to_string(),
+                serde_json::json!({
+                    "created_or_existing": children,
+                    "next_action": "inspect child tasks, then spawn the candidate lane for each child task",
+                }),
+            );
+        }
+        Ok(out)
+    }
+
+    fn task_decompose(
+        &self,
+        ws: &Workspace,
+        task: &crate::task::TaskDefinition,
+    ) -> DraftResult<Vec<crate::task::TaskDefinition>> {
+        let Some(template) = task.template.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let template = crate::task::builtin_template(template)?;
+        let store = crate::task::TaskStore::for_root(&ws.root);
+        let mut children = Vec::new();
+        for rule in template.decomposition_rules {
+            let name = format!("{}-{}", task.name, rule.id);
+            if let Some(existing) = store.resolve(&name)? {
+                children.push(existing);
+                continue;
+            }
+            let mut child = crate::task::TaskDefinition::new(
+                name,
+                format!("{}: {}", task.goal, rule.description),
+                task.base_stable_head.clone(),
+                task.created_by.clone(),
+            )?;
+            child.kind = crate::task::TaskKind::Generated;
+            child.template = rule.child_template.clone();
+            child.allowed_zones = rule.zones.clone();
+            child.forbidden_zones = task
+                .allowed_zones
+                .iter()
+                .filter(|zone| !child.allowed_zones.iter().any(|allowed| allowed == *zone))
+                .cloned()
+                .chain(task.forbidden_zones.iter().cloned())
+                .collect();
+            child.required_evidence = task.required_evidence.clone();
+            child.review_questions = task.review_questions.clone();
+            child.candidate_preset = task.candidate_preset.clone();
+            child.parent_pack = task.parent_pack.clone();
+            child.metadata.insert(
+                "parent_task".to_string(),
+                Value::String(task.id.to_string()),
+            );
+            child.metadata.insert(
+                "decomposition_rule".to_string(),
+                Value::String(rule.id.clone()),
+            );
+            store.create(&child)?;
+            ws.events()?.append(
+                "task.generated",
+                Some(child.id.to_string()),
+                serde_json::json!({
+                    "parent_task": task.id.to_string(),
+                    "rule": rule.id,
+                    "task_name": child.name.clone(),
+                }),
+            )?;
+            children.push(child);
+        }
+        Ok(children)
+    }
+
+    pub fn task_drop(
+        &self,
+        cwd: &Path,
+        id_or_name: &str,
+        hard: bool,
+    ) -> DraftResult<crate::task::TaskDropOutcome> {
+        let ws = self.open(cwd)?;
+        let journal = crate::journal::JournalStore::for_root(&ws.root);
+        let entry = journal.start(
+            if hard { "task.drop_hard" } else { "task.drop" },
+            Some(id_or_name.to_string()),
+            serde_json::json!({ "task": id_or_name, "hard": hard }),
+        )?;
+        let entry = journal.mark_in_progress(entry, None)?;
+        let outcome = match crate::task::TaskStore::for_root(&ws.root).drop_task(id_or_name, hard) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let _ = journal.fail(entry, err.message.clone());
+                return Err(err);
+            }
+        };
+        let _ = journal.complete(
+            entry,
+            serde_json::json!({
+                "task_id": outcome.task_id.clone(),
+                "definition_removed": outcome.definition_removed,
+                "removed_executions": outcome.removed_executions.clone(),
+            }),
+        )?;
+        ws.events()?.append(
+            if hard {
+                "task.dropped_hard"
+            } else {
+                "task.dropped"
+            },
+            Some(outcome.task_id.clone()),
+            serde_json::to_value(&outcome).unwrap_or(Value::Null),
+        )?;
+        Ok(outcome)
+    }
+
+    pub fn task_export(
+        &self,
+        cwd: &Path,
+        id_or_name: &str,
+        output: Option<&Path>,
+    ) -> DraftResult<TaskExportReport> {
+        let ws = self.open(cwd)?;
+        let store = crate::task::TaskStore::for_root(&ws.root);
+        let task = store
+            .resolve(id_or_name)?
+            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
+        let output = output
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(format!("{}.task.json", task.name)));
+        let exported = store.export_to(task.id.as_str(), &output)?;
+        ws.events()?.append(
+            "task.exported",
+            Some(exported.id.to_string()),
+            serde_json::json!({
+                "task_id": exported.id.to_string(),
+                "task_name": exported.name,
+                "output": output.display().to_string(),
+            }),
+        )?;
+        Ok(TaskExportReport {
+            task_id: exported.id.to_string(),
+            task_name: exported.name,
+            output: output.display().to_string(),
+            next_action: "import with `draft task import <path>` in another Draft workspace"
+                .to_string(),
+        })
+    }
+
+    pub fn task_import(
+        &self,
+        cwd: &Path,
+        source: &Path,
+        name: Option<String>,
+    ) -> DraftResult<TaskImportReport> {
+        let ws = self.open(cwd)?;
+        let mut task: crate::task::TaskDefinition = read_json(source)?;
+        let store = crate::task::TaskStore::for_root(&ws.root);
+        if let Some(name) = name {
+            task.name = name;
+        }
+        if store.resolve(&task.name)?.is_some() {
+            return Err(DraftError::new(
+                DraftErrorKind::TaskDefinitionConflict,
+                format!("task '{}' already exists", task.name),
+            )
+            .with_suggestion("pass `--name <new-name>` or drop the existing task first"));
+        }
+        let stable = self
+            .stable_head_ref(&ws)
+            .unwrap_or_else(|_| "uninitialized".to_string());
+        let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir));
+        let at = now();
+        task.schema_version = crate::DRAFT_SCHEMA_VERSION.into();
+        task.id = crate::task::TaskId::generate();
+        task.kind = crate::task::TaskKind::Imported;
+        task.created_at = at;
+        task.updated_at = at;
+        task.created_by = actor;
+        task.base_stable_head = stable;
+        task.source_context = Some(crate::task::TaskSourceContext {
+            path: source.display().to_string(),
+            start_line: None,
+            end_line: None,
+            symbol: None,
+            reason: Some("task import".to_string()),
+        });
+        store.import(&task)?;
+        ws.events()?.append(
+            "task.imported",
+            Some(task.id.to_string()),
+            serde_json::json!({
+                "task_id": task.id.to_string(),
+                "task_name": task.name,
+                "source": source.display().to_string(),
+            }),
+        )?;
+        Ok(TaskImportReport {
+            task_id: task.id.to_string(),
+            task_name: task.name,
+            source: source.display().to_string(),
+            next_action: format!("draft task spawn {}", task.id),
+        })
+    }
+
+    pub fn task_retry_execution(
+        &self,
+        cwd: &Path,
+        execution_id: &str,
+    ) -> DraftResult<crate::task::Execution> {
+        let ws = self.open(cwd)?;
+        let execution = crate::task::ExecutionStore::for_root(&ws.root).retry(execution_id)?;
+        ws.events()?.append(
+            "execution.retry_queued",
+            Some(execution.id.to_string()),
+            serde_json::to_value(&execution).unwrap_or(Value::Null),
+        )?;
+        Ok(execution)
+    }
+
+    pub fn task_cancel_execution(
+        &self,
+        cwd: &Path,
+        execution_id: &str,
+        reason: Option<String>,
+    ) -> DraftResult<crate::task::Execution> {
+        let ws = self.open(cwd)?;
+        let reason = reason.unwrap_or_else(|| "cancelled by user".to_string());
+        let store = crate::task::ExecutionStore::for_root(&ws.root);
+        let before = store.read(execution_id)?;
+        if let Some(pid) = before.pid {
+            let _ = terminate_process(pid);
+        }
+        let execution = store.mark_cancelled(execution_id, &reason)?;
+        ws.events()?.append(
+            "execution.cancelled",
+            Some(execution.id.to_string()),
+            serde_json::json!({ "reason": reason }),
+        )?;
+        Ok(execution)
+    }
+
+    pub fn task_resume_execution(
+        &self,
+        cwd: &Path,
+        execution_id: &str,
+    ) -> DraftResult<crate::task::Execution> {
+        let ws = self.open(cwd)?;
+        let store = crate::task::ExecutionStore::for_root(&ws.root);
+        let execution = store.read(execution_id)?;
+        if !execution.is_resumable() {
+            return Err(DraftError::invalid_config(format!(
+                "execution {execution_id} is not resumable"
+            )));
+        }
+        let registry = self.candidate_registry_for(&ws);
+        registry
+            .profile(&execution.candidate)?
+            .ensure_capability("resume")?;
+        let resumed = store.update(execution_id, |e| {
+            e.status = crate::task::ExecutionStatus::Queued;
+            e.finished_at = None;
+            e.failure_reason = None;
+            e.cancellation_reason = None;
+        })?;
+        ws.events()?.append(
+            "execution.resume_queued",
+            Some(resumed.id.to_string()),
+            serde_json::to_value(&resumed).unwrap_or(Value::Null),
+        )?;
+        Ok(resumed)
+    }
+
+    pub fn inbox(&self, cwd: &Path) -> DraftResult<Vec<crate::workflow::InboxItem>> {
+        let ws = self.open(cwd)?;
+        let workflow = crate::workflow::WorkflowStore::for_root(&ws.root);
+        let mut by_id = BTreeMap::<String, crate::workflow::InboxItem>::new();
+        for item in workflow.inbox()? {
+            by_id.insert(item.id.clone(), item);
+        }
+
+        for pack in self.pack_list_for_workspace(&ws)? {
+            if matches!(
+                pack.status,
+                ChangepackStatus::Draft | ChangepackStatus::Verified
+            ) {
+                insert_inbox(
+                    &mut by_id,
+                    format!("inbox:pack_review:{}", pack.id),
+                    "pack_review",
+                    pack.id.to_string(),
+                    "review_needed",
+                    format!(
+                        "pack {} needs review",
+                        pack.name.clone().unwrap_or_else(|| pack.id.to_string())
+                    ),
+                    format!("draft review -p {}", pack.id),
+                );
+            }
+            if let Ok(patch) = load_patch(&ws, &pack) {
+                let paths = patch
+                    .files
+                    .iter()
+                    .map(|file| file.path.as_str().to_string())
+                    .collect::<Vec<_>>();
+                let reviewers = workflow
+                    .decisions()?
+                    .into_iter()
+                    .filter(|decision| decision.pack_id.as_deref() == Some(pack.id.as_str()))
+                    .map(|decision| decision.author)
+                    .collect::<Vec<_>>();
+                let ownership = crate::ownership::evaluate(&ws.root, &paths, &reviewers)?;
+                if ownership.missing_owner_review {
+                    insert_inbox(
+                        &mut by_id,
+                        format!("inbox:owner_review:{}", pack.id),
+                        "owner_review",
+                        pack.id.to_string(),
+                        "missing_owner_review",
+                        format!("owner review needed for {}", ownership.domains.join(", ")),
+                        format!("draft approve -p {} --reason <reason>", pack.id),
+                    );
+                }
+            }
+        }
+
+        for execution in crate::task::ExecutionStore::for_root(&ws.root).list_all()? {
+            match execution.status {
+                crate::task::ExecutionStatus::Failed => insert_inbox(
+                    &mut by_id,
+                    format!("inbox:execution_failed:{}", execution.id),
+                    "execution_failed",
+                    execution.id.to_string(),
+                    "failed",
+                    format!(
+                        "execution {} failed for candidate {}",
+                        execution.id, execution.candidate
+                    ),
+                    format!(
+                        "draft task spawn {} --retry {}",
+                        execution.task_id, execution.id
+                    ),
+                ),
+                crate::task::ExecutionStatus::Cancelled
+                | crate::task::ExecutionStatus::Interrupted => insert_inbox(
+                    &mut by_id,
+                    format!("inbox:execution_resumable:{}", execution.id),
+                    "execution_resumable",
+                    execution.id.to_string(),
+                    "resumable",
+                    format!("execution {} can be resumed or retried", execution.id),
+                    format!(
+                        "draft task spawn {} --resume {}",
+                        execution.task_id, execution.id
+                    ),
+                ),
+                _ => {}
+            }
+        }
+
+        let renewal_cutoff = now() + chrono::Duration::hours(72);
+        for waiver in workflow.waivers()? {
+            if waiver.expires_at <= renewal_cutoff {
+                insert_inbox(
+                    &mut by_id,
+                    format!("inbox:waiver_renewal:{}", waiver.id),
+                    "waiver_renewal",
+                    waiver.pack_id.clone(),
+                    "expires_soon",
+                    format!("waiver {} expires soon", waiver.id),
+                    format!(
+                        "draft waive {} {} --reason <reason> --expires 7d",
+                        waiver.pack_id, waiver.finding_id
+                    ),
+                );
+            }
+        }
+
+        for entry in crate::journal::JournalStore::for_root(&ws.root).recoverable()? {
+            insert_inbox(
+                &mut by_id,
+                format!("inbox:doctor_warning:{}", entry.id),
+                "doctor_warning",
+                entry
+                    .subject_id
+                    .clone()
+                    .unwrap_or_else(|| entry.id.to_string()),
+                "needs_recovery",
+                format!("operation {} needs recovery", entry.operation),
+                "draft doctor".to_string(),
+            );
+        }
+
+        let pending_editor_dir = crate::layout::ProjectPaths::for_root(&ws.root)
+            .editor_dir()
+            .join("pending");
+        if pending_editor_dir.exists() {
+            let pending = list_with_extension(&pending_editor_dir, "json")?;
+            for path in pending {
+                let id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("pending")
+                    .to_string();
+                insert_inbox(
+                    &mut by_id,
+                    format!("inbox:editor_pending:{id}"),
+                    "editor_pending",
+                    id.clone(),
+                    "pending_edits",
+                    format!("editor edits are pending in {id}"),
+                    "draft console".to_string(),
+                );
+            }
+        }
+
+        Ok(by_id.into_values().collect())
+    }
+
+    pub fn editor_tree(&self, cwd: &Path) -> DraftResult<Vec<EditorFileEntry>> {
+        let ws = self.open(cwd)?;
+        let mut out = Vec::new();
+        collect_editor_entries(&ws.root, &ws.root, &mut out)?;
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(out)
+    }
+
+    pub fn editor_workspace(&self, cwd: &Path) -> DraftResult<EditorWorkspaceReport> {
+        let ws = self.open(cwd)?;
+        let files = self.editor_tree(cwd)?.len();
+        let pending_dir = crate::layout::ProjectPaths::for_root(&ws.root)
+            .editor_dir()
+            .join("pending");
+        let pending_edits = if pending_dir.exists() {
+            list_with_extension(&pending_dir, "json")?.len()
+        } else {
+            0
+        };
+        Ok(EditorWorkspaceReport {
+            mode: if pending_edits > 0 {
+                "task_edit".to_string()
+            } else {
+                "browse".to_string()
+            },
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+            pending_edits,
+            files,
+            status: if pending_edits > 0 {
+                crate::status::StatusKind::NeedsReview
+            } else {
+                crate::status::StatusKind::Ready
+            }
+            .into(),
+        })
+    }
+
+    pub fn editor_read(&self, cwd: &Path, path: &str) -> DraftResult<EditorFileView> {
+        let ws = self.open(cwd)?;
+        let rel = WorkspacePath::new(crate::pathguard::check_relative(path).map_err(|e| {
+            DraftError::new(
+                DraftErrorKind::ProtectedFileAccess,
+                format!("unsafe editor path '{path}': {e}"),
+            )
+        })?);
+        crate::protected::ensure_allowed(&ws.root, &rel)?;
+        let fs_path = safe_workspace_dest(&ws.root, &rel)?;
+        let bytes = std::fs::read(&fs_path)
+            .map_err(|e| DraftError::not_found(format!("cannot read {}: {e}", rel.as_str())))?;
+        let content = String::from_utf8(bytes).map_err(|_| {
+            DraftError::new(
+                DraftErrorKind::ProtectedFileAccess,
+                format!("editor can only open UTF-8 text files: {}", rel.as_str()),
+            )
+        })?;
+        Ok(EditorFileView {
+            path: rel.to_string(),
+            content,
+            protected: false,
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+        })
+    }
+
+    pub fn editor_create_file(
+        &self,
+        cwd: &Path,
+        path: &str,
+        content: &str,
+    ) -> DraftResult<EditorMutationReport> {
+        let ws = self.open(cwd)?;
+        let rel = checked_editor_path(&ws.root, path)?;
+        let dest = safe_workspace_dest(&ws.root, &rel)?;
+        if dest.exists() {
+            return Err(DraftError::new(
+                DraftErrorKind::ConflictDetected,
+                format!("editor path already exists: {}", rel.as_str()),
+            ));
+        }
+        if let Some(parent) = dest.parent() {
+            ensure_dir(parent)?;
+        }
+        write_atomic(&dest, content.as_bytes())?;
+        ws.events()?.append(
+            "editor.file_created",
+            Some(rel.to_string()),
+            serde_json::json!({ "path": rel.to_string() }),
+        )?;
+        Ok(EditorMutationReport {
+            path: rel.to_string(),
+            old_path: None,
+            backup_path: None,
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+            action: "created".to_string(),
+        })
+    }
+
+    pub fn editor_rename_file(
+        &self,
+        cwd: &Path,
+        from: &str,
+        to: &str,
+    ) -> DraftResult<EditorMutationReport> {
+        let ws = self.open(cwd)?;
+        let from_rel = checked_editor_path(&ws.root, from)?;
+        let to_rel = checked_editor_path(&ws.root, to)?;
+        let from_path = safe_workspace_dest(&ws.root, &from_rel)?;
+        let to_path = safe_workspace_dest(&ws.root, &to_rel)?;
+        if !from_path.is_file() {
+            return Err(DraftError::not_found(format!(
+                "editor source does not exist: {}",
+                from_rel.as_str()
+            )));
+        }
+        if to_path.exists() {
+            return Err(DraftError::new(
+                DraftErrorKind::ConflictDetected,
+                format!("editor destination already exists: {}", to_rel.as_str()),
+            ));
+        }
+        if let Some(parent) = to_path.parent() {
+            ensure_dir(parent)?;
+        }
+        fs::rename(&from_path, &to_path).map_err(|e| {
+            DraftError::storage(format!(
+                "failed to rename {} to {}: {e}",
+                from_rel.as_str(),
+                to_rel.as_str()
+            ))
+        })?;
+        ws.events()?.append(
+            "editor.file_renamed",
+            Some(to_rel.to_string()),
+            serde_json::json!({ "from": from_rel.to_string(), "to": to_rel.to_string() }),
+        )?;
+        Ok(EditorMutationReport {
+            path: to_rel.to_string(),
+            old_path: Some(from_rel.to_string()),
+            backup_path: None,
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+            action: "renamed".to_string(),
+        })
+    }
+
+    pub fn editor_delete_file(&self, cwd: &Path, path: &str) -> DraftResult<EditorMutationReport> {
+        let ws = self.open(cwd)?;
+        let rel = checked_editor_path(&ws.root, path)?;
+        let dest = safe_workspace_dest(&ws.root, &rel)?;
+        if !dest.is_file() {
+            return Err(DraftError::not_found(format!(
+                "editor file does not exist: {}",
+                rel.as_str()
+            )));
+        }
+        let backup = editor_backup_path(&ws.root, &rel)?;
+        if let Some(parent) = backup.parent() {
+            ensure_dir(parent)?;
+        }
+        fs::copy(&dest, &backup)
+            .map_err(|e| DraftError::storage(format!("failed to back up {}: {e}", rel.as_str())))?;
+        fs::remove_file(&dest)
+            .map_err(|e| DraftError::storage(format!("failed to delete {}: {e}", rel.as_str())))?;
+        ws.events()?.append(
+            "editor.file_deleted",
+            Some(rel.to_string()),
+            serde_json::json!({ "path": rel.to_string(), "backup": backup.display().to_string() }),
+        )?;
+        Ok(EditorMutationReport {
+            path: rel.to_string(),
+            old_path: None,
+            backup_path: Some(backup.display().to_string()),
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+            action: "deleted".to_string(),
+        })
+    }
+
+    pub fn editor_search(
+        &self,
+        cwd: &Path,
+        query: &str,
+        limit: usize,
+    ) -> DraftResult<Vec<EditorSearchHit>> {
+        let ws = self.open(cwd)?;
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut hits = Vec::new();
+        for file in self.editor_tree(cwd)? {
+            if file.protected {
+                continue;
+            }
+            let path = safe_workspace_dest(&ws.root, &WorkspacePath::new(&file.path))?;
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            for (idx, line) in content.lines().enumerate() {
+                if line.contains(query) {
+                    hits.push(EditorSearchHit {
+                        path: file.path.clone(),
+                        line: (idx + 1) as u32,
+                        preview: crate::redaction::redact(line.trim()),
+                    });
+                    if hits.len() >= limit.max(1) {
+                        return Ok(hits);
+                    }
+                }
+            }
+        }
+        Ok(hits)
+    }
+
+    pub fn editor_diff(
+        &self,
+        cwd: &Path,
+        path: &str,
+        pack_ref: Option<&str>,
+    ) -> DraftResult<EditorDiffReport> {
+        let ws = self.open(cwd)?;
+        let rel = checked_editor_path(&ws.root, path)?;
+        let current = fs::read_to_string(safe_workspace_dest(&ws.root, &rel)?).unwrap_or_default();
+        let (base_name, base_content) = if let Some(pack_ref) = pack_ref {
+            (
+                format!("pack-base:{pack_ref}"),
+                self.editor_pack_base_content(&ws, &rel, pack_ref)?,
+            )
+        } else {
+            return Err(DraftError::not_found(
+                "stable file content is not available in the current stable_head record; pass a pack id to diff against pack base",
+            ));
+        };
+        Ok(EditorDiffReport {
+            path: rel.to_string(),
+            base: base_name,
+            unified_diff: simple_unified_diff(rel.as_str(), &base_content, &current),
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+        })
+    }
+
+    pub fn editor_restore_from_pack_base(
+        &self,
+        cwd: &Path,
+        path: &str,
+        pack_ref: &str,
+    ) -> DraftResult<EditorMutationReport> {
+        let ws = self.open(cwd)?;
+        let rel = checked_editor_path(&ws.root, path)?;
+        let dest = safe_workspace_dest(&ws.root, &rel)?;
+        let backup = if dest.exists() {
+            let backup = editor_backup_path(&ws.root, &rel)?;
+            if let Some(parent) = backup.parent() {
+                ensure_dir(parent)?;
+            }
+            fs::copy(&dest, &backup).map_err(|e| {
+                DraftError::storage(format!("failed to back up {}: {e}", rel.as_str()))
+            })?;
+            Some(backup)
+        } else {
+            None
+        };
+        let base = self.editor_pack_base_content(&ws, &rel, pack_ref)?;
+        if let Some(parent) = dest.parent() {
+            ensure_dir(parent)?;
+        }
+        write_atomic(&dest, base.as_bytes())?;
+        ws.events()?.append(
+            "editor.file_restored",
+            Some(rel.to_string()),
+            serde_json::json!({ "path": rel.to_string(), "pack": pack_ref }),
+        )?;
+        Ok(EditorMutationReport {
+            path: rel.to_string(),
+            old_path: None,
+            backup_path: backup.map(|p| p.display().to_string()),
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+            action: "restored".to_string(),
+        })
+    }
+
+    fn editor_pack_base_content(
+        &self,
+        ws: &Workspace,
+        rel: &WorkspacePath,
+        pack_ref: &str,
+    ) -> DraftResult<String> {
+        let pack_id = self.resolve_canonical_pack_ref(ws, pack_ref)?;
+        let store = crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        let loc = store
+            .locate(&pack_id)
+            .unwrap_or(crate::pack::PackLocation::Store);
+        let path = store.dir_for(loc, &pack_id).join("changes.patch");
+        let bytes = fs::read(&path)
+            .map_err(|e| DraftError::not_found(format!("cannot read pack diff {pack_id}: {e}")))?;
+        let patch: PatchSet = serde_json::from_slice(&bytes).or_else(|_| read_json(&path))?;
+        let file = patch
+            .files
+            .iter()
+            .find(|f| f.path.as_str() == rel.as_str())
+            .ok_or_else(|| {
+                DraftError::not_found(format!("pack {pack_id} does not include {}", rel.as_str()))
+            })?;
+        let Some(old_hash) = &file.old_hash else {
+            return Ok(String::new());
+        };
+        let content = ObjectStore::new(ws.layout.clone()).get_bytes(old_hash)?;
+        String::from_utf8(content).map_err(|_| {
+            DraftError::new(
+                DraftErrorKind::ProtectedFileAccess,
+                format!("pack base for {} is not UTF-8 text", rel.as_str()),
+            )
+        })
+    }
+
+    pub fn editor_save_to_pack(
+        &self,
+        cwd: &Path,
+        path: &str,
+        content: &str,
+        pack_name: Option<String>,
+    ) -> DraftResult<EditorSaveReport> {
+        let ws = self.open(cwd)?;
+        let rel = WorkspacePath::new(crate::pathguard::check_relative(path).map_err(|e| {
+            DraftError::new(
+                DraftErrorKind::ProtectedFileAccess,
+                format!("unsafe editor path '{path}': {e}"),
+            )
+        })?);
+        crate::protected::ensure_allowed(&ws.root, &rel)?;
+        let dest = safe_workspace_dest(&ws.root, &rel)?;
+        let project_paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let backup_path = if dest.exists() {
+            let backup = project_paths.editor_dir().join("backups").join(format!(
+                "{}-{}",
+                now().timestamp_millis(),
+                rel.as_str().replace('/', "__")
+            ));
+            if let Some(parent) = backup.parent() {
+                ensure_dir(parent)?;
+            }
+            std::fs::copy(&dest, &backup).map_err(|e| {
+                DraftError::storage(format!("failed to back up {}: {e}", rel.as_str()))
+            })?;
+            Some(backup.display().to_string())
+        } else {
+            None
+        };
+        if let Some(parent) = dest.parent() {
+            ensure_dir(parent)?;
+        }
+        write_atomic(&dest, content.as_bytes())?;
+        let pack = self.pack_create(
+            cwd,
+            pack_name.or_else(|| Some(format!("editor-{}", rel.as_str().replace('/', "-")))),
+            None,
+            true,
+        )?;
+        let store = crate::workflow::WorkflowStore::for_root(&ws.root);
+        let _ = store.mark_pack_evidence_stale(
+            pack.id.as_str(),
+            "editor saved new content into pack",
+            "editor.save",
+        );
+        let _ = store.invalidate_approvals(pack.id.as_str(), "editor saved new content into pack");
+        Ok(EditorSaveReport {
+            path: rel.to_string(),
+            pack_id: pack.id.to_string(),
+            backup_path,
+            workspace_hash: crate::hashing::workspace_hash(&ws.root)?,
+            protected: false,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn task_create_from_selection(
+        &self,
+        cwd: &Path,
+        path: &str,
+        start_line: u32,
+        end_line: u32,
+        selected_text: &str,
+        reason: Option<String>,
+        workspace_hash: Option<String>,
+    ) -> DraftResult<EditorSelectionTaskReport> {
+        let ws = self.open(cwd)?;
+        let rel = WorkspacePath::new(crate::pathguard::check_relative(path).map_err(|e| {
+            DraftError::new(
+                DraftErrorKind::ProtectedFileAccess,
+                format!("unsafe editor selection path '{path}': {e}"),
+            )
+        })?);
+        crate::protected::ensure_allowed(&ws.root, &rel)?;
+        let current_hash = crate::hashing::workspace_hash(&ws.root)?;
+        if let Some(expected) = workspace_hash {
+            if !expected.is_empty() && expected != current_hash {
+                return Err(DraftError::new(
+                    DraftErrorKind::DirtyWorkspace,
+                    "workspace changed since the editor selection was read",
+                )
+                .with_suggestion("reload the file before creating a task from selection"));
+            }
+        }
+        let stable_store =
+            crate::stable::StableHeadStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        let stable = if stable_store.exists() {
+            stable_store.read()?.stable_head_hash
+        } else {
+            "uninitialized".to_string()
+        };
+        let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir));
+        let mut task = crate::task::TaskDefinition::new(
+            format!("Review {}", rel.as_str()),
+            reason
+                .clone()
+                .unwrap_or_else(|| format!("Review selected code in {}", rel.as_str())),
+            stable,
+            actor,
+        )?;
+        task.kind = crate::task::TaskKind::Defined;
+        task.source_context = Some(crate::task::TaskSourceContext {
+            path: rel.to_string(),
+            start_line: Some(start_line),
+            end_line: Some(end_line),
+            symbol: None,
+            reason,
+        });
+        task.allowed_zones = vec![rel.to_string()];
+        task.success_criteria = vec!["Selected code has been reviewed and addressed".to_string()];
+        task.metadata.insert(
+            "selected_text".to_string(),
+            serde_json::Value::String(crate::redaction::redact(selected_text)),
+        );
+        task.metadata.insert(
+            "selection_workspace_hash".to_string(),
+            serde_json::Value::String(current_hash),
+        );
+        crate::task::TaskStore::for_root(&ws.root).create(&task)?;
+        ws.events()?.append(
+            "task.created_from_selection",
+            Some(task.id.to_string()),
+            serde_json::to_value(&task).unwrap_or(Value::Null),
+        )?;
+        Ok(EditorSelectionTaskReport {
+            task_id: task.id.to_string(),
+            path: rel.to_string(),
+            start_line,
+            end_line,
+        })
+    }
+
+    pub fn waive(
+        &self,
+        cwd: &Path,
+        pack_id: &str,
+        finding_id: &str,
+        reason: &str,
+        expires: &str,
+    ) -> DraftResult<crate::workflow::Waiver> {
+        let ws = self.open(cwd)?;
+        self.resolve_pack_ref(&ws, pack_id)?;
+        let seconds = parse_duration_seconds(expires)?;
+        let created_at = now();
+        let waiver = crate::workflow::Waiver {
+            schema_version: crate::DRAFT_SCHEMA_VERSION.into(),
+            id: crate::workflow::WaiverId::generate(),
+            pack_id: pack_id.into(),
+            finding_id: finding_id.into(),
+            author: format!("{:?}", resolve_actor(&ws.layout.draft_dir)),
+            reason: reason.into(),
+            created_at,
+            expires_at: created_at + chrono::Duration::seconds(seconds),
+            receipt_id: None,
+        };
+        crate::workflow::WorkflowStore::for_root(&ws.root).write_waiver(&waiver)?;
+        ws.events()?.append(
+            "waiver.created",
+            Some(pack_id.into()),
+            serde_json::to_value(&waiver).unwrap_or(Value::Null),
+        )?;
+        Ok(waiver)
+    }
+
     pub fn task_list(&self, cwd: &Path) -> DraftResult<Vec<Task>> {
         let ws = self.open(cwd)?;
         load_json_dir(&ws.layout.tasks_dir())
@@ -991,6 +2480,14 @@ impl App {
         read_json(&ws.layout.tasks_dir().join(format!("{}.json", id)))
     }
 
+    /// The canonical spawn engine (Blueprint §3.9, TDD §10.1).
+    ///
+    /// Resolves a stored task (or creates an inline one), resolves the
+    /// candidate list or preset, validates capabilities, and runs one real
+    /// execution per candidate in an isolated workspace. Each successful
+    /// execution produces a pack diffed against the same pre-spawn baseline;
+    /// the working tree is left exactly as it was before the spawn.
+    #[allow(clippy::too_many_arguments)]
     pub fn task_spawn(
         &self,
         cwd: &Path,
@@ -1000,47 +2497,722 @@ impl App {
         cron: Option<String>,
         instruction: Vec<String>,
     ) -> DraftResult<TaskSpawnReport> {
-        let instruction = instruction.join(" ");
-        let task = self.task_create(cwd, name, Some(instruction.clone()))?;
+        self.task_spawn_with_preset(cwd, name, pack_id, candidates, None, cron, instruction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn task_spawn_with_preset(
+        &self,
+        cwd: &Path,
+        name: &str,
+        pack_id: Option<&str>,
+        mut candidates: Vec<String>,
+        preset: Option<String>,
+        cron: Option<String>,
+        instruction: Vec<String>,
+    ) -> DraftResult<TaskSpawnReport> {
         let ws = self.open(cwd)?;
-        let pack_id = pack_id
+        let store = crate::task::TaskStore::for_root(&ws.root);
+        let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
+        let instruction = instruction.join(" ");
+
+        // Stored-vs-inline instruction rules.
+        let mut task = match store.resolve(name)? {
+            Some(stored) => {
+                if !instruction.trim().is_empty() {
+                    return Err(DraftError::new(
+                        DraftErrorKind::TaskDefinitionConflict,
+                        format!(
+                            "task '{name}' already has a stored definition; spawn it without an inline instruction"
+                        ),
+                    )
+                    .with_suggestion(format!(
+                        "run `draft task spawn {name}` to use the stored goal, or `draft task {name}` to inspect it"
+                    )));
+                }
+                stored
+            }
+            None => {
+                if instruction.trim().is_empty() {
+                    return Err(DraftError::invalid_config(format!(
+                        "no stored task named '{name}'; an inline instruction is required"
+                    ))
+                    .with_suggestion(format!(
+                        "run `draft task spawn {name} -- <instruction>` or create it first with `draft task create {name} --goal <goal>`"
+                    )));
+                }
+                let stable = self.stable_head_ref(&ws)?;
+                let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir));
+                let task_name = inline_task_name(name);
+                let mut t = crate::task::TaskDefinition::new(
+                    task_name,
+                    instruction.clone(),
+                    stable,
+                    actor,
+                )?;
+                t.kind = crate::task::TaskKind::Inline;
+                store.create(&t)?;
+                ws.events()?.append(
+                    "task.created",
+                    Some(t.id.to_string()),
+                    serde_json::to_value(&t).unwrap_or(Value::Null),
+                )?;
+                t
+            }
+        };
+
+        if let Some(cron) = cron {
+            task.schedule = Some(crate::task::TaskSchedule {
+                cron: Some(cron),
+                note: None,
+            });
+        }
+
+        // Candidate list / preset resolution.
+        let registry = self.candidate_registry_for(&ws);
+        let mut preset_used = None;
+        if candidates.is_empty() {
+            let preset_name = preset.clone().or_else(|| task.candidate_preset.clone());
+            if let Some(preset_name) = preset_name {
+                let p = registry.preset(&preset_name)?;
+                candidates = p.candidates.clone();
+                preset_used = Some(p);
+            } else {
+                // Preserve the legacy inline spawn behavior used by existing
+                // workflows to create a task record without launching an agent.
+                candidates.push("manual".to_string());
+            }
+        } else if let Some(preset_name) = preset {
+            // Explicit candidates win, but a named preset still applies its policy.
+            preset_used = Some(registry.preset(&preset_name)?);
+        }
+        if let Some(p) = &preset_used {
+            if p.plan_first && task.mode == crate::task::TaskMode::Normal {
+                task.mode = crate::task::TaskMode::PlanFirst;
+            }
+            if p.require_full_evidence && !task.required_evidence.iter().any(|e| e == "full_tests")
+            {
+                task.required_evidence.push("full_tests".to_string());
+            }
+            if p.prefer_smallest_valid_pack {
+                task.metadata
+                    .insert("prefer_smallest_valid_pack".to_string(), Value::Bool(true));
+            }
+        }
+        task.updated_at = now();
+        store.update(&task)?;
+
+        // Validate every candidate profile before starting any execution.
+        let mut profiles = Vec::new();
+        for candidate in &candidates {
+            let profile = registry.profile(candidate)?;
+            if profile.kind.runs_command() {
+                profile.ensure_capability("edit")?;
+                if task.mode == crate::task::TaskMode::PlanFirst {
+                    profile.ensure_capability("plan")?;
+                }
+                if profile.command.is_none() {
+                    return Err(DraftError::new(
+                        DraftErrorKind::CandidateNotConfigured,
+                        format!("candidate '{candidate}' has no command configured"),
+                    )
+                    .with_suggestion(format!(
+                        "set `command` under [candidates.{candidate}] in .draft/config.toml"
+                    )));
+                }
+            }
+            profiles.push(profile);
+        }
+        if profiles.iter().any(|profile| profile.kind.runs_command()) {
+            let stable = crate::stable::StableHeadStore::new(
+                crate::layout::ProjectPaths::for_root(&ws.root),
+            )
+            .read()?;
+            ensure_workspace_matches_hash(
+                &ws,
+                &stable.workspace_hash,
+                "task spawn",
+                "create a pack from the current edits, discard them, or run the task from a clean stable head",
+            )?;
+        }
+
+        let parent_pack = pack_id
             .map(ToString::to_string)
             .or_else(|| self.selected_pack_id(cwd).ok());
         ws.events()?.append(
             "task.spawned",
             Some(task.id.to_string()),
             serde_json::json!({
-                "pack_id": pack_id,
+                "pack_id": parent_pack,
                 "candidates": candidates,
-                "cron": cron,
-                "instruction": redact_secrets(&instruction)
+                "preset": preset_used.as_ref().map(|p| p.name.clone()),
+                "instruction": redact_secrets(&task.goal),
             }),
         )?;
-        let mut runs = Vec::new();
-        for candidate in candidates {
-            let record = self.ensure_candidate(&ws, &candidate)?;
-            let command = render_candidate_command(&record.template, &instruction);
-            match self.spawn_run(cwd, task.id.as_str(), &candidate, command) {
-                Ok(run) => runs.push(TaskRunSummary {
-                    candidate: candidate.clone(),
-                    run_id: Some(run.id.to_string()),
-                    status: format!("{:?}", run.status),
+
+        // One shared pre-spawn baseline: every candidate pack diffs against it.
+        let baseline = Snapshotter::new(&ws)?.create_snapshot()?;
+        let mut executions = Vec::new();
+        for profile in &profiles {
+            let command = profile
+                .command
+                .as_deref()
+                .map(|t| crate::candidate::render_command(t, &task.goal))
+                .unwrap_or_default();
+            let mut execution =
+                crate::task::Execution::queued(&task, profile.name.clone(), command);
+            execution.workspace_id = Some(ws.id.to_string());
+            execution.parent_pack = parent_pack.clone();
+            exec_store.write(&execution)?;
+            ws.events()?.append(
+                "execution.queued",
+                Some(execution.id.to_string()),
+                serde_json::json!({
+                    "task_id": task.id.to_string(),
+                    "candidate": profile.name,
+                }),
+            )?;
+            if !profile.kind.runs_command() {
+                executions.push(ExecutionSummary {
+                    execution_id: execution.id.to_string(),
+                    candidate: profile.name.clone(),
+                    status: "queued".to_string(),
+                    produced_pack: None,
                     error: None,
-                }),
-                Err(e) => runs.push(TaskRunSummary {
-                    candidate: candidate.clone(),
-                    run_id: None,
-                    status: "failed".to_string(),
-                    error: Some(e.to_string()),
-                }),
+                    note: Some(
+                        "human execution: make edits in the editor or workspace, then create a pack"
+                            .to_string(),
+                    ),
+                });
+                continue;
+            }
+            match self.run_candidate_execution(&ws, &task, &execution, profile, &baseline) {
+                Ok(produced_pack) => {
+                    let refreshed = exec_store.read(execution.id.as_str())?;
+                    executions.push(ExecutionSummary {
+                        execution_id: execution.id.to_string(),
+                        candidate: profile.name.clone(),
+                        status: execution_status_label(refreshed.status).to_string(),
+                        produced_pack,
+                        error: refreshed.failure_reason,
+                        note: None,
+                    });
+                }
+                Err(e) => {
+                    let _ = exec_store.mark_failed(execution.id.as_str(), &e.to_string());
+                    let _ = ws.events()?.append(
+                        "execution.failed",
+                        Some(execution.id.to_string()),
+                        serde_json::json!({
+                            "task_id": task.id.to_string(),
+                            "candidate": profile.name,
+                            "reason": redact_secrets(&e.to_string()),
+                        }),
+                    );
+                    executions.push(ExecutionSummary {
+                        execution_id: execution.id.to_string(),
+                        candidate: profile.name.clone(),
+                        status: "failed".to_string(),
+                        produced_pack: None,
+                        error: Some(e.to_string()),
+                        note: None,
+                    });
+                }
             }
         }
+        store.rebuild_index()?;
+
+        let next_action = if let Some(done) = executions
+            .iter()
+            .find(|e| e.status == "completed" && e.produced_pack.is_some())
+        {
+            format!(
+                "draft review {}",
+                done.produced_pack.clone().unwrap_or_default()
+            )
+        } else if executions.iter().any(|e| e.status == "queued") {
+            "make the edits, then run `draft pack new` to capture them".to_string()
+        } else {
+            format!("draft task {} --executions", task.name)
+        };
         Ok(TaskSpawnReport {
-            task,
-            pack_id,
-            cron,
-            runs,
+            task_id: task.id.to_string(),
+            task_name: task.name.clone(),
+            task_kind: format!("{:?}", task.kind).to_lowercase(),
+            preset: preset_used.map(|p| p.name),
+            parent_pack,
+            executions,
+            next_action,
         })
+    }
+
+    /// Run one candidate command in an isolated copy of the workspace,
+    /// enforce candidate limits and file guards, and turn accepted changes
+    /// into a pack against `baseline`. The working tree is restored to its
+    /// pre-spawn contents before returning.
+    fn run_candidate_execution(
+        &self,
+        ws: &Workspace,
+        task: &crate::task::TaskDefinition,
+        execution: &crate::task::Execution,
+        profile: &crate::candidate::CandidateProfile,
+        baseline: &Snapshot,
+    ) -> DraftResult<Option<String>> {
+        let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let exe_id = execution.id.as_str();
+        let runtime_dir = paths.execution_runtime_dir(exe_id);
+        ensure_dir(&runtime_dir)?;
+
+        // Deterministic task contract for the candidate (TDD §10.2).
+        write_json(
+            &paths.execution_contract_file(exe_id),
+            &serde_json::json!({
+                "schema_version": crate::DRAFT_SCHEMA_VERSION,
+                "execution_id": exe_id,
+                "task_id": task.id.to_string(),
+                "goal": task.goal,
+                "allowed_zones": task.allowed_zones,
+                "forbidden_zones": task.forbidden_zones,
+                "success_criteria": task.success_criteria,
+                "base_stable_head": task.base_stable_head,
+                "required_evidence": task.required_evidence,
+                "protected_files": crate::protected::rules_for_project(&ws.root),
+                "output": {
+                    "mode": "edit_in_place",
+                    "workspace": "current directory",
+                    "note": "edit files in the working directory; Draft collects the diff"
+                },
+            }),
+        )?;
+
+        // Isolated workspace copy (default) or in-place run.
+        let isolated = profile.limits.isolation_mode == crate::candidate::IsolationMode::Isolated;
+        let work_dir = if isolated {
+            let dir = paths.execution_work_dir(exe_id);
+            ensure_dir(&dir)?;
+            for entry in baseline.files.iter() {
+                let src = safe_workspace_dest(&ws.root, &entry.path)?;
+                let dst = dir.join(entry.path.as_str());
+                if let Some(parent) = dst.parent() {
+                    ensure_dir(parent)?;
+                }
+                if src.exists() && !src.is_dir() {
+                    fs::copy(&src, &dst).map_err(|e| {
+                        DraftError::storage(format!(
+                            "failed to copy {} into execution workspace: {e}",
+                            entry.path.as_str()
+                        ))
+                    })?;
+                }
+            }
+            dir
+        } else {
+            ws.root.clone()
+        };
+
+        // Restricted environment: allowlist plus a minimal base.
+        let mut env: BTreeMap<String, String> = BTreeMap::new();
+        for key in [
+            "PATH",
+            "HOME",
+            "USERPROFILE",
+            "TMPDIR",
+            "TEMP",
+            "SYSTEMROOT",
+        ] {
+            if let Ok(v) = std::env::var(key) {
+                env.insert(key.to_string(), v);
+            }
+        }
+        for key in &profile.limits.env_allowlist {
+            if let Ok(v) = std::env::var(key) {
+                env.insert(key.clone(), v);
+            }
+        }
+        env.insert(
+            "DRAFT_TASK_CONTRACT".to_string(),
+            paths.execution_contract_file(exe_id).display().to_string(),
+        );
+        env.insert("DRAFT_EXECUTION_ID".to_string(), exe_id.to_string());
+
+        let command = &execution.command;
+        if command.is_empty() {
+            return Err(DraftError::invalid_config("spawn command is empty"));
+        }
+        if !profile.limits.command_allowlist.is_empty()
+            && !profile
+                .limits
+                .command_allowlist
+                .iter()
+                .any(|c| c == &command[0])
+        {
+            return Err(DraftError::new(
+                DraftErrorKind::ExecutionLimitExceeded,
+                format!(
+                    "command '{}' is not in the allowlist for candidate '{}'",
+                    command[0], profile.name
+                ),
+            ));
+        }
+
+        let mut child = Command::new(&command[0])
+            .args(&command[1..])
+            .current_dir(&work_dir)
+            .env_clear()
+            .envs(&env)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                DraftError::new(
+                    DraftErrorKind::CandidateNotConfigured,
+                    format!("failed to start candidate '{}': {e}", profile.name),
+                )
+                .with_suggestion(format!(
+                    "check that `{}` is installed and on PATH",
+                    command[0]
+                ))
+            })?;
+        exec_store.mark_running(exe_id, Some(child.id()))?;
+        ws.events()?.append(
+            "execution.started",
+            Some(exe_id.to_string()),
+            serde_json::json!({
+                "task_id": task.id.to_string(),
+                "candidate": profile.name,
+                "pid": child.id(),
+            }),
+        )?;
+
+        // Wait with the candidate's runtime limit.
+        let deadline = profile
+            .limits
+            .max_runtime_seconds
+            .map(|s| Instant::now() + Duration::from_secs(s));
+        let output = loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break child.wait_with_output(),
+                Ok(None) => {
+                    if deadline.map(|d| Instant::now() >= d).unwrap_or(false) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        exec_store.mark_failed(
+                            exe_id,
+                            &format!(
+                                "candidate exceeded max runtime of {}s",
+                                profile.limits.max_runtime_seconds.unwrap_or_default()
+                            ),
+                        )?;
+                        return Err(DraftError::new(
+                            DraftErrorKind::ExecutionLimitExceeded,
+                            format!("candidate '{}' exceeded its max runtime", profile.name),
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(e) => break Err(e),
+            }
+        }
+        .map_err(|e| DraftError::storage(format!("failed to collect candidate output: {e}")))?;
+
+        // Capture (capped, redacted) output into the object store.
+        let cap = profile.limits.max_output_bytes.unwrap_or(u64::MAX) as usize;
+        let object_store = ObjectStore::new(ws.layout.clone());
+        let stdout_text = redact_secrets(&String::from_utf8_lossy(
+            &output.stdout[..output.stdout.len().min(cap)],
+        ));
+        let stderr_text = redact_secrets(&String::from_utf8_lossy(
+            &output.stderr[..output.stderr.len().min(cap)],
+        ));
+        let stdout_ref = object_store.put_bytes(stdout_text.as_bytes())?;
+        let stderr_ref = object_store.put_bytes(stderr_text.as_bytes())?;
+        let exit_code = output.status.code();
+        exec_store.update(exe_id, |e| {
+            e.stdout_ref = Some(stdout_ref.clone());
+            e.stderr_ref = Some(stderr_ref.clone());
+            e.exit_code = exit_code;
+        })?;
+
+        if !output.status.success() {
+            let reason = format!(
+                "candidate command exited with status {}",
+                exit_code
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            );
+            exec_store.mark_failed(exe_id, &reason)?;
+            ws.events()?.append(
+                "execution.failed",
+                Some(exe_id.to_string()),
+                serde_json::json!({
+                    "task_id": task.id.to_string(),
+                    "candidate": profile.name,
+                    "reason": reason,
+                }),
+            )?;
+            return Ok(None);
+        }
+
+        // Collect changes from the isolated workspace.
+        let changes = if isolated {
+            collect_isolated_changes(&ws.root, &work_dir, baseline)?
+        } else {
+            // In-place runs mutate the tree directly; diff tree vs baseline.
+            collect_isolated_changes(&ws.root, &ws.root, baseline)?
+        };
+
+        // Guards: protected files, forbidden zones, allowed zones, limits.
+        self.enforce_execution_guards(ws, task, profile, execution, &changes)?;
+
+        if changes.is_empty() {
+            let legacy_pack =
+                self.create_legacy_empty_execution_pack(ws, task, execution, profile, baseline)?;
+            exec_store.mark_completed(exe_id)?;
+            exec_store.update(exe_id, |e| {
+                e.produced_pack = Some(legacy_pack.clone());
+            })?;
+            ws.events()?.append(
+                "execution.completed",
+                Some(exe_id.to_string()),
+                serde_json::json!({
+                    "task_id": task.id.to_string(),
+                    "candidate": profile.name,
+                    "changed_files": 0,
+                    "produced_pack": legacy_pack,
+                }),
+            )?;
+            return Ok(Some(legacy_pack));
+        }
+
+        // Apply accepted changes, capture the pack, restore the tree.
+        let produced_pack = if isolated {
+            let stash = stash_workspace_files(&ws.root, &changes)?;
+            let apply = apply_isolated_changes(&ws.root, &work_dir, &changes);
+            let pack = match apply {
+                Ok(()) => self.pack_create_with_base(
+                    &ws.root,
+                    Some(pack_name_for(task, profile, exe_id)),
+                    Some(task.id.to_string()),
+                    baseline.clone(),
+                ),
+                Err(e) => Err(e),
+            };
+            restore_workspace_files(&ws.root, stash)?;
+            Some(pack?)
+        } else {
+            Some(self.pack_create_with_base(
+                &ws.root,
+                Some(pack_name_for(task, profile, exe_id)),
+                Some(task.id.to_string()),
+                baseline.clone(),
+            )?)
+        };
+        let pack_id = produced_pack.as_ref().map(|p| p.id.to_string());
+        exec_store.update(exe_id, |e| {
+            e.produced_pack = pack_id.clone();
+        })?;
+        exec_store.mark_completed(exe_id)?;
+        ws.events()?.append(
+            "execution.completed",
+            Some(exe_id.to_string()),
+            serde_json::json!({
+                "task_id": task.id.to_string(),
+                "candidate": profile.name,
+                "changed_files": changes.len(),
+                "produced_pack": pack_id,
+            }),
+        )?;
+        // Isolated work dir is no longer needed after a completed run.
+        if isolated {
+            let _ = fs::remove_dir_all(paths.execution_work_dir(exe_id));
+        }
+        Ok(pack_id)
+    }
+
+    fn create_legacy_empty_execution_pack(
+        &self,
+        ws: &Workspace,
+        task: &crate::task::TaskDefinition,
+        execution: &crate::task::Execution,
+        profile: &crate::candidate::CandidateProfile,
+        baseline: &Snapshot,
+    ) -> DraftResult<String> {
+        let mut pack = self.pack_create_with_base(
+            &ws.root,
+            Some(profile.name.clone()),
+            Some(task.id.to_string()),
+            baseline.clone(),
+        )?;
+        let refreshed =
+            crate::task::ExecutionStore::for_root(&ws.root).read(execution.id.as_str())?;
+        let run = Run {
+            schema_version: SCHEMA_VERSION,
+            id: RunId::generate(),
+            task_id: TaskId::new(task.id.as_str()),
+            workspace_id: ws.id.clone(),
+            base_snapshot_id: baseline.id.clone(),
+            actor_kind: ActorKind::Agent,
+            actor_name: profile.name.clone(),
+            command: (!execution.command.is_empty()).then(|| execution.command.join(" ")),
+            started_at: refreshed.started_at.unwrap_or_else(now),
+            ended_at: refreshed.finished_at.or_else(|| Some(now())),
+            status: if refreshed.exit_code == Some(0) {
+                RunStatus::Completed
+            } else {
+                RunStatus::Failed
+            },
+            stdout_ref: refreshed.stdout_ref,
+            stderr_ref: refreshed.stderr_ref,
+            exit_code: refreshed.exit_code,
+            result_snapshot_id: Some(pack.result_snapshot_id.clone()),
+        };
+        ensure_dir(&ws.layout.runs_dir())?;
+        write_json(&ws.layout.runs_dir().join(format!("{}.json", run.id)), &run)?;
+        pack.run_id = Some(run.id.clone());
+        save_pack_manifest(ws, &mut pack)?;
+        Ok(pack.id.to_string())
+    }
+
+    /// Validate collected candidate changes against the task contract and
+    /// candidate limits. Violations emit warning events and fail the
+    /// execution without touching the working tree.
+    fn enforce_execution_guards(
+        &self,
+        ws: &Workspace,
+        task: &crate::task::TaskDefinition,
+        profile: &crate::candidate::CandidateProfile,
+        execution: &crate::task::Execution,
+        changes: &[IsolatedChange],
+    ) -> DraftResult<()> {
+        let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
+        let mut violations: Vec<String> = Vec::new();
+        let rules = crate::protected::rules_for_project(&ws.root);
+        for change in changes {
+            let path = change.path.as_str();
+            if crate::protected::matches_rules(&rules, path) {
+                violations.push(format!("protected file '{path}'"));
+                let _ = ws.events()?.append(
+                    "protected.access_attempt",
+                    Some(execution.id.to_string()),
+                    serde_json::json!({
+                        "path": path,
+                        "candidate": profile.name,
+                        "task_id": task.id.to_string(),
+                    }),
+                );
+                continue;
+            }
+            if task
+                .forbidden_zones
+                .iter()
+                .chain(profile.limits.forbidden_paths.iter())
+                .any(|zone| pattern_match(zone, path))
+            {
+                violations.push(format!("forbidden zone touched: '{path}'"));
+                continue;
+            }
+            let allowed = {
+                let task_ok = task.allowed_zones.is_empty()
+                    || task.allowed_zones.iter().any(|z| pattern_match(z, path));
+                let limit_ok = profile.limits.allowed_paths.is_empty()
+                    || profile
+                        .limits
+                        .allowed_paths
+                        .iter()
+                        .any(|z| pattern_match(z, path));
+                task_ok && limit_ok
+            };
+            if !allowed {
+                violations.push(format!("outside allowed zones: '{path}'"));
+            }
+        }
+        if let Some(max) = profile.limits.max_files_changed {
+            if changes.len() as u32 > max {
+                violations.push(format!(
+                    "{} files changed exceeds the candidate limit of {max}",
+                    changes.len()
+                ));
+            }
+        }
+        if let Some(max) = profile.limits.max_changed_lines {
+            let total: u64 = changes.iter().map(|c| c.changed_lines).sum();
+            if total > u64::from(max) {
+                violations.push(format!(
+                    "{total} changed lines exceeds the candidate limit of {max}"
+                ));
+            }
+        }
+        if violations.is_empty() {
+            return Ok(());
+        }
+        let scope_result = serde_json::json!({ "ok": false, "violations": violations });
+        let reason = format!("candidate output rejected: {}", violations.join("; "));
+        exec_store.update(execution.id.as_str(), |e| {
+            e.scope_result = Some(scope_result.clone());
+        })?;
+        exec_store.mark_failed(execution.id.as_str(), &reason)?;
+        ws.events()?.append(
+            "execution.blocked",
+            Some(execution.id.to_string()),
+            serde_json::json!({
+                "task_id": task.id.to_string(),
+                "candidate": profile.name,
+                "violations": violations,
+            }),
+        )?;
+        Err(
+            DraftError::new(DraftErrorKind::ExecutionLimitExceeded, reason)
+                .with_suggestion("narrow the task's allowed zones or adjust the candidate limits"),
+        )
+    }
+
+    /// Resolve the current stable head reference, or "uninitialized".
+    fn stable_head_ref(&self, ws: &Workspace) -> DraftResult<String> {
+        let store =
+            crate::stable::StableHeadStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+        if store.exists() {
+            Ok(store.read()?.stable_head_hash)
+        } else {
+            Ok("uninitialized".to_string())
+        }
+    }
+
+    /// Merge the candidate registry from config layers and legacy records.
+    fn candidate_registry_for(&self, ws: &Workspace) -> crate::candidate::CandidateRegistry {
+        let legacy = load_json_dir::<CandidateRecord>(&ws.layout.candidates_dir())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.active)
+            .map(legacy_candidate_profile)
+            .collect();
+        let project_config = ws.layout.config_toml();
+        let global_config = crate::home::GlobalHome::locate()
+            .ok()
+            .map(|home| home.config_toml());
+        crate::candidate::CandidateRegistry::load(
+            Some(project_config.as_path()),
+            global_config.as_deref(),
+            legacy,
+        )
+    }
+
+    /// Resolved candidate profiles for this project (config + records + builtins).
+    pub fn candidate_profiles(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<Vec<crate::candidate::CandidateProfile>> {
+        let ws = self.open(cwd)?;
+        Ok(self.candidate_registry_for(&ws).profiles())
+    }
+
+    /// Resolved task presets for this project.
+    pub fn candidate_presets(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<Vec<crate::candidate::CandidatePreset>> {
+        let ws = self.open(cwd)?;
+        Ok(self.candidate_registry_for(&ws).presets())
     }
 
     pub fn task_current(&self, cwd: &Path) -> DraftResult<Value> {
@@ -1198,32 +3370,6 @@ impl App {
         Ok(record)
     }
 
-    fn ensure_candidate(&self, ws: &Workspace, name: &str) -> DraftResult<CandidateRecord> {
-        let path = ws.layout.candidates_dir().join(format!("{name}.json"));
-        if path.exists() {
-            return read_json(&path);
-        }
-        let record = builtin_candidates()
-            .into_iter()
-            .find(|r| r.name == name)
-            .unwrap_or_else(|| CandidateRecord {
-                name: name.to_string(),
-                kind: "command".to_string(),
-                source: "auto".to_string(),
-                template: format!("{name} {{{{instruction}}}}"),
-                role: None,
-                persona: None,
-                active: true,
-            });
-        write_json(&path, &record)?;
-        ws.events()?.append(
-            "candidate.auto_registered",
-            Some(name.to_string()),
-            serde_json::to_value(&record).unwrap_or(Value::Null),
-        )?;
-        Ok(record)
-    }
-
     pub fn pack_create(
         &self,
         cwd: &Path,
@@ -1302,8 +3448,84 @@ impl App {
                 kind: crate::event::EventKind::PackCreated,
                 intent: crate::pack::PackIntent::Feature,
                 approval: crate::pack::ApprovalState::Pending,
-                save: crate::pack::SaveState::Unsaved,
+                submit: crate::pack::SubmitState::Unsubmitted,
                 metadata: serde_json::json!({ "name": pack.name }),
+            },
+        )?;
+        Ok(pack)
+    }
+
+    fn pack_create_with_base(
+        &self,
+        cwd: &Path,
+        name: Option<String>,
+        task_id: Option<String>,
+        base: Snapshot,
+    ) -> DraftResult<Changepack> {
+        let ws = self.open(cwd)?;
+        if let Some(name) = name.as_deref() {
+            self.ensure_unique_pack_name(&ws, name)?;
+        }
+        let result = Snapshotter::new(&ws)?.create_snapshot()?;
+        let patch = diff_snapshots(&ws, &base, &result)?;
+        let evidence = Evidence {
+            schema_version: SCHEMA_VERSION,
+            id: EvidenceId::generate(),
+            changepack_id: ChangepackId::new("pending"),
+            command_logs: vec![],
+            files_touched: patch.files.iter().map(|f| f.path.clone()).collect(),
+            generated_diff_ref: None,
+            test_results: vec![],
+            lint_results: vec![],
+            risk_summary_ref: None,
+            agent_plan_ref: None,
+            agent_transcript_ref: None,
+            warnings: vec!["created from task execution baseline".to_string()],
+            created_at: now(),
+        };
+        let mut pack = Changepack::new(
+            ws.id.clone(),
+            task_id.map(TaskId::new),
+            None,
+            base.id.clone(),
+            result.id.clone(),
+            name,
+        );
+        let mut evidence = evidence;
+        evidence.changepack_id = pack.id.clone();
+        let pack_dir = ws.layout.pack_dir(&pack.id);
+        ensure_dir(&pack_dir)?;
+        write_json(&pack_dir.join("manifest.json"), &pack)?;
+        write_json(&pack_dir.join("patch.json"), &patch)?;
+        write_json(&pack_dir.join("evidence.json"), &evidence)?;
+        pack.patch_refs.push(patch.id.to_string());
+        pack.evidence_refs.push(evidence.id.to_string());
+        pack.manifest_hash = hash_json(&pack)?;
+        write_json(&pack_dir.join("manifest.json"), &pack)?;
+        ws.events()?.append(
+            "pack.created",
+            Some(pack.id.to_string()),
+            serde_json::to_value(&pack).unwrap_or(Value::Null),
+        )?;
+        write_atomic(
+            ws.layout.selected_pack_file().as_path(),
+            pack.id.to_string().as_bytes(),
+        )?;
+        ws.events()?.append(
+            "pack.selected",
+            Some(pack.id.to_string()),
+            serde_json::json!({}),
+        )?;
+        self.sync_canonical_pack(
+            &ws,
+            &pack,
+            Some(&patch),
+            PackSyncSpec {
+                kind: crate::event::EventKind::PackCreated,
+                intent: crate::pack::PackIntent::Feature,
+                approval: crate::pack::ApprovalState::Pending,
+                submit: crate::pack::SubmitState::Unsubmitted,
+                metadata: serde_json::json!({ "name": pack.name, "base": "task_execution" }),
             },
         )?;
         Ok(pack)
@@ -1459,7 +3681,7 @@ impl App {
                 let ws = self.open(cwd)?;
                 match self.resolve_pack_ref(&ws, id) {
                     Ok(pack) => Ok(pack.id.to_string()),
-                    // Canonical-only packs (e.g. quarantined or saved imports)
+                    // Canonical-only packs (e.g. quarantined or submitted imports)
                     // have no legacy changepack; resolve them against the
                     // canonical pack store and quarantine by id or name.
                     Err(legacy_err) => {
@@ -1976,6 +4198,12 @@ impl App {
         let ws = self.open(cwd)?;
         validate_pack_id(pack_id)?;
         let mut pack = load_pack(&ws, pack_id)?;
+        ensure_pack_workspace_matches_target(
+            &ws,
+            &pack,
+            "review",
+            "update the pack from the current edits or restore the workspace to the pack target before review",
+        )?;
         let mut comments = load_review_file(&ws, &pack.id).unwrap_or_default();
         let risk = self.risk_preview(cwd, pack_id).ok();
         if let Some(body) = comment {
@@ -2065,6 +4293,12 @@ impl App {
         let ws = self.open(cwd)?;
         validate_pack_id(pack_id)?;
         let mut pack = load_pack(&ws, pack_id)?;
+        ensure_pack_workspace_matches_target(
+            &ws,
+            &pack,
+            decision_dirty_action(kind),
+            "update the pack from the current edits or restore the workspace to the pack target before deciding",
+        )?;
         if matches!(kind, DecisionKind::Approve | DecisionKind::Reject)
             && !matches!(
                 pack.status,
@@ -2134,6 +4368,30 @@ impl App {
             }),
         );
         write_receipt(&ws, &receipt)?;
+        if matches!(decision.kind, DecisionKind::Approve | DecisionKind::Reject) {
+            let base = crate::stable::StableHeadStore::new(crate::layout::ProjectPaths::for_root(
+                &ws.root,
+            ))
+            .read()?
+            .stable_head_hash;
+            let kind = if decision.kind == DecisionKind::Approve {
+                crate::workflow::DecisionType::Approve
+            } else {
+                crate::workflow::DecisionType::Reject
+            };
+            let mut record = crate::workflow::new_decision(
+                kind,
+                pack.id.to_string(),
+                base,
+                format!("{:?}", decision.actor),
+                decision
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| decision.kind.label().to_string()),
+            )?;
+            record.receipt_id = Some(receipt.id.to_string());
+            crate::workflow::WorkflowStore::for_root(&ws.root).write_decision(&record)?;
+        }
         ws.events()?.append(
             event,
             Some(pack.id.to_string()),
@@ -2436,18 +4694,18 @@ impl App {
         })
     }
 
-    pub fn save(
+    pub fn submit(
         &self,
         cwd: &Path,
         pack_id: &str,
         vars: BTreeMap<String, String>,
-    ) -> DraftResult<SaveReceipt> {
+    ) -> DraftResult<SubmitReceipt> {
         let ws = self.open(cwd)?;
         let project_paths = crate::layout::ProjectPaths::for_root(&ws.root);
-        let _save_lock =
-            FileGuard::acquire(&project_paths.lock_file("save"), Duration::from_secs(30))?;
+        let _submit_lock =
+            FileGuard::acquire(&project_paths.lock_file("submit"), Duration::from_secs(30))?;
         validate_pack_id(pack_id)?;
-        // Imported packs take the canonical import-save path: gates, content
+        // Imported packs take the canonical import-submit path: gates, content
         // application from embedded objects, and promotion out of quarantine.
         {
             let store =
@@ -2455,68 +4713,74 @@ impl App {
             if let Some(loc) = store.locate(pack_id) {
                 let manifest = store.read_manifest_in(loc, pack_id)?;
                 if manifest.import_state != crate::pack::ImportState::None {
-                    return self.save_imported_pack(&ws, &store, loc, manifest);
+                    return self.submit_imported_pack(&ws, &store, loc, manifest);
                 }
             }
         }
         let mut pack = load_pack(&ws, pack_id)?;
         ensure_pack_not_locked(&ws, &pack)?;
+        ensure_pack_workspace_matches_target(
+            &ws,
+            &pack,
+            "submit",
+            "update the pack from the current edits or restore the workspace to the approved pack target before submit",
+        )?;
         let started = now();
-        let save_started_event_id = ws.events()?.append(
-            "save.started",
+        let submit_started_event_id = ws.events()?.append(
+            "submit.started",
             Some(pack.id.to_string()),
             serde_json::json!({}),
         )?;
         let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
         ledger.record(
-            crate::event::EventKind::SaveStarted,
+            crate::event::EventKind::SubmitStarted,
             Some(pack.id.to_string()),
             None,
             crate::hashing::workspace_hash_cached(&ws.root, &project_paths.workspace_hash_cache())?,
-            serde_json::json!({ "legacy_event": save_started_event_id.to_string() }),
+            serde_json::json!({ "legacy_event": submit_started_event_id.to_string() }),
         )?;
         let cfg = ResolvedConfig::load(&ws)?;
         let policy = read_or_default::<PolicyConfig>(&ws.layout.policy_toml());
         let patch = load_patch(&ws, &pack)?;
         if patch.files.iter().any(|f| is_draft_path(f.path.as_str())) {
-            let receipt = failed_save(
+            let receipt = failed_submit(
                 &ws,
                 &pack,
                 started,
-                "Warning: .draft/ is included in the save candidate.",
+                "Warning: .draft/ is included in the submit candidate.",
             )?;
             ws.events()?.append(
-                "save.completed",
+                "submit.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
-            return Err(DraftError::new(DraftErrorKind::SaveFailed, "Warning: .draft/ is included in the save candidate.\n\nDraft metadata must never be saved into an external repository or external system.\n\nSave aborted."));
+            return Err(DraftError::new(DraftErrorKind::SubmitFailed, ".draft/ is included in the submit candidate.\n\nDraft metadata must never be submitted into an external repository or external system.\n\nSubmit aborted."));
         }
-        let readiness = save_readiness(&ws, &pack, &patch, &policy)?;
-        if policy.save.block_if_tests_fail && readiness.verification_receipt_id.is_none() {
+        let readiness = submit_readiness(&ws, &pack, &patch, &policy)?;
+        if policy.submit.block_if_tests_fail && readiness.verification_receipt_id.is_none() {
             let reason = readiness
                 .blockers
                 .first()
                 .cloned()
-                .unwrap_or_else(|| "verification is required before save".to_string());
-            let receipt = failed_save(&ws, &pack, started, &reason)?;
+                .unwrap_or_else(|| "verification is required before submit".to_string());
+            let receipt = failed_submit(&ws, &pack, started, &reason)?;
             ws.events()?.append(
-                "save.completed",
+                "submit.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
             return Err(DraftError::new(DraftErrorKind::VerificationFailed, reason));
         }
-        if policy.save.block_if_unreviewed_high_risk && readiness.approval_ref.is_none() {
+        if policy.submit.block_if_unreviewed_high_risk && readiness.approval_ref.is_none() {
             let reason = readiness
                 .blockers
                 .iter()
                 .find(|blocker| blocker.contains("approval") || blocker.contains("review"))
                 .cloned()
-                .unwrap_or_else(|| "approval is required before save".to_string());
-            let receipt = failed_save(&ws, &pack, started, &reason)?;
+                .unwrap_or_else(|| "approval is required before submit".to_string());
+            let receipt = failed_submit(&ws, &pack, started, &reason)?;
             ws.events()?.append(
-                "save.completed",
+                "submit.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
@@ -2525,7 +4789,7 @@ impl App {
         let risk_summary = Some(self.risk(cwd, pack_id).map_err(|e| {
             DraftError::new(
                 DraftErrorKind::RiskPolicyBlocked,
-                format!("risk evaluation failed before save: {e}"),
+                format!("risk evaluation failed before submit: {e}"),
             )
         })?);
         if risk_summary
@@ -2533,35 +4797,35 @@ impl App {
             .map(|risk| risk.policy_decision.starts_with("blocked"))
             .unwrap_or(false)
         {
-            let receipt = failed_save(&ws, &pack, started, "risk policy blocks save")?;
+            let receipt = failed_submit(&ws, &pack, started, "risk policy blocks submit")?;
             ws.events()?.append(
-                "save.completed",
+                "submit.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
             return Err(DraftError::new(
                 DraftErrorKind::RiskPolicyBlocked,
-                "risk policy blocks save",
+                "risk policy blocks submit",
             ));
         }
-        validate_canonical_save_gate(&ws, pack_id)?;
+        validate_canonical_submit_gate(&ws, pack_id)?;
         let receipt_id = ReceiptId::generate();
         let rendered_message = render_message(&cfg, &pack, &patch, &receipt_id);
         let store = ObjectStore::new(ws.layout.clone());
         let message_ref = store.put_bytes(rendered_message.as_bytes())?;
-        let mut receipt = SaveReceipt {
+        let mut receipt = SubmitReceipt {
             schema_version: SCHEMA_VERSION,
             id: receipt_id,
             changepack_id: pack.id.clone(),
             actor: resolve_actor(&ws.layout.draft_dir),
-            native_save_status: NativeSaveStatus::Saved,
+            native_submit_status: NativeSubmitStatus::Submitted,
             hook_status: HookStatus::NotConfigured,
-            overall_status: SaveOverallStatus::Saved,
+            overall_status: SubmitOverallStatus::Submitted,
             message_ref: message_ref.clone(),
             hook_results: Vec::new(),
             hook_receipt_refs: Vec::new(),
             object_refs: vec![message_ref.clone()],
-            event_refs: vec![save_started_event_id.to_string()],
+            event_refs: vec![submit_started_event_id.to_string()],
             risk_level: risk_summary
                 .as_ref()
                 .map(|risk| risk.level.label().to_string())
@@ -2572,7 +4836,7 @@ impl App {
             receipt_hash: String::new(),
             failure_reason: None,
         };
-        for hook in cfg.save_hooks(SaveHookPhase::Before) {
+        for hook in cfg.submit_hooks(SubmitHookPhase::Before) {
             let ctx = HookContext {
                 message: rendered_message.clone(),
                 title: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
@@ -2601,12 +4865,12 @@ impl App {
                     .unwrap_or_else(|| "unknown".to_string()),
                 files_changed: patch.files.len().to_string(),
                 workspace_root: ws.root.display().to_string(),
-                hook_name: "save.before".to_string(),
-                hook_phase: SaveHookPhase::Before.as_str().to_string(),
+                hook_name: "submit.before".to_string(),
+                hook_phase: SubmitHookPhase::Before.as_str().to_string(),
                 vars: vars.clone(),
             };
             ledger.record(
-                crate::event::EventKind::SaveHookStarted,
+                crate::event::EventKind::SubmitHookStarted,
                 Some(pack.id.to_string()),
                 None,
                 crate::hashing::workspace_hash_cached(
@@ -2615,14 +4879,14 @@ impl App {
                 )?,
                 serde_json::json!({ "phase": "before", "command": hook.command }),
             )?;
-            match run_hook(&ws, &store, "save.before", &hook, &ctx) {
+            match run_hook(&ws, &store, "submit.before", &hook, &ctx) {
                 Ok(result) => {
                     let failed = result.exit_code != 0;
                     ledger.record(
                         if failed {
-                            crate::event::EventKind::SaveHookFailed
+                            crate::event::EventKind::SubmitHookFailed
                         } else {
-                            crate::event::EventKind::SaveHookCompleted
+                            crate::event::EventKind::SubmitHookCompleted
                         },
                         Some(pack.id.to_string()),
                         None,
@@ -2649,21 +4913,21 @@ impl App {
                     if failed {
                         receipt.hook_status = HookStatus::Failed;
                         if hook.continue_on_error {
-                            receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                            receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
                         } else {
-                            receipt.overall_status = SaveOverallStatus::Failed;
-                            receipt.failure_reason = Some("hooks.save.before failed".to_string());
+                            receipt.overall_status = SubmitOverallStatus::Failed;
+                            receipt.failure_reason = Some("hooks.submit.before failed".to_string());
                             receipt.ended_at = now();
                             receipt.receipt_hash = hash_json(&receipt)?;
-                            write_save_receipt(&ws, &receipt)?;
+                            write_submit_receipt(&ws, &receipt)?;
                             ws.events()?.append(
-                                "save.completed",
+                                "submit.completed",
                                 Some(pack.id.to_string()),
                                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
                             )?;
                             return Err(DraftError::new(
-                                DraftErrorKind::SaveFailed,
-                                "hooks.save.before failed",
+                                DraftErrorKind::SubmitFailed,
+                                "hooks.submit.before failed",
                             ));
                         }
                     } else {
@@ -2673,7 +4937,7 @@ impl App {
                 Err(e) => {
                     receipt.hook_status = HookStatus::Failed;
                     ledger.record(
-                        crate::event::EventKind::SaveHookFailed,
+                        crate::event::EventKind::SubmitHookFailed,
                         Some(pack.id.to_string()),
                         None,
                         crate::hashing::workspace_hash_cached(
@@ -2691,7 +4955,7 @@ impl App {
                         "failed",
                         Some(pack.id.to_string()),
                         serde_json::json!({
-                            "hook_name": "save",
+                            "hook_name": "submit",
                             "hook_phase": hook.phase,
                             "error": e.message
                         }),
@@ -2700,31 +4964,31 @@ impl App {
                     write_receipt(&ws, &hook_receipt)?;
                     receipt.hook_receipt_refs.push(hook_receipt_id);
                     if hook.continue_on_error {
-                        receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                        receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
                         receipt.failure_reason = Some(e.message);
                     } else {
-                        receipt.overall_status = SaveOverallStatus::Failed;
+                        receipt.overall_status = SubmitOverallStatus::Failed;
                         receipt.failure_reason = Some(e.message.clone());
                         receipt.ended_at = now();
                         receipt.receipt_hash = hash_json(&receipt)?;
-                        write_save_receipt(&ws, &receipt)?;
+                        write_submit_receipt(&ws, &receipt)?;
                         ws.events()?.append(
-                            "save.completed",
+                            "submit.completed",
                             Some(pack.id.to_string()),
                             serde_json::to_value(&receipt).unwrap_or(Value::Null),
                         )?;
-                        return Err(DraftError::new(DraftErrorKind::SaveFailed, e.message));
+                        return Err(DraftError::new(DraftErrorKind::SubmitFailed, e.message));
                     }
                 }
             }
         }
         let stable_store = crate::stable::StableHeadStore::new(project_paths.clone());
         let previous_head = stable_store.read().ok();
-        let save_mode = cfg.pack_disposal;
+        let submit_mode = cfg.pack_disposal;
         let pack_digest = Some(hash_json(&serde_json::json!({
             "pack": pack,
             "patch": patch,
-            "save_receipt": receipt.id.to_string()
+            "submit_receipt": receipt.id.to_string()
         }))?);
         let affected_paths = patch
             .files
@@ -2742,7 +5006,7 @@ impl App {
             Some(pack_id.to_string()),
             None,
             crate::hashing::workspace_hash_cached(&ws.root, &project_paths.workspace_hash_cache())?,
-            serde_json::json!({ "save_receipt": receipt.id.to_string() }),
+            serde_json::json!({ "submit_receipt": receipt.id.to_string() }),
         )?;
         // Project-state verification (SRS-FR-083–086): pack validity is not
         // project stability — re-verify the composed final state before any
@@ -2771,19 +5035,19 @@ impl App {
                     ps_report.workspace_hash.clone()
                 },
                 serde_json::json!({
-                    "save_receipt": receipt.id.to_string(),
+                    "submit_receipt": receipt.id.to_string(),
                     "checks": ps_report.checks,
                     "failed": ps_report.failed_checks(),
                 }),
             )?;
-            receipt.overall_status = SaveOverallStatus::Failed;
+            receipt.overall_status = SubmitOverallStatus::Failed;
             receipt.failure_reason =
                 Some(format!("project-state verification failed: {failed_names}"));
             receipt.ended_at = now();
             receipt.receipt_hash = hash_json(&receipt)?;
-            write_save_receipt(&ws, &receipt)?;
+            write_submit_receipt(&ws, &receipt)?;
             ws.events()?.append(
-                "save.completed",
+                "submit.completed",
                 Some(pack.id.to_string()),
                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
             )?;
@@ -2800,22 +5064,22 @@ impl App {
             None,
             ps_report.workspace_hash.clone(),
             serde_json::json!({
-                "save_receipt": receipt.id.to_string(),
-                "save_mode": save_mode.as_str(),
+                "submit_receipt": receipt.id.to_string(),
+                "submit_mode": submit_mode.as_str(),
                 "checks": ps_report.checks,
             }),
         )?;
         // Advance stable_head only after successful project-state verification
-        // (SRS-FR-050). After-save hooks run post-advance but pre-disposal
+        // (SRS-FR-050). After-submit hooks run post-advance but pre-disposal
         // (TDD §13.1/§14.3), so a failed after hook preserves pack metadata.
-        if save_mode == crate::stable::SaveMode::MergeAndDispose {
+        if submit_mode == crate::stable::SubmitMode::MergeAndDispose {
             let stable_head = stable_store.advance(
                 &ws.root,
                 project_verified.receipt.receipt_id.clone(),
                 previous_head,
                 pack_digest,
                 pack_summary,
-                save_mode,
+                submit_mode,
             )?;
             ledger.record(
                 crate::event::EventKind::StableHeadAdvanced,
@@ -2825,11 +5089,11 @@ impl App {
                 serde_json::json!({
                     "stable_head": stable_head.id,
                     "project_state_receipt": project_verified.receipt.receipt_id,
-                    "save_receipt": receipt.id.to_string()
+                    "submit_receipt": receipt.id.to_string()
                 }),
             )?;
         }
-        for hook in cfg.save_hooks(SaveHookPhase::After) {
+        for hook in cfg.submit_hooks(SubmitHookPhase::After) {
             let ctx = HookContext {
                 message: rendered_message.clone(),
                 title: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
@@ -2858,12 +5122,12 @@ impl App {
                     .unwrap_or_else(|| "unknown".to_string()),
                 files_changed: patch.files.len().to_string(),
                 workspace_root: ws.root.display().to_string(),
-                hook_name: "save.after".to_string(),
-                hook_phase: SaveHookPhase::After.as_str().to_string(),
+                hook_name: "submit.after".to_string(),
+                hook_phase: SubmitHookPhase::After.as_str().to_string(),
                 vars: vars.clone(),
             };
             ledger.record(
-                crate::event::EventKind::SaveHookStarted,
+                crate::event::EventKind::SubmitHookStarted,
                 Some(pack.id.to_string()),
                 None,
                 crate::hashing::workspace_hash_cached(
@@ -2872,14 +5136,14 @@ impl App {
                 )?,
                 serde_json::json!({ "phase": "after", "command": hook.command }),
             )?;
-            match run_hook(&ws, &store, "save.after", &hook, &ctx) {
+            match run_hook(&ws, &store, "submit.after", &hook, &ctx) {
                 Ok(result) => {
                     let failed = result.exit_code != 0;
                     ledger.record(
                         if failed {
-                            crate::event::EventKind::SaveHookFailed
+                            crate::event::EventKind::SubmitHookFailed
                         } else {
-                            crate::event::EventKind::SaveHookCompleted
+                            crate::event::EventKind::SubmitHookCompleted
                         },
                         Some(pack.id.to_string()),
                         None,
@@ -2906,21 +5170,21 @@ impl App {
                     if failed {
                         receipt.hook_status = HookStatus::Failed;
                         if hook.continue_on_error {
-                            receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                            receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
                         } else {
-                            receipt.overall_status = SaveOverallStatus::Failed;
-                            receipt.failure_reason = Some("hooks.save.after failed".to_string());
+                            receipt.overall_status = SubmitOverallStatus::Failed;
+                            receipt.failure_reason = Some("hooks.submit.after failed".to_string());
                             receipt.ended_at = now();
                             receipt.receipt_hash = hash_json(&receipt)?;
-                            write_save_receipt(&ws, &receipt)?;
+                            write_submit_receipt(&ws, &receipt)?;
                             ws.events()?.append(
-                                "save.completed",
+                                "submit.completed",
                                 Some(pack.id.to_string()),
                                 serde_json::to_value(&receipt).unwrap_or(Value::Null),
                             )?;
                             return Err(DraftError::new(
-                                DraftErrorKind::SaveFailed,
-                                "hooks.save.after failed",
+                                DraftErrorKind::SubmitFailed,
+                                "hooks.submit.after failed",
                             ));
                         }
                     } else {
@@ -2930,7 +5194,7 @@ impl App {
                 Err(e) => {
                     receipt.hook_status = HookStatus::Failed;
                     ledger.record(
-                        crate::event::EventKind::SaveHookFailed,
+                        crate::event::EventKind::SubmitHookFailed,
                         Some(pack.id.to_string()),
                         None,
                         crate::hashing::workspace_hash_cached(
@@ -2948,8 +5212,8 @@ impl App {
                         "failed",
                         Some(pack.id.to_string()),
                         serde_json::json!({
-                            "hook_name": "save.after",
-                            "hook_phase": SaveHookPhase::After.as_str(),
+                            "hook_name": "submit.after",
+                            "hook_phase": SubmitHookPhase::After.as_str(),
                             "error": e.message
                         }),
                     );
@@ -2957,32 +5221,32 @@ impl App {
                     write_receipt(&ws, &hook_receipt)?;
                     receipt.hook_receipt_refs.push(hook_receipt_id);
                     if hook.continue_on_error {
-                        receipt.overall_status = SaveOverallStatus::SavedWithHookFailure;
+                        receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
                         receipt.failure_reason = Some(e.message);
                     } else {
-                        receipt.overall_status = SaveOverallStatus::Failed;
+                        receipt.overall_status = SubmitOverallStatus::Failed;
                         receipt.failure_reason = Some(e.message.clone());
                         receipt.ended_at = now();
                         receipt.receipt_hash = hash_json(&receipt)?;
-                        write_save_receipt(&ws, &receipt)?;
+                        write_submit_receipt(&ws, &receipt)?;
                         ws.events()?.append(
-                            "save.completed",
+                            "submit.completed",
                             Some(pack.id.to_string()),
                             serde_json::to_value(&receipt).unwrap_or(Value::Null),
                         )?;
-                        return Err(DraftError::new(DraftErrorKind::SaveFailed, e.message));
+                        return Err(DraftError::new(DraftErrorKind::SubmitFailed, e.message));
                     }
                 }
             }
         }
         receipt.ended_at = now();
         receipt.receipt_hash = hash_json(&receipt)?;
-        write_save_receipt(&ws, &receipt)?;
+        write_submit_receipt(&ws, &receipt)?;
         pack.receipt_refs.push(receipt.id.to_string());
-        pack.status = pack.status.transition(ChangepackStatus::Saved)?;
+        pack.status = pack.status.transition(ChangepackStatus::Submitted)?;
         save_pack_manifest(&ws, &mut pack)?;
         ws.events()?.append(
-            "save.completed",
+            "submit.completed",
             Some(pack.id.to_string()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
@@ -2991,19 +5255,19 @@ impl App {
             &pack,
             Some(&patch),
             PackSyncSpec {
-                kind: crate::event::EventKind::PackSaved,
+                kind: crate::event::EventKind::PackSubmitted,
                 intent: crate::pack::PackIntent::Feature,
                 approval: crate::pack::ApprovalState::Approved,
-                save: crate::pack::SaveState::Saved,
-                metadata: serde_json::json!({ "save_receipt": receipt.id.to_string() }),
+                submit: crate::pack::SubmitState::Submitted,
+                metadata: serde_json::json!({ "submit_receipt": receipt.id.to_string() }),
             },
         )?;
         ledger.record(
-            crate::event::EventKind::SaveFinalized,
+            crate::event::EventKind::SubmitFinalized,
             Some(pack_id.to_string()),
             None,
             crate::hashing::workspace_hash_cached(&ws.root, &project_paths.workspace_hash_cache())?,
-            serde_json::json!({ "save_receipt": receipt.id.to_string() }),
+            serde_json::json!({ "submit_receipt": receipt.id.to_string() }),
         )?;
         match dispose_pack_metadata(&ws, &project_paths, pack_id) {
             Ok(removed) => {
@@ -3050,7 +5314,7 @@ impl App {
             kind,
             intent,
             approval,
-            save,
+            submit,
             metadata,
         } = spec;
         let paths = crate::layout::ProjectPaths::for_root(&ws.root);
@@ -3092,6 +5356,24 @@ impl App {
         // the exact bytes written to changes.patch so import can re-verify it.
         let changes_bytes: Option<Vec<u8>> =
             patch.map(|p| serde_json::to_vec_pretty(p).unwrap_or_default());
+        if let Some(p) = patch {
+            let mut paths_to_check = Vec::new();
+            for file in &p.files {
+                paths_to_check.push(&file.path);
+                if let Some(old_path) = &file.old_path {
+                    paths_to_check.push(old_path);
+                }
+            }
+            let violations = crate::protected::violations(&ws.root, paths_to_check);
+            if let Some(v) = violations.first() {
+                return Err(DraftError::new(
+                    DraftErrorKind::ProtectedFileAccess,
+                    format!("protected file cannot be packed: {}", v.path),
+                )
+                .with_context(format!("matched protected pattern '{}'", v.pattern))
+                .with_suggestion("remove the protected file from the pack scope"));
+            }
+        }
         let changes_hash = changes_bytes
             .as_ref()
             .map(|b| sha256_hex(b))
@@ -3134,7 +5416,7 @@ impl App {
             receipt_hashes: receipt_hashes.clone(),
             import_state: ImportState::None,
             approval_state: approval,
-            save_state: save,
+            submit_state: submit,
         };
         store.write_manifest(&manifest)?;
         if let Some(bytes) = &changes_bytes {
@@ -3169,19 +5451,19 @@ impl App {
         Ok(outcome.receipt.receipt_id)
     }
 
-    /// Save an imported pack: enforce the import gates, apply the embedded
+    /// Submit an imported pack: enforce the import gates, apply the embedded
     /// content to the workspace (fail closed, nothing written on any
     /// conflict), and promote the pack out of quarantine.
     ///
-    /// Save hooks do not run for import saves — there is no rendered save
+    /// Submit hooks do not run for import submissions — there is no rendered submit
     /// message/diff context for an imported pack.
-    fn save_imported_pack(
+    fn submit_imported_pack(
         &self,
         ws: &Workspace,
         store: &crate::pack::PackStore,
         loc: crate::pack::PackLocation,
         manifest: crate::pack::PackManifest,
-    ) -> DraftResult<SaveReceipt> {
+    ) -> DraftResult<SubmitReceipt> {
         use crate::pack::ImportState;
         let started = now();
         let pack_id = manifest.pack_id.clone();
@@ -3193,24 +5475,24 @@ impl App {
             ImportState::ImportedQuarantined => {
                 return Err(DraftError::new(
                     DraftErrorKind::ReviewRequired,
-                    "imported packs must be locally verified and approved before save",
+                    "imported packs must be locally verified and approved before submit",
                 )
                 .with_suggestion("run `draft verify <pck_id>`, then approve it"));
             }
             ImportState::ImportVerified => {
                 return Err(DraftError::new(
                     DraftErrorKind::ReviewRequired,
-                    "imported packs must be approved before save",
+                    "imported packs must be approved before submit",
                 ));
             }
             ImportState::ImportRejected => {
                 return Err(DraftError::invalid_config(
-                    "a rejected import cannot be saved",
+                    "a rejected import cannot be submitted",
                 ));
             }
-            ImportState::ImportSaved => {
+            ImportState::ImportSubmitted => {
                 return Err(DraftError::invalid_config(
-                    "this imported pack is already saved",
+                    "this imported pack is already submitted",
                 ));
             }
             ImportState::None => unreachable!("save_imported_pack requires an imported pack"),
@@ -3221,7 +5503,7 @@ impl App {
         if policy.require_local_verify_for_imports && !manifest.is_verified() {
             return Err(DraftError::new(
                 DraftErrorKind::VerificationFailed,
-                "imported packs must be locally re-verified before save",
+                "imported packs must be locally re-verified before submit",
             )
             .with_suggestion("run `draft verify <pck_id>` first"));
         }
@@ -3234,7 +5516,7 @@ impl App {
             {
                 return Err(DraftError::new(
                     DraftErrorKind::RiskPolicyBlocked,
-                    "unresolved critical risk blocks save",
+                    "unresolved critical risk blocks submit",
                 ));
             }
         } else if policy.block_on_critical_risk {
@@ -3242,7 +5524,7 @@ impl App {
                 DraftErrorKind::RiskPolicyBlocked,
                 "no local risk report exists for this imported pack",
             )
-            .with_suggestion("run `draft verify <pck_id>` before save"));
+            .with_suggestion("run `draft verify <pck_id>` before submit"));
         }
         if policy.require_reverify_on_workspace_change {
             let current = crate::hashing::workspace_hash(&ws.root)?;
@@ -3251,7 +5533,7 @@ impl App {
                     DraftErrorKind::VerificationFailed,
                     "workspace content changed after the import was verified",
                 )
-                .with_suggestion("run `draft verify <pck_id>` again before save"));
+                .with_suggestion("run `draft verify <pck_id>` again before submit"));
             }
         }
         let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
@@ -3280,10 +5562,10 @@ impl App {
         let plan = plan_import_apply(ws, &dir, &patch)?;
 
         // The apply is rollback-safe: checkpoint the workspace first.
-        self.checkpoint(&ws.root, &format!("pre-import-save {pack_id}"))?;
+        self.checkpoint(&ws.root, &format!("pre-import-submit {pack_id}"))?;
 
         ws.events()?.append(
-            "save.started",
+            "submit.started",
             Some(pack_id.clone()),
             serde_json::json!({ "imported": true }),
         )?;
@@ -3300,7 +5582,7 @@ impl App {
         }
 
         // Project-state verification (SRS-FR-083–086), symmetric with the
-        // local save path: the applied state must verify before promotion,
+        // local submit path: the applied state must verify before promotion,
         // receipts, or stable_head advancement.
         let paths = crate::layout::ProjectPaths::for_root(&ws.root);
         let applied_paths: Vec<String> = {
@@ -3367,13 +5649,13 @@ impl App {
         }
         let wsh_after = crate::hashing::workspace_hash(&ws.root)?;
         let mut manifest = manifest;
-        manifest.import_state = ImportState::ImportSaved;
-        manifest.save_state = crate::pack::SaveState::Saved;
+        manifest.import_state = ImportState::ImportSubmitted;
+        manifest.submit_state = crate::pack::SubmitState::Submitted;
         manifest.target_workspace_hash = wsh_after.clone();
         store.write_manifest(&manifest)?;
 
         ledger.record(
-            crate::event::EventKind::PackSaved,
+            crate::event::EventKind::PackSubmitted,
             Some(pack_id.clone()),
             None,
             wsh_after,
@@ -3385,17 +5667,17 @@ impl App {
             }),
         )?;
 
-        // Legacy-parity save receipt so every caller of the save surface
-        // (CLI, daemon, cockpit) gets the same artifact shape.
+        // Legacy-parity submit receipt so every caller of the submit surface
+        // (CLI, daemon, Console) gets the same artifact shape.
         let object_store = ObjectStore::new(ws.layout.clone());
-        let mut receipt = SaveReceipt {
+        let mut receipt = SubmitReceipt {
             schema_version: SCHEMA_VERSION,
             id: ReceiptId::generate(),
             changepack_id: ChangepackId::new(pack_id.clone()),
             actor: resolve_actor(&ws.layout.draft_dir),
-            native_save_status: NativeSaveStatus::Saved,
+            native_submit_status: NativeSubmitStatus::Submitted,
             hook_status: HookStatus::NotConfigured,
-            overall_status: SaveOverallStatus::Saved,
+            overall_status: SubmitOverallStatus::Submitted,
             message_ref: object_store.put_bytes(manifest.name.as_bytes())?,
             hook_results: Vec::new(),
             hook_receipt_refs: Vec::new(),
@@ -3409,15 +5691,15 @@ impl App {
             failure_reason: None,
         };
         receipt.receipt_hash = hash_json(&receipt)?;
-        write_save_receipt(ws, &receipt)?;
+        write_submit_receipt(ws, &receipt)?;
         ws.events()?.append(
-            "save.completed",
+            "submit.completed",
             Some(pack_id.clone()),
             serde_json::to_value(&receipt).unwrap_or(Value::Null),
         )?;
         let stable_store = crate::stable::StableHeadStore::new(paths.clone());
         let previous_head = stable_store.read().ok();
-        let save_mode = ResolvedConfig::load(ws)?.pack_disposal;
+        let submit_mode = ResolvedConfig::load(ws)?.pack_disposal;
         let project_verified = ledger.record(
             crate::event::EventKind::ProjectStateVerified,
             Some(pack_id.clone()),
@@ -3425,12 +5707,12 @@ impl App {
             ps_report.workspace_hash.clone(),
             serde_json::json!({
                 "imported": true,
-                "save_receipt": receipt.id.to_string(),
-                "save_mode": save_mode.as_str(),
+                "submit_receipt": receipt.id.to_string(),
+                "submit_mode": submit_mode.as_str(),
                 "checks": ps_report.checks,
             }),
         )?;
-        if save_mode == crate::stable::SaveMode::MergeAndDispose {
+        if submit_mode == crate::stable::SubmitMode::MergeAndDispose {
             let stable_head = stable_store.advance(
                 &ws.root,
                 project_verified.receipt.receipt_id.clone(),
@@ -3438,7 +5720,7 @@ impl App {
                 Some(hash_json(&serde_json::json!({
                     "manifest": manifest,
                     "patch": patch,
-                    "save_receipt": receipt.id.to_string()
+                    "submit_receipt": receipt.id.to_string()
                 }))?),
                 Some(crate::stable::PackSummary {
                     pack_id: pack_id.clone(),
@@ -3460,7 +5742,7 @@ impl App {
                         paths
                     },
                 }),
-                save_mode,
+                submit_mode,
             )?;
             ledger.record(
                 crate::event::EventKind::StableHeadAdvanced,
@@ -3470,16 +5752,16 @@ impl App {
                 serde_json::json!({
                     "stable_head": stable_head.id,
                     "project_state_receipt": project_verified.receipt.receipt_id,
-                    "save_receipt": receipt.id.to_string()
+                    "submit_receipt": receipt.id.to_string()
                 }),
             )?;
         }
         ledger.record(
-            crate::event::EventKind::SaveFinalized,
+            crate::event::EventKind::SubmitFinalized,
             Some(pack_id.clone()),
             None,
             crate::hashing::workspace_hash(&ws.root)?,
-            serde_json::json!({ "save_receipt": receipt.id.to_string(), "imported": true }),
+            serde_json::json!({ "submit_receipt": receipt.id.to_string(), "imported": true }),
         )?;
         let removed = dispose_pack_metadata(ws, &paths, &pack_id)?;
         ledger.record(
@@ -3492,27 +5774,27 @@ impl App {
         Ok(receipt)
     }
 
-    pub fn save_selected(
+    pub fn submit_selected(
         &self,
         cwd: &Path,
         pack_id: Option<&str>,
         vars: BTreeMap<String, String>,
-    ) -> DraftResult<SaveReceipt> {
+    ) -> DraftResult<SubmitReceipt> {
         let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        self.save(cwd, &pack_id, vars)
+        self.submit(cwd, &pack_id, vars)
     }
 
-    pub fn save_readiness_selected(
+    pub fn submit_readiness_selected(
         &self,
         cwd: &Path,
         pack_id: Option<&str>,
-    ) -> DraftResult<SaveReadinessReport> {
+    ) -> DraftResult<SubmitReadinessReport> {
         let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
         let ws = self.open(cwd)?;
         let pack = load_pack(&ws, &pack_id)?;
         let patch = load_patch(&ws, &pack)?;
         let policy = read_or_default::<PolicyConfig>(&ws.layout.policy_toml());
-        save_readiness(&ws, &pack, &patch, &policy)
+        submit_readiness(&ws, &pack, &patch, &policy)
     }
 
     pub fn rollback_plan(&self, cwd: &Path, reference: &str) -> DraftResult<RollbackPlan> {
@@ -3635,9 +5917,9 @@ impl App {
         })
     }
 
-    /// `draft save --dry-run`: report whether the pack would save and why,
+    /// `draft submit --dry-run`: report whether the pack would submit and why,
     /// without writing anything.
-    pub fn save_dry_run(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<DryRunReport> {
+    pub fn submit_dry_run(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<DryRunReport> {
         let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
         let ws = self.open(cwd)?;
         {
@@ -3646,21 +5928,21 @@ impl App {
             if let Some(loc) = store.locate(&pack_id) {
                 let manifest = store.read_manifest_in(loc, &pack_id)?;
                 if manifest.import_state != crate::pack::ImportState::None {
-                    return self.import_save_dry_run(&ws, &store, loc, manifest);
+                    return self.import_submit_dry_run(&ws, &store, loc, manifest);
                 }
             }
         }
         let pack = load_pack(&ws, &pack_id)?;
         let patch = load_patch(&ws, &pack)?;
         let policy = read_or_default::<PolicyConfig>(&ws.layout.policy_toml());
-        let readiness = save_readiness(&ws, &pack, &patch, &policy)?;
+        let readiness = submit_readiness(&ws, &pack, &patch, &policy)?;
         let mut checks = Vec::new();
         let draft_touch = patch.files.iter().any(|f| is_draft_path(f.path.as_str()));
         checks.push(bool_check(
             "draft-exclusion",
             !draft_touch,
             ".draft/ not in candidate",
-            ".draft/ present in save candidate",
+            ".draft/ present in submit candidate",
         ));
         checks.push(bool_check(
             "verified",
@@ -3680,11 +5962,11 @@ impl App {
         });
         let would = checks.iter().all(|c| c.ok);
         Ok(DryRunReport {
-            action: "save".to_string(),
+            action: "submit".to_string(),
             target: pack_id,
             would_proceed: would,
             resulting_state: if would {
-                "saved".to_string()
+                "submitted".to_string()
             } else {
                 "blocked".to_string()
             },
@@ -3693,9 +5975,9 @@ impl App {
         })
     }
 
-    /// `draft save --dry-run` for an imported pack: report the import gates
+    /// `draft submit --dry-run` for an imported pack: report the import gates
     /// and whether the embedded content would apply cleanly.
-    fn import_save_dry_run(
+    fn import_submit_dry_run(
         &self,
         ws: &Workspace,
         store: &crate::pack::PackStore,
@@ -3749,11 +6031,11 @@ impl App {
         checks.push(applies);
         let would = checks.iter().all(|c| c.ok);
         Ok(DryRunReport {
-            action: "save".to_string(),
+            action: "submit".to_string(),
             target: manifest.pack_id,
             would_proceed: would,
             resulting_state: if would {
-                "import applied and saved".to_string()
+                "import applied and submitted".to_string()
             } else {
                 "blocked".to_string()
             },
@@ -4015,7 +6297,7 @@ impl App {
         manifest.risk_hash = String::new();
         manifest.lsif_hash = String::new();
         manifest.approval_state = crate::pack::ApprovalState::Pending;
-        manifest.save_state = crate::pack::SaveState::Unsaved;
+        manifest.submit_state = crate::pack::SubmitState::Unsubmitted;
         write_json(&qdir.join("manifest.json"), &manifest)?;
 
         let wsh = crate::hashing::workspace_hash(&ws.root)?;
@@ -4194,7 +6476,7 @@ impl App {
         manifest.lsif_hash = crate::hashing::canonical_hash(&lsif_summary);
         store.write_manifest(&manifest)?;
         let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
-        ledger.record(
+        let verification_outcome = ledger.record(
             crate::event::EventKind::PackVerified,
             Some(pack_id.clone()),
             None,
@@ -4203,6 +6485,32 @@ impl App {
                 "risk_level": risk.risk_level.as_str(),
                 "result_hash": evidence.result_hash,
             }),
+        )?;
+        crate::workflow::WorkflowStore::for_root(&ws.root).write_evidence(
+            &crate::workflow::EvidenceRecord {
+                schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                id: crate::workflow::EvidenceId::generate(),
+                task_id: None,
+                pack_id: Some(pack_id.clone()),
+                execution_id: None,
+                kind: "verification".to_string(),
+                state: if evidence.passed() {
+                    crate::workflow::EvidenceState::Fresh
+                } else {
+                    crate::workflow::EvidenceState::Failed
+                },
+                result: serde_json::json!({
+                    "risk_level": risk.risk_level.as_str(),
+                    "risk_score": risk.risk_score,
+                    "result_hash": evidence.result_hash,
+                    "selected_tests": evidence.selected_tests.len(),
+                    "selected_fuzz_targets": evidence.selected_fuzz_targets.len(),
+                }),
+                produced_at: now(),
+                stale_reason: None,
+                invalidated_by: vec![],
+                receipt_id: Some(verification_outcome.receipt.receipt_id),
+            },
         )?;
 
         Ok(VerifyReport {
@@ -4384,7 +6692,7 @@ impl App {
         store.write_manifest_in(loc, &manifest)?;
 
         let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
-        ledger.record(
+        let verification_outcome = ledger.record(
             crate::event::EventKind::PackVerified,
             Some(pack_id.clone()),
             None,
@@ -4394,6 +6702,33 @@ impl App {
                 "risk_level": risk.risk_level.as_str(),
                 "result_hash": evidence.result_hash,
             }),
+        )?;
+        crate::workflow::WorkflowStore::for_root(&ws.root).write_evidence(
+            &crate::workflow::EvidenceRecord {
+                schema_version: crate::DRAFT_SCHEMA_VERSION.to_string(),
+                id: crate::workflow::EvidenceId::generate(),
+                task_id: None,
+                pack_id: Some(pack_id.clone()),
+                execution_id: None,
+                kind: "verification".to_string(),
+                state: if evidence.passed() {
+                    crate::workflow::EvidenceState::Fresh
+                } else {
+                    crate::workflow::EvidenceState::Failed
+                },
+                result: serde_json::json!({
+                    "imported": true,
+                    "risk_level": risk.risk_level.as_str(),
+                    "risk_score": risk.risk_score,
+                    "result_hash": evidence.result_hash,
+                    "selected_tests": evidence.selected_tests.len(),
+                    "selected_fuzz_targets": evidence.selected_fuzz_targets.len(),
+                }),
+                produced_at: now(),
+                stale_reason: None,
+                invalidated_by: vec![],
+                receipt_id: Some(verification_outcome.receipt.receipt_id),
+            },
         )?;
 
         Ok(VerifyReport {
@@ -4619,7 +6954,7 @@ impl App {
         name: &str,
     ) -> DraftResult<PackComposeReport> {
         use crate::pack::{
-            ApprovalState, ImportState, PackLockfile, PackManifest, PackStore, SaveState,
+            ApprovalState, ImportState, PackLockfile, PackManifest, PackStore, SubmitState,
         };
         let ws = self.open(cwd)?;
         let paths = crate::layout::ProjectPaths::for_root(&ws.root);
@@ -4734,7 +7069,7 @@ impl App {
             )],
             import_state: ImportState::None,
             approval_state: ApprovalState::Pending,
-            save_state: SaveState::Unsaved,
+            submit_state: SubmitState::Unsubmitted,
         };
         store.write_manifest(&manifest)?;
         let lock = PackLockfile {
@@ -4761,10 +7096,10 @@ impl App {
         })
     }
 
-    // ---- Cockpit / AG-UI support (thin read/act methods) ----------------
+    // ---- Console / AG-UI support (thin read/act methods) ----------------
 
     /// All canonical pack manifests, including quarantined imports (for the
-    /// cockpit pack list, MCP, and ACP pending review).
+    /// Console pack list and other local review surfaces).
     pub fn list_canonical_packs(&self, cwd: &Path) -> DraftResult<Vec<crate::pack::PackManifest>> {
         let ws = self.open(cwd)?;
         let store = crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
@@ -4827,7 +7162,7 @@ impl App {
 
     /// Approve or reject a pack through the legacy decision path and record the
     /// canonical PackApproved/PackRejected trust receipt.
-    pub fn cockpit_decide(
+    pub fn decide_pack(
         &self,
         cwd: &Path,
         pack_ref: &str,
@@ -4870,8 +7205,8 @@ impl App {
                 } else {
                     crate::pack::ApprovalState::Rejected
                 },
-                save: crate::pack::SaveState::Unsaved,
-                metadata: serde_json::json!({ "via": "cockpit" }),
+                submit: crate::pack::SubmitState::Unsubmitted,
+                metadata: serde_json::json!({ "via": "console" }),
             },
         )?;
         Ok(pack.id.to_string())
@@ -4929,7 +7264,7 @@ impl App {
             None,
             wsh,
             serde_json::json!({
-                "via": "cockpit",
+                "via": "console",
                 "imported": true,
                 "reason": reason,
             }),
@@ -4937,7 +7272,7 @@ impl App {
         Ok(manifest.pack_id)
     }
 
-    /// Import a `.draftpack` provided as bytes (cockpit upload).
+    /// Import a `.draftpack` provided as bytes (Console upload).
     pub fn pack_import_bytes(
         &self,
         cwd: &Path,
@@ -4984,6 +7319,157 @@ impl App {
                 dir_size_excluding_draft(&ws.root)?,
             ),
         })
+    }
+
+    pub fn doctor_index(&self, cwd: &Path, refresh: bool) -> DraftResult<Value> {
+        let ws = self.open(cwd)?;
+        if refresh || !ws.layout.index_file().exists() {
+            rebuild_index(&ws)?;
+            crate::task::TaskStore::for_root(&ws.root).rebuild_index()?;
+        }
+        let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+        let indexes = vec![
+            index_status("file", ws.layout.index_file(), &[ws.layout.snapshots_dir()])?,
+            index_status(
+                "symbol",
+                paths.lsif_index_db(),
+                std::slice::from_ref(&ws.root),
+            )?,
+            index_status("task", paths.task_name_index(), &[paths.tasks_dir()])?,
+            index_status("pack", paths.stable_graph_index(), &[paths.packs_dir()])?,
+            index_status(
+                "receipt",
+                paths.receipts_dir().join("index.json"),
+                &[paths.receipts_dir()],
+            )?,
+            index_status(
+                "search",
+                paths.indexes_dir().join("search.json"),
+                std::slice::from_ref(&ws.root),
+            )?,
+            index_status("activity", paths.event_index(), &[paths.event_log()])?,
+        ];
+        let state = if indexes.iter().any(|i| i["state"] == "failed") {
+            "failed"
+        } else if indexes.iter().any(|i| i["state"] == "missing") {
+            "missing"
+        } else if indexes.iter().any(|i| i["state"] == "stale") {
+            "stale"
+        } else {
+            "fresh"
+        };
+        Ok(serde_json::json!({
+            "state": state,
+            "scope": "project",
+            "refreshed": refresh,
+            "indexes": indexes,
+        }))
+    }
+
+    pub fn doctor_index_global(&self, refresh: bool) -> DraftResult<Value> {
+        let home = crate::home::GlobalHome::locate()?;
+        if refresh {
+            home.create_all()?;
+        }
+        let indexes = vec![
+            index_status(
+                "registry",
+                home.registry_dir().join("projects.index"),
+                &[home.registry_dir().join("projects.jsonl")],
+            )?,
+            index_status(
+                "receipt",
+                home.global_receipt_index(),
+                &[home.receipts_dir()],
+            )?,
+            index_status(
+                "candidate",
+                home.indexes_dir().join("candidates.json"),
+                &[home.candidates_json()],
+            )?,
+            index_status(
+                "activity",
+                home.indexes_dir().join("activity.json"),
+                &[home.logs_dir()],
+            )?,
+        ];
+        let state = if indexes.iter().any(|i| i["state"] == "failed") {
+            "failed"
+        } else if indexes.iter().any(|i| i["state"] == "missing") {
+            "missing"
+        } else if indexes.iter().any(|i| i["state"] == "stale") {
+            "stale"
+        } else {
+            "fresh"
+        };
+        Ok(serde_json::json!({
+            "state": state,
+            "scope": "global",
+            "root": home.root(),
+            "refreshed": refresh,
+            "indexes": indexes,
+        }))
+    }
+
+    pub fn doctor_migrate(&self, cwd: &Path, check: bool) -> DraftResult<Value> {
+        let ws = self.open(cwd)?;
+        let meta: WorkspaceMetadata = read_json(&ws.layout.workspace_json())?;
+        let required = meta.draft_version != crate::DRAFT_VERSION;
+        if check || !required {
+            return Ok(
+                serde_json::json!({"from":meta.draft_version,"to":crate::DRAFT_VERSION,"migration_required":required,"applied":false}),
+            );
+        }
+        let journal = crate::journal::JournalStore::for_root(&ws.root);
+        let entry = journal.start(
+            "doctor.migrate",
+            None,
+            serde_json::json!({"from": meta.draft_version, "to": crate::DRAFT_VERSION}),
+        )?;
+        let backup = crate::layout::ProjectPaths::for_root(&ws.root)
+            .backups_dir()
+            .join(format!(
+                "migration-{}-{}",
+                now().timestamp_millis(),
+                entry.id
+            ));
+        let entry = journal.mark_in_progress(entry, Some(backup.display().to_string()))?;
+        let from = meta.draft_version.clone();
+        let migrate = (|| -> DraftResult<Vec<MigrationFile>> {
+            let files = prepare_migration(&ws, &backup)?;
+            commit_migration(&files)?;
+            let event = ws.events().and_then(|events| {
+                events.append(
+                    "migration.completed",
+                    None,
+                    serde_json::json!({"from":from,"to":crate::DRAFT_VERSION,"backup":backup}),
+                )
+            });
+            if let Err(err) = event {
+                return match restore_migration(&files) {
+                    Ok(()) => Err(err),
+                    Err(rollback_err) => Err(DraftError::storage(format!(
+                        "migration event failed: {}; restoring originals also failed: {}",
+                        err.message, rollback_err.message
+                    ))),
+                };
+            }
+            Ok(files)
+        })();
+        match migrate {
+            Ok(_) => {}
+            Err(err) => {
+                let _ = journal.fail(entry, err.message.clone());
+                return Err(err);
+            }
+        }
+        let _ = journal.complete(
+            entry,
+            serde_json::json!({"from": from, "to": crate::DRAFT_VERSION, "backup": backup}),
+        )?;
+        Ok(
+            serde_json::json!({"from":from,"to":crate::DRAFT_VERSION,"migration_required":false,"applied":true,"backup":backup}),
+        )
     }
 
     pub fn storage_gc(&self, cwd: &Path) -> DraftResult<StorageMaintenanceReport> {
@@ -5059,7 +7545,7 @@ impl App {
                 DraftErrorKind::RiskPolicyBlocked,
                 format!("draft close refused: {pending_packs} pending changepack(s) remain"),
             )
-            .with_suggestion("save, delete, or export pending packs first; use --force only when you intend to discard Draft metadata"));
+            .with_suggestion("submit, delete, or export pending packs first; use --force only when you intend to discard Draft metadata"));
         }
         let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
         ledger.record(
@@ -5077,6 +7563,7 @@ impl App {
             serde_json::json!({ "forced": force, "pending_packs": pending_packs }),
         )?;
         let draft_dir = ws.layout.draft_dir.display().to_string();
+        crate::registry::ProjectRegistry::global()?.remove(ws.id.as_str())?;
         std::fs::remove_dir_all(&ws.layout.draft_dir)
             .map_err(|e| DraftError::storage(format!("remove .draft: {e}")))?;
         Ok(CloseReport {
@@ -5347,6 +7834,10 @@ pub struct InitReport {
     pub stable_head_id: String,
     pub stable_head_receipt_id: String,
     pub workspace_hash: String,
+    #[serde(default)]
+    pub next_actions: Vec<String>,
+    #[serde(default)]
+    pub candidate_guidance: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5362,8 +7853,8 @@ const DEFAULT_IGNORE: &str = "# Draft private metadata is always excluded.\n.dra
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DraftConfig {
     pub identity: IdentityConfig,
-    #[serde(default)]
-    pub save: SaveConfig,
+    #[serde(default, alias = "save")]
+    pub submit: SubmitConfig,
     #[serde(default)]
     pub hooks: HooksConfig,
     pub verification: VerificationConfig,
@@ -5374,7 +7865,7 @@ impl Default for DraftConfig {
     fn default() -> Self {
         Self {
             identity: IdentityConfig::default(),
-            save: SaveConfig::default(),
+            submit: SubmitConfig::default(),
             hooks: HooksConfig::default(),
             verification: VerificationConfig {
                 default_profile: "standard".to_string(),
@@ -5394,12 +7885,12 @@ impl DraftConfig {
         match key {
             "identity.username" => self.identity.username = value.to_string(),
             "identity.email" => self.identity.email = value.to_string(),
-            "save.message_template" => self.save.message_template = value.to_string(),
-            "save.pack_disposal" => {
-                crate::stable::SaveMode::parse(value)?;
-                self.save.pack_disposal = value.to_string();
+            "submit.message_template" => self.submit.message_template = value.to_string(),
+            "submit.pack_disposal" => {
+                crate::stable::SubmitMode::parse(value)?;
+                self.submit.pack_disposal = value.to_string();
             }
-            "hooks.save" => self.hooks.save = Some(SaveHookConfig::Raw(value.to_string())),
+            "hooks.submit" => self.hooks.submit = Some(SubmitHookConfig::Raw(value.to_string())),
             "hooks.verify" => self.hooks.verify = Some(HookConfig::Raw(value.to_string())),
             _ => {
                 return Err(DraftError::invalid_config(format!(
@@ -5421,14 +7912,14 @@ pub struct IdentityConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SaveConfig {
+pub struct SubmitConfig {
     #[serde(default)]
     pub message_template: String,
     #[serde(default = "default_pack_disposal")]
     pub pack_disposal: String,
 }
 
-impl Default for SaveConfig {
+impl Default for SubmitConfig {
     fn default() -> Self {
         Self {
             message_template: "{{title}}\n\n{{description}}\n\nDraft-Task: {{task_id}}\nDraft-Run: {{run_id}}\nDraft-Changepack: {{changepack_id}}\nDraft-Verified: {{verified}}\nDraft-Risk: {{risk_level}}\nDraft-Receipt: {{receipt_id}}\nDraft-Actor: {{actor_name}} <{{actor_email}}>".to_string(),
@@ -5443,20 +7934,21 @@ fn default_pack_disposal() -> String {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HooksConfig {
-    pub save: Option<SaveHookConfig>,
+    #[serde(default, alias = "save")]
+    pub submit: Option<SubmitHookConfig>,
     pub verify: Option<HookConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum SaveHookConfig {
+pub enum SubmitHookConfig {
     Raw(String),
     Entry(HookEntry),
-    Phases(SaveHookPhases),
+    Phases(SubmitHookPhases),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SaveHookPhases {
+pub struct SubmitHookPhases {
     #[serde(default)]
     pub before: Vec<HookConfig>,
     #[serde(default)]
@@ -5471,42 +7963,42 @@ pub enum HookConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SaveHookPhase {
+enum SubmitHookPhase {
     Before,
     After,
 }
 
-impl SaveHookPhase {
+impl SubmitHookPhase {
     fn as_str(self) -> &'static str {
         match self {
-            SaveHookPhase::Before => "before",
-            SaveHookPhase::After => "after",
+            SubmitHookPhase::Before => "before",
+            SubmitHookPhase::After => "after",
         }
     }
 }
 
-impl SaveHookConfig {
-    fn entries(&self, phase: SaveHookPhase) -> Vec<HookEntry> {
+impl SubmitHookConfig {
+    fn entries(&self, phase: SubmitHookPhase) -> Vec<HookEntry> {
         match self {
-            SaveHookConfig::Raw(command) if phase == SaveHookPhase::Before => {
+            SubmitHookConfig::Raw(command) if phase == SubmitHookPhase::Before => {
                 HookConfig::Raw(command.clone())
                     .entry()
                     .map(|entry| vec![entry])
                     .unwrap_or_default()
             }
-            SaveHookConfig::Raw(_) => Vec::new(),
-            SaveHookConfig::Entry(entry)
-                if phase == SaveHookPhase::Before
+            SubmitHookConfig::Raw(_) => Vec::new(),
+            SubmitHookConfig::Entry(entry)
+                if phase == SubmitHookPhase::Before
                     && entry.enabled
                     && !entry.command.trim().is_empty() =>
             {
                 vec![entry.clone()]
             }
-            SaveHookConfig::Entry(_) => Vec::new(),
-            SaveHookConfig::Phases(phases) => {
+            SubmitHookConfig::Entry(_) => Vec::new(),
+            SubmitHookConfig::Phases(phases) => {
                 let configs = match phase {
-                    SaveHookPhase::Before => &phases.before,
-                    SaveHookPhase::After => &phases.after,
+                    SubmitHookPhase::Before => &phases.before,
+                    SubmitHookPhase::After => &phases.after,
                 };
                 configs.iter().filter_map(HookConfig::entry).collect()
             }
@@ -5614,11 +8106,11 @@ fn hook_config_command(hook: &HookConfig) -> String {
     }
 }
 
-fn save_hook_config_command(hook: &SaveHookConfig) -> String {
+fn submit_hook_config_command(hook: &SubmitHookConfig) -> String {
     match hook {
-        SaveHookConfig::Raw(command) => command.clone(),
-        SaveHookConfig::Entry(entry) => entry.command.clone(),
-        SaveHookConfig::Phases(phases) => {
+        SubmitHookConfig::Raw(command) => command.clone(),
+        SubmitHookConfig::Entry(entry) => entry.command.clone(),
+        SubmitHookConfig::Phases(phases) => {
             let before = phases.before.len();
             let after = phases.after.len();
             format!("{before} before hook(s), {after} after hook(s)")
@@ -5630,8 +8122,8 @@ fn save_hook_config_command(hook: &SaveHookConfig) -> String {
 struct ResolvedConfig {
     identity_username: String,
     identity_email: String,
-    save_message_template: String,
-    pack_disposal: crate::stable::SaveMode,
+    submit_message_template: String,
+    pack_disposal: crate::stable::SubmitMode,
     hooks: HooksConfig,
 }
 
@@ -5656,25 +8148,25 @@ impl ResolvedConfig {
         Ok(Self {
             identity_username: cfg.identity.username,
             identity_email: cfg.identity.email,
-            save_message_template: cfg.save.message_template,
-            pack_disposal: crate::stable::SaveMode::parse(&cfg.save.pack_disposal)?,
+            submit_message_template: cfg.submit.message_template,
+            pack_disposal: crate::stable::SubmitMode::parse(&cfg.submit.pack_disposal)?,
             hooks: cfg.hooks,
         })
     }
     fn hook(&self, name: &str) -> Option<HookEntry> {
         match name {
             "verify" => self.hooks.verify.as_ref().and_then(HookConfig::entry),
-            "save" => self
+            "submit" => self
                 .hooks
-                .save
+                .submit
                 .as_ref()
-                .and_then(|hooks| hooks.entries(SaveHookPhase::Before).into_iter().next()),
+                .and_then(|hooks| hooks.entries(SubmitHookPhase::Before).into_iter().next()),
             _ => None,
         }
     }
-    fn save_hooks(&self, phase: SaveHookPhase) -> Vec<HookEntry> {
+    fn submit_hooks(&self, phase: SubmitHookPhase) -> Vec<HookEntry> {
         self.hooks
-            .save
+            .submit
             .as_ref()
             .map(|hooks| hooks.entries(phase))
             .unwrap_or_default()
@@ -5683,9 +8175,9 @@ impl ResolvedConfig {
         match key {
             "identity.username" => Some(self.identity_username.clone()),
             "identity.email" => Some(self.identity_email.clone()),
-            "save.message_template" => Some(self.save_message_template.clone()),
-            "save.pack_disposal" => Some(self.pack_disposal.as_str().to_string()),
-            "hooks.save" => self.hooks.save.as_ref().map(save_hook_config_command),
+            "submit.message_template" => Some(self.submit_message_template.clone()),
+            "submit.pack_disposal" => Some(self.pack_disposal.as_str().to_string()),
+            "hooks.submit" => self.hooks.submit.as_ref().map(submit_hook_config_command),
             "hooks.verify" => self.hooks.verify.as_ref().map(hook_config_command),
             _ => None,
         }
@@ -5695,9 +8187,9 @@ impl ResolvedConfig {
         for k in [
             "identity.username",
             "identity.email",
-            "save.message_template",
-            "save.pack_disposal",
-            "hooks.save",
+            "submit.message_template",
+            "submit.pack_disposal",
+            "hooks.submit",
             "hooks.verify",
         ] {
             m.insert(k.to_string(), self.get(k).unwrap_or_default());
@@ -5713,14 +8205,14 @@ fn merge_config(mut base: DraftConfig, overlay: DraftConfig) -> DraftConfig {
     if !overlay.identity.email.is_empty() {
         base.identity.email = overlay.identity.email;
     }
-    if !overlay.save.message_template.is_empty() {
-        base.save.message_template = overlay.save.message_template;
+    if !overlay.submit.message_template.is_empty() {
+        base.submit.message_template = overlay.submit.message_template;
     }
-    if !overlay.save.pack_disposal.is_empty() {
-        base.save.pack_disposal = overlay.save.pack_disposal;
+    if !overlay.submit.pack_disposal.is_empty() {
+        base.submit.pack_disposal = overlay.submit.pack_disposal;
     }
-    if overlay.hooks.save.is_some() {
-        base.hooks.save = overlay.hooks.save;
+    if overlay.hooks.submit.is_some() {
+        base.hooks.submit = overlay.hooks.submit;
     }
     if overlay.hooks.verify.is_some() {
         base.hooks.verify = overlay.hooks.verify;
@@ -6300,18 +8792,55 @@ pub struct Task {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSpawnReport {
-    pub task: Task,
-    pub pack_id: Option<String>,
-    pub cron: Option<String>,
-    pub runs: Vec<TaskRunSummary>,
+    pub task_id: String,
+    pub task_name: String,
+    pub task_kind: String,
+    pub preset: Option<String>,
+    pub parent_pack: Option<String>,
+    pub executions: Vec<ExecutionSummary>,
+    pub next_action: String,
+}
+
+pub type TaskViewReport = crate::view::TaskView;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionSummary {
+    pub execution_id: String,
+    pub candidate: String,
+    pub status: String,
+    pub produced_pack: Option<String>,
+    pub error: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskRunSummary {
-    pub candidate: String,
-    pub run_id: Option<String>,
-    pub status: String,
-    pub error: Option<String>,
+pub struct TaskExportReport {
+    pub task_id: String,
+    pub task_name: String,
+    pub output: String,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskImportReport {
+    pub task_id: String,
+    pub task_name: String,
+    pub source: String,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TaskViewOptions {
+    pub full: bool,
+    pub executions: bool,
+    pub packs: bool,
+    pub conflicts: bool,
+    pub lanes: bool,
+    pub evidence: bool,
+    pub timeline: bool,
+    pub explain: bool,
+    pub decompose: bool,
+    pub diff_stable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6436,7 +8965,7 @@ pub enum ChangepackStatus {
     Verified,
     Reviewed,
     Approved,
-    Saved,
+    Submitted,
     Rejected,
     RolledBack,
 }
@@ -6453,10 +8982,10 @@ impl ChangepackStatus {
                 | (Verified, Approved)
                 | (Reviewed, Approved)
                 | (Reviewed, Rejected)
-                | (Approved, Saved)
-                | (Saved, RolledBack)
+                | (Approved, Submitted)
+                | (Submitted, RolledBack)
                 | (Approved, Approved)
-                | (Saved, Saved)
+                | (Submitted, Submitted)
         );
         if ok {
             Ok(next)
@@ -6651,9 +9180,13 @@ pub struct RiskSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SaveReadinessReport {
+pub struct SubmitReadinessReport {
     pub ok: bool,
     pub blockers: Vec<String>,
+    #[serde(default)]
+    pub ownership: Option<crate::ownership::OwnershipReport>,
+    #[serde(default)]
+    pub reviewability: Option<crate::reviewability::ReviewabilityReport>,
     #[serde(default)]
     pub verification_receipt_id: Option<String>,
     #[serde(default)]
@@ -6739,7 +9272,8 @@ impl RiskPathRule {
 pub struct PolicyConfig {
     pub approval: ApprovalPolicy,
     pub agent: AgentPolicy,
-    pub save: SavePolicy,
+    #[serde(alias = "save")]
+    pub submit: SubmitPolicy,
 }
 
 impl Default for PolicyConfig {
@@ -6755,7 +9289,7 @@ impl Default for PolicyConfig {
                 allow_secrets: false,
                 require_isolated_workspace: true,
             },
-            save: SavePolicy {
+            submit: SubmitPolicy {
                 block_if_tests_fail: true,
                 block_if_unreviewed_high_risk: true,
                 block_if_draft_dir_in_candidate: true,
@@ -6777,7 +9311,7 @@ pub struct AgentPolicy {
     pub require_isolated_workspace: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SavePolicy {
+pub struct SubmitPolicy {
     pub block_if_tests_fail: bool,
     pub block_if_unreviewed_high_risk: bool,
     pub block_if_draft_dir_in_candidate: bool,
@@ -6906,14 +9440,14 @@ pub struct DisperseResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SaveReceipt {
+pub struct SubmitReceipt {
     pub schema_version: u32,
     pub id: ReceiptId,
     pub changepack_id: ChangepackId,
     pub actor: ActorRef,
-    pub native_save_status: NativeSaveStatus,
+    pub native_submit_status: NativeSubmitStatus,
     pub hook_status: HookStatus,
-    pub overall_status: SaveOverallStatus,
+    pub overall_status: SubmitOverallStatus,
     pub message_ref: String,
     pub hook_results: Vec<HookResult>,
     #[serde(default)]
@@ -6934,8 +9468,9 @@ pub struct SaveReceipt {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum NativeSaveStatus {
-    Saved,
+pub enum NativeSubmitStatus {
+    #[serde(alias = "saved")]
+    Submitted,
     Failed,
 }
 
@@ -6950,10 +9485,12 @@ pub enum HookStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SaveOverallStatus {
-    Saved,
+pub enum SubmitOverallStatus {
+    #[serde(alias = "saved")]
+    Submitted,
     Failed,
-    SavedWithHookFailure,
+    #[serde(alias = "submitted_with_hook_failure")]
+    SubmittedWithHookFailure,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -7145,6 +9682,41 @@ fn pattern_match(pattern: &str, path: &str) -> bool {
         return true;
     }
     path == pattern || path.starts_with(&format!("{pattern}/"))
+}
+
+fn validate_task_definition(ws: &Workspace, task: &crate::task::TaskDefinition) -> DraftResult<()> {
+    if task.success_criteria.is_empty() {
+        return Err(
+            DraftError::invalid_config("task success criteria cannot be empty")
+                .with_suggestion("pass --success <criteria> or choose a template with defaults"),
+        );
+    }
+    if task.allowed_zones.iter().any(|zone| zone.trim().is_empty())
+        || task
+            .forbidden_zones
+            .iter()
+            .any(|zone| zone.trim().is_empty())
+    {
+        return Err(DraftError::invalid_config(
+            "task zones cannot contain empty patterns",
+        ));
+    }
+    let protected_rules = crate::protected::rules_for_project(&ws.root);
+    if let Some(zone) = task
+        .allowed_zones
+        .iter()
+        .find(|zone| crate::protected::matches_rules(&protected_rules, zone))
+    {
+        return Err(DraftError::new(
+            DraftErrorKind::ProtectedFileAccess,
+            format!("task allowed zone '{zone}' conflicts with protected-file rules"),
+        )
+        .with_suggestion("remove protected paths from --allow and keep them in --forbid"));
+    }
+    serde_json::to_value(task)
+        .and_then(serde_json::from_value::<crate::task::TaskDefinition>)
+        .map_err(|err| DraftError::storage(format!("task schema round-trip failed: {err}")))?;
+    Ok(())
 }
 
 fn rel_path(root: &Path, path: &Path) -> DraftResult<WorkspacePath> {
@@ -7697,7 +10269,7 @@ fn unsafe_legacy_pending_pack_count(ws: &Workspace) -> DraftResult<usize> {
         };
         let safe_terminal = matches!(
             pack.status,
-            ChangepackStatus::Saved | ChangepackStatus::Rejected | ChangepackStatus::RolledBack
+            ChangepackStatus::Submitted | ChangepackStatus::Rejected | ChangepackStatus::RolledBack
         ) || !pack.active;
         let internal_base = pack.name.as_deref() == Some("base")
             && pack.patch_refs.is_empty()
@@ -7718,32 +10290,329 @@ fn load_evidence(ws: &Workspace, pack: &Changepack) -> DraftResult<Evidence> {
     read_json(&ws.layout.pack_dir(&pack.id).join("evidence.json"))
 }
 
-fn save_readiness(
+fn pack_has_path_conflicts(
+    ws: &Workspace,
+    pack: &Changepack,
+    patch: &PatchSet,
+) -> DraftResult<bool> {
+    let paths: BTreeSet<String> = patch
+        .files
+        .iter()
+        .map(|f| f.path.as_str().to_string())
+        .collect();
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    if !ws.layout.changepacks_dir().exists() {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(ws.layout.changepacks_dir())? {
+        let path = entry?.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let manifest = path.join("manifest.json");
+        if !manifest.exists() {
+            continue;
+        }
+        let other: Changepack = read_json(&manifest)?;
+        if other.id == pack.id
+            || matches!(
+                other.status,
+                ChangepackStatus::Submitted
+                    | ChangepackStatus::Rejected
+                    | ChangepackStatus::RolledBack
+            )
+        {
+            continue;
+        }
+        let other_patch = match load_patch(ws, &other) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if other_patch
+            .files
+            .iter()
+            .any(|f| paths.contains(f.path.as_str()))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn patch_changed_lines(patch: &PatchSet) -> u64 {
+    patch
+        .files
+        .iter()
+        .flat_map(|file| file.hunks.iter())
+        .map(|hunk| u64::from(hunk.old_lines.max(hunk.new_lines)))
+        .sum()
+}
+
+fn patch_zones(patch: &PatchSet) -> usize {
+    patch
+        .files
+        .iter()
+        .filter_map(|file| file.path.as_str().split('/').next())
+        .filter(|zone| !zone.is_empty())
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
+fn hooks_submit_ready(ws: &Workspace) -> DraftResult<bool> {
+    let cfg = ResolvedConfig::load(ws)?;
+    let hooks = cfg
+        .submit_hooks(SubmitHookPhase::Before)
+        .into_iter()
+        .chain(cfg.submit_hooks(SubmitHookPhase::After));
+    Ok(hooks
+        .filter(|hook| hook.enabled)
+        .all(|hook| !hook.command.trim().is_empty()))
+}
+
+fn ensure_workspace_matches_hash(
+    ws: &Workspace,
+    expected_hash: &str,
+    action: &str,
+    suggestion: &str,
+) -> DraftResult<()> {
+    let current_hash = crate::hashing::workspace_hash(&ws.root)?;
+    if current_hash == expected_hash {
+        return Ok(());
+    }
+    Err(DraftError::new(
+        DraftErrorKind::DirtyWorkspace,
+        format!("workspace has Draft-visible edits that are not part of the {action} baseline"),
+    )
+    .with_context(format!(
+        "expected workspace hash {expected_hash}, found {current_hash}"
+    ))
+    .with_suggestion(suggestion))
+}
+
+fn ensure_pack_workspace_matches_target(
+    ws: &Workspace,
+    pack: &Changepack,
+    action: &str,
+    suggestion: &str,
+) -> DraftResult<()> {
+    let store = crate::pack::PackStore::new(crate::layout::ProjectPaths::for_root(&ws.root));
+    let Some(location) = store.locate(pack.id.as_str()) else {
+        return Ok(());
+    };
+    let manifest = store.read_manifest_in(location, pack.id.as_str())?;
+    ensure_workspace_matches_hash(ws, &manifest.target_workspace_hash, action, suggestion)
+}
+
+fn decision_dirty_action(kind: DecisionKind) -> &'static str {
+    match kind {
+        DecisionKind::Approve => "approve",
+        DecisionKind::Reject => "reject",
+        DecisionKind::NeedsChanges => "request changes",
+        DecisionKind::AcceptFile => "accept file",
+        DecisionKind::RejectFile => "reject file",
+        DecisionKind::AcceptCandidate => "accept candidate",
+    }
+}
+
+fn insert_inbox(
+    by_id: &mut BTreeMap<String, crate::workflow::InboxItem>,
+    id: String,
+    kind: &str,
+    subject_id: String,
+    status: &str,
+    summary: String,
+    next_action: String,
+) {
+    by_id
+        .entry(id.clone())
+        .or_insert(crate::workflow::InboxItem {
+            id,
+            kind: kind.into(),
+            subject_id,
+            status: status.into(),
+            summary,
+            next_action,
+        });
+}
+
+fn index_status(name: &str, path: PathBuf, inputs: &[PathBuf]) -> DraftResult<Value> {
+    let path_meta = match fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(serde_json::json!({
+                "name": name,
+                "path": path,
+                "state": "missing",
+                "reason": "index file is missing",
+            }));
+        }
+        Err(e) => {
+            return Ok(serde_json::json!({
+                "name": name,
+                "path": path,
+                "state": "failed",
+                "reason": e.to_string(),
+            }));
+        }
+    };
+    let mut stale_inputs = Vec::new();
+    if let Ok(index_modified) = path_meta.modified() {
+        for input in inputs {
+            if !input.exists() {
+                continue;
+            }
+            let mut newest = None;
+            collect_newest_mtime(input, &mut newest)?;
+            if newest.map(|t| t > index_modified).unwrap_or(false) {
+                stale_inputs.push(input.display().to_string());
+            }
+        }
+    }
+    let state = if stale_inputs.is_empty() {
+        "fresh"
+    } else {
+        "stale"
+    };
+    Ok(serde_json::json!({
+        "name": name,
+        "path": path,
+        "state": state,
+        "stale_inputs": stale_inputs,
+    }))
+}
+
+fn collect_newest_mtime(
+    path: &Path,
+    newest: &mut Option<std::time::SystemTime>,
+) -> DraftResult<()> {
+    let meta = fs::metadata(path)?;
+    if let Ok(modified) = meta.modified() {
+        if newest.map(|current| modified > current).unwrap_or(true) {
+            *newest = Some(modified);
+        }
+    }
+    if meta.is_dir() {
+        for entry in fs::read_dir(path)? {
+            collect_newest_mtime(&entry?.path(), newest)?;
+        }
+    }
+    Ok(())
+}
+
+fn submit_readiness(
     ws: &Workspace,
     pack: &Changepack,
     patch: &PatchSet,
     policy: &PolicyConfig,
-) -> DraftResult<SaveReadinessReport> {
+) -> DraftResult<SubmitReadinessReport> {
     let mut blockers = Vec::new();
     let verification = latest_current_passed_verification(ws, pack, patch)?;
-    if policy.save.block_if_tests_fail && verification.is_none() {
-        blockers.push("current passed verification receipt is required before save".to_string());
+    if policy.submit.block_if_tests_fail && verification.is_none() {
+        blockers.push("current passed verification receipt is required before submit".to_string());
     }
     let review =
         latest_completed_review_after(ws, pack, verification.as_ref().map(|v| v.created_at))?;
     let approval = latest_human_approval_after(ws, pack, review.as_ref().map(|r| r.created_at))?;
-    if policy.save.block_if_unreviewed_high_risk {
+    if policy.submit.block_if_unreviewed_high_risk {
         if review.is_none() {
-            blockers.push("current review receipt is required before save".to_string());
+            blockers.push("current review receipt is required before submit".to_string());
         }
         if approval.is_none() || !matches!(pack.status, ChangepackStatus::Approved) {
             blockers
-                .push("human approval is required after current review before save".to_string());
+                .push("human approval is required after current review before submit".to_string());
         }
     }
-    Ok(SaveReadinessReport {
+    let workflow = crate::workflow::WorkflowStore::for_root(&ws.root);
+    let mut paths_to_check = Vec::new();
+    for file in &patch.files {
+        paths_to_check.push(&file.path);
+        if let Some(old_path) = &file.old_path {
+            paths_to_check.push(old_path);
+        }
+    }
+    let protected_violations = crate::protected::violations(&ws.root, paths_to_check.clone());
+    let no_protected = protected_violations.is_empty();
+    let no_forbidden = paths_to_check
+        .iter()
+        .all(|path| !path.as_str().starts_with(".draft/") && path.as_str() != ".draft");
+    let base_valid =
+        crate::stable::StableHeadStore::new(crate::layout::ProjectPaths::for_root(&ws.root))
+            .read()
+            .is_ok();
+    let no_conflicts = !pack_has_path_conflicts(ws, pack, patch)?;
+    let hooks_ready = hooks_submit_ready(ws)?;
+    let patch_paths = paths_to_check
+        .iter()
+        .map(|path| path.as_str().to_string())
+        .collect::<Vec<_>>();
+    let decision_authors = workflow
+        .decisions()?
+        .into_iter()
+        .filter(|decision| decision.pack_id.as_deref() == Some(pack.id.as_str()))
+        .map(|decision| decision.author)
+        .collect::<Vec<_>>();
+    let ownership = crate::ownership::evaluate(&ws.root, &patch_paths, &decision_authors)?;
+    if ownership.missing_owner_review {
+        blockers.push(format!(
+            "owner_review: owner review required for {}",
+            ownership.domains.join(", ")
+        ));
+    }
+    let changed_lines = patch_changed_lines(patch);
+    let zones = patch_zones(patch);
+    let unresolved_warnings = load_evidence(ws, pack)
+        .map(|evidence| evidence.warnings.len())
+        .unwrap_or_default();
+    let reviewability = crate::reviewability::evaluate(
+        &crate::reviewability::budget(&ws.root)?,
+        patch.files.len(),
+        changed_lines,
+        zones,
+        ownership.domains.len(),
+        unresolved_warnings,
+    );
+    if reviewability.status == "poor" {
+        blockers.push(format!(
+            "reviewability: {}",
+            reviewability.reasons.join("; ")
+        ));
+    }
+    let rollback_available = pack.base_snapshot_id.as_str() != "chk_empty"
+        || latest_snapshot(ws)?.is_some()
+        || crate::stable::StableHeadStore::new(crate::layout::ProjectPaths::for_root(&ws.root))
+            .exists();
+    let view = workflow.readiness(
+        pack.id.as_str(),
+        true,
+        base_valid,
+        no_conflicts,
+        no_protected,
+        no_forbidden,
+        hooks_ready,
+        rollback_available,
+    )?;
+    for check in view.checks.into_iter().filter(|check| !check.passed) {
+        if check.id == "protected_files" {
+            for violation in &protected_violations {
+                blockers.push(format!(
+                    "{}: {} matched {} ({})",
+                    check.id, violation.path, violation.pattern, violation.reason
+                ));
+            }
+            if protected_violations.is_empty() {
+                blockers.push(format!("{}: {}", check.id, check.reason));
+            }
+        } else {
+            blockers.push(format!("{}: {}", check.id, check.reason));
+        }
+    }
+    Ok(SubmitReadinessReport {
         ok: blockers.is_empty(),
         blockers,
+        ownership: Some(ownership),
+        reviewability: Some(reviewability),
         verification_receipt_id: verification.map(|v| v.id),
         review_receipt_id: review.map(|r| r.id),
         approval_ref: approval,
@@ -7762,7 +10631,7 @@ fn effective_policy(ws: &Workspace) -> DraftResult<crate::policy::Policy> {
         .map_err(DraftError::invalid_config)
 }
 
-fn validate_canonical_save_gate(ws: &Workspace, pack_id: &str) -> DraftResult<()> {
+fn validate_canonical_submit_gate(ws: &Workspace, pack_id: &str) -> DraftResult<()> {
     let policy = effective_policy(ws)?;
     let paths = crate::layout::ProjectPaths::for_root(&ws.root);
     let store = crate::pack::PackStore::new(paths.clone());
@@ -7770,21 +10639,21 @@ fn validate_canonical_save_gate(ws: &Workspace, pack_id: &str) -> DraftResult<()
     if !manifest.is_verified() {
         return Err(DraftError::new(
             DraftErrorKind::VerificationFailed,
-            "canonical verification receipt is required before save",
+            "canonical verification receipt is required before submit",
         ));
     }
-    if policy.require_approval_for_save
+    if policy.require_approval_for_submit
         && manifest.approval_state != crate::pack::ApprovalState::Approved
     {
         return Err(DraftError::new(
             DraftErrorKind::ReviewRequired,
-            "canonical approval receipt is required before save",
+            "canonical approval receipt is required before submit",
         ));
     }
     if manifest.import_state == crate::pack::ImportState::ImportedQuarantined {
         return Err(DraftError::new(
             DraftErrorKind::ReviewRequired,
-            "imported packs must be locally verified and approved before save",
+            "imported packs must be locally verified and approved before submit",
         ));
     }
     validate_canonical_risk_gate(&policy, &paths, pack_id, &manifest)?;
@@ -7795,7 +10664,7 @@ fn validate_canonical_save_gate(ws: &Workspace, pack_id: &str) -> DraftResult<()
                 DraftErrorKind::VerificationFailed,
                 "workspace content changed after canonical verification",
             )
-            .with_suggestion("run `draft verify <pck_id>` again before save"));
+            .with_suggestion("run `draft verify <pck_id>` again before submit"));
         }
     }
     let ledger = crate::ledger::TrustLedger::open(&ws.root, ws.id.as_str())?;
@@ -7811,7 +10680,7 @@ fn validate_canonical_save_gate(ws: &Workspace, pack_id: &str) -> DraftResult<()
 }
 
 /// Enforce the canonical risk report (`risk.json`) against the effective
-/// policy: an unresolved critical risk blocks save, and high/critical risk
+/// policy: an unresolved critical risk blocks submit, and high/critical risk
 /// requires explicit approval. A missing risk report fails closed when the
 /// policy blocks on critical risk.
 fn validate_canonical_risk_gate(
@@ -7827,7 +10696,7 @@ fn validate_canonical_risk_gate(
                 DraftErrorKind::RiskPolicyBlocked,
                 "no canonical risk report exists for this pack",
             )
-            .with_suggestion("run `draft verify <pck_id>` before save"));
+            .with_suggestion("run `draft verify <pck_id>` before submit"));
         }
         return Ok(());
     }
@@ -7835,7 +10704,7 @@ fn validate_canonical_risk_gate(
     if policy.block_on_critical_risk && risk.risk_level == crate::risk::RiskLevel::Critical {
         return Err(DraftError::new(
             DraftErrorKind::RiskPolicyBlocked,
-            "unresolved critical risk blocks save",
+            "unresolved critical risk blocks submit",
         )
         .with_suggestion("resolve the required actions in risk.json and re-verify"));
     }
@@ -7848,7 +10717,7 @@ fn validate_canonical_risk_gate(
     {
         return Err(DraftError::new(
             DraftErrorKind::ReviewRequired,
-            "high-risk pack requires explicit approval before save",
+            "high-risk pack requires explicit approval before submit",
         ));
     }
     Ok(())
@@ -8066,7 +10935,7 @@ fn write_receipt(ws: &Workspace, receipt: &Receipt) -> DraftResult<()> {
     Ok(())
 }
 
-fn write_save_receipt(ws: &Workspace, receipt: &SaveReceipt) -> DraftResult<()> {
+fn write_submit_receipt(ws: &Workspace, receipt: &SubmitReceipt) -> DraftResult<()> {
     let mut receipt = receipt.clone();
     collect_object_refs_into_vec(
         &serde_json::to_value(&receipt.hook_results).unwrap_or(Value::Null),
@@ -8082,7 +10951,7 @@ fn write_save_receipt(ws: &Workspace, receipt: &SaveReceipt) -> DraftResult<()> 
         "receipt.created",
         Some(receipt.id.to_string()),
         serde_json::json!({
-            "kind": "save",
+            "kind": "submit",
             "status": receipt.overall_status,
             "subject_id": receipt.changepack_id,
             "hook_receipt_refs": receipt.hook_receipt_refs
@@ -8214,8 +11083,7 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
                     } else if receipt.get("hook_results").is_some()
                         || receipt.get("overall_status").is_some()
                     {
-                        "save"
-                    } else {
+                        "submit"                    } else {
                         "receipt"
                     }
                 }),
@@ -8332,21 +11200,21 @@ fn sql_err(e: rusqlite::Error) -> DraftError {
     DraftError::storage(format!("SQLite index error: {e}"))
 }
 
-fn failed_save(
+fn failed_submit(
     ws: &Workspace,
     pack: &Changepack,
     started: DateTime<Utc>,
     reason: &str,
-) -> DraftResult<SaveReceipt> {
+) -> DraftResult<SubmitReceipt> {
     let store = ObjectStore::new(ws.layout.clone());
-    let mut receipt = SaveReceipt {
+    let mut receipt = SubmitReceipt {
         schema_version: SCHEMA_VERSION,
         id: ReceiptId::generate(),
         changepack_id: pack.id.clone(),
         actor: resolve_actor(&ws.layout.draft_dir),
-        native_save_status: NativeSaveStatus::Failed,
+        native_submit_status: NativeSubmitStatus::Failed,
         hook_status: HookStatus::Skipped,
-        overall_status: SaveOverallStatus::Failed,
+        overall_status: SubmitOverallStatus::Failed,
         message_ref: store.put_bytes(b"")?,
         hook_results: Vec::new(),
         hook_receipt_refs: Vec::new(),
@@ -8360,7 +11228,7 @@ fn failed_save(
         failure_reason: Some(reason.to_string()),
     };
     receipt.receipt_hash = hash_json(&receipt)?;
-    write_save_receipt(ws, &receipt)?;
+    write_submit_receipt(ws, &receipt)?;
     Ok(receipt)
 }
 
@@ -8402,13 +11270,13 @@ fn render_message(
     );
     values.insert("risk_level".to_string(), "unknown".to_string());
     values.insert("files_changed".to_string(), patch.files.len().to_string());
-    interpolate_lenient(&cfg.save_message_template, &values)
+    interpolate_lenient(&cfg.submit_message_template, &values)
 }
 
 /// The fraction (0.0–1.0) of a candidate's packs that were later rolled back —
 /// a risk signal, never a verdict on its own. Returns 0.0 when the candidate
 /// has produced no packs. Live values stay 0.0 until candidate attribution is
-/// recorded on manifests (e.g. via `draft a2a link`).
+/// recorded on manifests.
 fn candidate_rollback_rate(
     events: &[crate::event::EventRecord],
     manifests: &[crate::pack::PackManifest],
@@ -8459,10 +11327,10 @@ fn plan_import_apply(
     };
     let conflict = |path: &WorkspacePath, why: &str| {
         DraftError::new(
-            DraftErrorKind::SaveFailed,
+            DraftErrorKind::SubmitFailed,
             format!("cannot apply imported change to '{path}': {why}"),
         )
-        .with_suggestion("resolve the local conflict, then re-verify and save again")
+        .with_suggestion("resolve the local conflict, then re-verify and submit again")
     };
 
     let mut writes = Vec::new();
@@ -8575,12 +11443,12 @@ fn read_imported_object(pack_dir: &Path, object_ref: &str) -> DraftResult<Vec<u8
     Ok(bytes)
 }
 
-/// SRS-FR-129: rolling back to a pack that was saved and disposed must fail
+/// SRS-FR-129: rolling back to a pack that was submitted and disposed must fail
 /// clearly and point to the receipt-anchored stable state when it is known.
 /// Falls back to the original load error when the pack simply never existed.
 fn disposed_pack_rollback_error(ws: &Workspace, pack_id: &str, original: DraftError) -> DraftError {
     let paths = crate::layout::ProjectPaths::for_root(&ws.root);
-    let mut saved_receipt: Option<String> = None;
+    let mut submitted_receipt: Option<String> = None;
     let mut disposed = false;
     if let Ok(files) = crate::fsutil::list_with_extension(&paths.receipts_dir(), "json") {
         for file in files {
@@ -8592,13 +11460,13 @@ fn disposed_pack_rollback_error(ws: &Workspace, pack_id: &str, original: DraftEr
                 continue;
             }
             match record.event_type.as_str() {
-                "PackSaved" => saved_receipt = Some(record.receipt_id.clone()),
+                "PackSubmitted" => submitted_receipt = Some(record.receipt_id.clone()),
                 "PackDisposed" => disposed = true,
                 _ => {}
             }
         }
     }
-    if !disposed && saved_receipt.is_none() {
+    if !disposed && submitted_receipt.is_none() {
         if let Ok(head) = crate::stable::StableHeadStore::new(paths).read() {
             if head
                 .finalized_pack_summary
@@ -8610,14 +11478,14 @@ fn disposed_pack_rollback_error(ws: &Workspace, pack_id: &str, original: DraftEr
             }
         }
     }
-    if disposed || saved_receipt.is_some() {
+    if disposed || submitted_receipt.is_some() {
         let err = DraftError::new(
             DraftErrorKind::NotFound,
             format!(
-                "pack '{pack_id}' was saved and disposed; disposed packs are not rollback targets"
+                "pack '{pack_id}' was submitted and disposed; disposed packs are not rollback targets"
             ),
         );
-        return match saved_receipt {
+        return match submitted_receipt {
             Some(rcp) => err.with_suggestion(format!(
                 "roll back to its receipt instead: draft rollback {rcp}"
             )),
@@ -8695,7 +11563,7 @@ const ROLLBACK_ELIGIBLE_EVENTS: &[&str] = &[
     "PackCreated",
     "PackVerified",
     "PackApproved",
-    "PackSaved",
+    "PackSubmitted",
 ];
 
 /// Resolve a canonical signed receipt to a rollback snapshot via its subject.
@@ -9264,12 +12132,268 @@ fn builtin_candidates() -> Vec<CandidateRecord> {
     ]
 }
 
-fn render_candidate_command(template: &str, instruction: &str) -> Vec<String> {
-    let rendered = template.replace("{{instruction}}", instruction);
-    rendered
-        .split_whitespace()
-        .map(ToString::to_string)
-        .collect()
+/// Map a legacy project candidate record onto the canonical profile shape.
+fn legacy_candidate_profile(record: CandidateRecord) -> crate::candidate::CandidateProfile {
+    let kind = crate::candidate::CandidateKind::parse(&record.kind);
+    let command = if kind.runs_command() {
+        Some(record.template.clone())
+    } else {
+        None
+    };
+    let mut profile = crate::candidate::CandidateProfile {
+        schema_version: crate::DRAFT_SCHEMA_VERSION.into(),
+        name: record.name,
+        kind,
+        command,
+        capabilities: Default::default(),
+        limits: Default::default(),
+        source: "project-record".into(),
+        created_at: now(),
+        updated_at: now(),
+    };
+    profile.capabilities.can_plan = true;
+    if !kind.runs_command() {
+        profile.limits.isolation_mode = crate::candidate::IsolationMode::InPlace;
+        profile.capabilities.can_accept_task_contract = false;
+    }
+    profile
+}
+
+fn execution_status_label(status: crate::task::ExecutionStatus) -> &'static str {
+    match status {
+        crate::task::ExecutionStatus::Queued => "queued",
+        crate::task::ExecutionStatus::Running => "running",
+        crate::task::ExecutionStatus::Cancelled => "cancelled",
+        crate::task::ExecutionStatus::Interrupted => "interrupted",
+        crate::task::ExecutionStatus::Retrying => "retrying",
+        crate::task::ExecutionStatus::Completed => "completed",
+        crate::task::ExecutionStatus::Failed => "failed",
+    }
+}
+
+fn inline_task_name(input: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for c in input.chars().flat_map(|c| c.to_lowercase()) {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+        if out.len() >= 80 {
+            break;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "inline-task".to_string()
+    } else {
+        trimmed
+    }
+}
+
+#[cfg(unix)]
+fn terminate_process(pid: u32) -> std::io::Result<()> {
+    std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status()
+        .map(|_| ())
+}
+
+#[cfg(not(unix))]
+fn terminate_process(_pid: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
+fn pack_name_for(
+    task: &crate::task::TaskDefinition,
+    profile: &crate::candidate::CandidateProfile,
+    exe_id: &str,
+) -> String {
+    let suffix: String = exe_id
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{}-{}-{}", task.name, profile.name, suffix)
+}
+
+/// One accepted change collected from an execution workspace.
+#[derive(Debug, Clone)]
+struct IsolatedChange {
+    path: WorkspacePath,
+    kind: IsolatedChangeKind,
+    changed_lines: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IsolatedChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+/// Diff an execution workspace against the pre-spawn baseline snapshot.
+/// `work_dir` may be the isolated copy or the real root (in-place runs).
+fn collect_isolated_changes(
+    real_root: &Path,
+    work_dir: &Path,
+    baseline: &Snapshot,
+) -> DraftResult<Vec<IsolatedChange>> {
+    let ignore = IgnoreMatcher::load(&DraftLayout::for_root(real_root).ignore_file())?;
+    let baseline_by_path: BTreeMap<&str, &FileManifestEntry> = baseline
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f))
+        .collect();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut changes = Vec::new();
+    walk_dir(work_dir, &mut |path| {
+        if path.is_dir() {
+            return Ok(());
+        }
+        let rel = rel_path(work_dir, path)?;
+        if ignore.is_ignored(rel.as_str()) {
+            return Ok(());
+        }
+        seen.insert(rel.as_str().to_string());
+        let data = fs::read(path)?;
+        let hash = format!("b3:{}", blake3_hex(&data));
+        match baseline_by_path.get(rel.as_str()) {
+            Some(entry) if entry.content_hash.as_deref() == Some(hash.as_str()) => {}
+            Some(entry) => {
+                let old_len = entry.size_bytes.max(1);
+                let changed_lines = estimate_changed_lines(&data, old_len);
+                changes.push(IsolatedChange {
+                    path: rel,
+                    kind: IsolatedChangeKind::Modified,
+                    changed_lines,
+                });
+            }
+            None => {
+                let changed_lines = count_lines(&data);
+                changes.push(IsolatedChange {
+                    path: rel,
+                    kind: IsolatedChangeKind::Added,
+                    changed_lines,
+                });
+            }
+        }
+        Ok(())
+    })?;
+    for entry in &baseline.files {
+        if !seen.contains(entry.path.as_str()) && !ignore.is_ignored(entry.path.as_str()) {
+            changes.push(IsolatedChange {
+                path: entry.path.clone(),
+                kind: IsolatedChangeKind::Deleted,
+                changed_lines: 0,
+            });
+        }
+    }
+    Ok(changes)
+}
+
+fn count_lines(data: &[u8]) -> u64 {
+    if data.is_empty() {
+        return 0;
+    }
+    data.iter().filter(|b| **b == b'\n').count() as u64 + 1
+}
+
+/// A cheap, conservative changed-line estimate: the larger of the new line
+/// count and a byte-based estimate of the old size. Used only for candidate
+/// change-budget enforcement.
+fn estimate_changed_lines(new_data: &[u8], old_size_bytes: u64) -> u64 {
+    let new_lines = count_lines(new_data);
+    let old_estimate = old_size_bytes / 40; // ~40 bytes per line of code
+    new_lines.max(old_estimate.max(1))
+}
+
+/// Contents of workspace files about to be overwritten by an execution's
+/// changes, so the tree can be restored afterwards.
+struct WorkspaceStash {
+    /// path -> original bytes (None = file did not exist before).
+    entries: Vec<(WorkspacePath, Option<Vec<u8>>)>,
+}
+
+fn stash_workspace_files(root: &Path, changes: &[IsolatedChange]) -> DraftResult<WorkspaceStash> {
+    let mut entries = Vec::new();
+    for change in changes {
+        let dest = safe_workspace_dest(root, &change.path)?;
+        let original = if dest.exists() {
+            Some(fs::read(&dest).map_err(|e| {
+                DraftError::storage(format!("failed to stash {}: {e}", change.path.as_str()))
+            })?)
+        } else {
+            None
+        };
+        entries.push((change.path.clone(), original));
+    }
+    Ok(WorkspaceStash { entries })
+}
+
+fn apply_isolated_changes(
+    root: &Path,
+    work_dir: &Path,
+    changes: &[IsolatedChange],
+) -> DraftResult<()> {
+    for change in changes {
+        let dest = safe_workspace_dest(root, &change.path)?;
+        match change.kind {
+            IsolatedChangeKind::Deleted => {
+                if dest.exists() {
+                    fs::remove_file(&dest).map_err(|e| {
+                        DraftError::storage(format!(
+                            "failed to apply deletion of {}: {e}",
+                            change.path.as_str()
+                        ))
+                    })?;
+                }
+            }
+            IsolatedChangeKind::Added | IsolatedChangeKind::Modified => {
+                let src = work_dir.join(change.path.as_str());
+                let data = fs::read(&src).map_err(|e| {
+                    DraftError::storage(format!(
+                        "failed to read execution output {}: {e}",
+                        change.path.as_str()
+                    ))
+                })?;
+                if let Some(parent) = dest.parent() {
+                    ensure_dir(parent)?;
+                }
+                write_atomic(&dest, &data)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn restore_workspace_files(root: &Path, stash: WorkspaceStash) -> DraftResult<()> {
+    for (path, original) in stash.entries {
+        let dest = safe_workspace_dest(root, &path)?;
+        match original {
+            Some(bytes) => {
+                if let Some(parent) = dest.parent() {
+                    ensure_dir(parent)?;
+                }
+                write_atomic(&dest, &bytes)?;
+            }
+            None => {
+                if dest.exists() {
+                    fs::remove_file(&dest).map_err(|e| {
+                        DraftError::storage(format!("failed to restore {}: {e}", path.as_str()))
+                    })?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn redact_secrets(input: &str) -> String {
@@ -9486,6 +12610,121 @@ fn safe_workspace_dest(root: &Path, rel: &WorkspacePath) -> DraftResult<PathBuf>
         }
     }
     Ok(dest)
+}
+
+fn checked_editor_path(root: &Path, path: &str) -> DraftResult<WorkspacePath> {
+    let rel = WorkspacePath::new(crate::pathguard::check_relative(path).map_err(|e| {
+        DraftError::new(
+            DraftErrorKind::ProtectedFileAccess,
+            format!("unsafe editor path '{path}': {e}"),
+        )
+    })?);
+    crate::protected::ensure_allowed(root, &rel)?;
+    Ok(rel)
+}
+
+fn editor_backup_path(root: &Path, rel: &WorkspacePath) -> DraftResult<PathBuf> {
+    let project_paths = crate::layout::ProjectPaths::for_root(root);
+    Ok(project_paths.editor_dir().join("backups").join(format!(
+        "{}-{}",
+        now().timestamp_millis(),
+        rel.as_str().replace('/', "__")
+    )))
+}
+
+fn simple_unified_diff(path: &str, old: &str, new: &str) -> String {
+    if old == new {
+        return format!("--- a/{path}\n+++ b/{path}\n");
+    }
+    let mut out = format!("--- a/{path}\n+++ b/{path}\n");
+    let old_lines = old.lines().collect::<Vec<_>>();
+    let new_lines = new.lines().collect::<Vec<_>>();
+    out.push_str(&format!(
+        "@@ -1,{} +1,{} @@\n",
+        old_lines.len(),
+        new_lines.len()
+    ));
+    let max = old_lines.len().max(new_lines.len());
+    for i in 0..max {
+        match (old_lines.get(i), new_lines.get(i)) {
+            (Some(a), Some(b)) if a == b => {
+                out.push(' ');
+                out.push_str(a);
+                out.push('\n');
+            }
+            (Some(a), Some(b)) => {
+                out.push('-');
+                out.push_str(a);
+                out.push('\n');
+                out.push('+');
+                out.push_str(b);
+                out.push('\n');
+            }
+            (Some(a), None) => {
+                out.push('-');
+                out.push_str(a);
+                out.push('\n');
+            }
+            (None, Some(b)) => {
+                out.push('+');
+                out.push_str(b);
+                out.push('\n');
+            }
+            (None, None) => {}
+        }
+    }
+    out
+}
+
+fn collect_editor_entries(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<EditorFileEntry>,
+) -> DraftResult<()> {
+    if crate::pathguard::is_draft_path(
+        dir.strip_prefix(root)
+            .unwrap_or(dir)
+            .to_string_lossy()
+            .as_ref(),
+    ) {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)
+        .map_err(|e| DraftError::storage(format!("cannot read {}: {e}", dir.display())))?
+    {
+        let entry = entry.map_err(|e| DraftError::storage(e.to_string()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| DraftError::storage(format!("cannot stat {}: {e}", path.display())))?;
+        let rel_path = match path.strip_prefix(root) {
+            Ok(path) => WorkspacePath::from_relative(path),
+            Err(_) => continue,
+        };
+        if crate::pathguard::is_draft_path(rel_path.as_str()) {
+            continue;
+        }
+        if file_type.is_dir() {
+            if !file_type.is_symlink() {
+                collect_editor_entries(root, &path, out)?;
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let metadata = entry
+            .metadata()
+            .map_err(|e| DraftError::storage(format!("cannot stat {}: {e}", path.display())))?;
+        let protected = !crate::protected::violations(root, [&rel_path]).is_empty();
+        out.push(EditorFileEntry {
+            path: rel_path.to_string(),
+            kind: "file".to_string(),
+            protected,
+            bytes: metadata.len(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -9948,6 +13187,214 @@ fn json_err(e: serde_json::Error) -> DraftError {
     DraftError::storage(format!("JSON error: {e}"))
 }
 
+fn parse_duration_seconds(raw: &str) -> DraftResult<i64> {
+    let (number, multiplier) = match raw.chars().last() {
+        Some('s') => (&raw[..raw.len() - 1], 1),
+        Some('m') => (&raw[..raw.len() - 1], 60),
+        Some('h') => (&raw[..raw.len() - 1], 3_600),
+        Some('d') => (&raw[..raw.len() - 1], 86_400),
+        _ => {
+            return Err(DraftError::invalid_config(
+                "duration must end in s, m, h, or d",
+            ))
+        }
+    };
+    let value: i64 = number
+        .parse()
+        .map_err(|_| DraftError::invalid_config("invalid duration"))?;
+    if value <= 0 {
+        return Err(DraftError::invalid_config("duration must be positive"));
+    }
+    value
+        .checked_mul(multiplier)
+        .ok_or_else(|| DraftError::invalid_config("duration is too large"))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MigrationFileKind {
+    Workspace,
+    Config,
+    Manifest,
+}
+
+#[derive(Debug)]
+struct MigrationFile {
+    path: PathBuf,
+    kind: MigrationFileKind,
+    original: Vec<u8>,
+    replacement: Vec<u8>,
+}
+
+fn prepare_migration(ws: &Workspace, backup: &Path) -> DraftResult<Vec<MigrationFile>> {
+    let paths = crate::layout::ProjectPaths::for_root(&ws.root);
+    let mut targets = vec![(ws.layout.workspace_json(), MigrationFileKind::Workspace)];
+    if ws.layout.config_toml().exists() {
+        targets.push((ws.layout.config_toml(), MigrationFileKind::Config));
+    }
+    for dir in [paths.packs_dir(), paths.quarantine_dir()] {
+        if !dir.exists() {
+            continue;
+        }
+        let mut manifests = Vec::new();
+        for entry in fs::read_dir(&dir).map_err(|err| {
+            DraftError::storage(format!("cannot inspect {}: {err}", dir.display()))
+        })? {
+            let manifest = entry
+                .map_err(|err| DraftError::storage(err.to_string()))?
+                .path()
+                .join("manifest.json");
+            if manifest.is_file() {
+                manifests.push(manifest);
+            }
+        }
+        manifests.sort();
+        targets.extend(
+            manifests
+                .into_iter()
+                .map(|path| (path, MigrationFileKind::Manifest)),
+        );
+    }
+
+    ensure_dir(backup)?;
+    let mut files = Vec::with_capacity(targets.len());
+    for (path, kind) in targets {
+        let original = fs::read(&path).map_err(|err| {
+            DraftError::storage(format!(
+                "cannot read migration target {}: {err}",
+                path.display()
+            ))
+        })?;
+        let relative = path.strip_prefix(&ws.layout.draft_dir).map_err(|_| {
+            DraftError::storage(format!(
+                "migration target {} is outside the project store",
+                path.display()
+            ))
+        })?;
+        let backup_path = backup.join(relative);
+        write_atomic(&backup_path, &original)?;
+        files.push(MigrationFile {
+            path,
+            kind,
+            original,
+            replacement: Vec::new(),
+        });
+    }
+
+    for file in &mut files {
+        file.replacement = migration_replacement(file)?;
+    }
+    Ok(files)
+}
+
+fn migration_replacement(file: &MigrationFile) -> DraftResult<Vec<u8>> {
+    match file.kind {
+        MigrationFileKind::Workspace => {
+            let mut meta: WorkspaceMetadata =
+                serde_json::from_slice(&file.original).map_err(|err| {
+                    DraftError::storage(format!(
+                        "JSON parse failed for {}: {err}",
+                        file.path.display()
+                    ))
+                })?;
+            meta.draft_version = crate::DRAFT_VERSION.into();
+            let replacement = serde_json::to_vec_pretty(&meta).map_err(json_err)?;
+            serde_json::from_slice::<WorkspaceMetadata>(&replacement).map_err(json_err)?;
+            Ok(replacement)
+        }
+        MigrationFileKind::Config => {
+            let source = std::str::from_utf8(&file.original).map_err(|err| {
+                DraftError::invalid_config(format!(
+                    "config {} is not UTF-8: {err}",
+                    file.path.display()
+                ))
+            })?;
+            let config: DraftConfig = toml::from_str(source).map_err(|err| {
+                DraftError::invalid_config(format!(
+                    "TOML parse failed for {}: {err}",
+                    file.path.display()
+                ))
+            })?;
+            let replacement = toml::to_string_pretty(&config)
+                .map_err(|err| DraftError::storage(format!("TOML serialize failed: {err}")))?
+                .into_bytes();
+            let replacement_source = std::str::from_utf8(&replacement)
+                .map_err(|err| DraftError::storage(format!("serialized TOML is invalid: {err}")))?;
+            toml::from_str::<DraftConfig>(replacement_source).map_err(|err| {
+                DraftError::storage(format!("serialized TOML failed validation: {err}"))
+            })?;
+            Ok(replacement)
+        }
+        MigrationFileKind::Manifest => {
+            let mut value: Value = serde_json::from_slice(&file.original).map_err(|err| {
+                DraftError::storage(format!(
+                    "JSON parse failed for {}: {err}",
+                    file.path.display()
+                ))
+            })?;
+            let object = value.as_object_mut().ok_or_else(|| {
+                DraftError::invalid_config(format!(
+                    "pack manifest {} must be a JSON object",
+                    file.path.display()
+                ))
+            })?;
+            if let Some(old) = object.remove("save_state") {
+                object
+                    .entry("submit_state")
+                    .or_insert_with(|| match old.as_str() {
+                        Some("saved") => Value::String("submitted".into()),
+                        Some("unsaved") => Value::String("unsubmitted".into()),
+                        _ => old,
+                    });
+            }
+            object.insert(
+                "schema_version".into(),
+                Value::String(crate::DRAFT_SCHEMA_VERSION.into()),
+            );
+            let manifest: crate::pack::PackManifest = serde_json::from_value(value.clone())
+                .map_err(|err| {
+                    DraftError::invalid_config(format!(
+                        "migrated pack manifest {} is invalid: {err}",
+                        file.path.display()
+                    ))
+                })?;
+            manifest.ensure_supported()?;
+            serde_json::to_vec_pretty(&value).map_err(json_err)
+        }
+    }
+}
+
+fn commit_migration(files: &[MigrationFile]) -> DraftResult<()> {
+    for file in files {
+        if let Err(err) = write_atomic(&file.path, &file.replacement) {
+            return match restore_migration(files) {
+                Ok(()) => Err(err),
+                Err(rollback_err) => Err(DraftError::storage(format!(
+                    "migration write failed: {}; restoring originals also failed: {}",
+                    err.message, rollback_err.message
+                ))),
+            };
+        }
+    }
+    Ok(())
+}
+
+fn restore_migration(files: &[MigrationFile]) -> DraftResult<()> {
+    let mut failures = Vec::new();
+    for file in files.iter().rev() {
+        if let Err(err) = write_atomic(&file.path, &file.original) {
+            failures.push(format!("{}: {}", file.path.display(), err.message));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(DraftError::storage(format!(
+            "failed to restore migration targets: {}",
+            failures.join("; ")
+        )))
+    }
+}
+
 impl From<serde_json::Error> for DraftError {
     fn from(e: serde_json::Error) -> Self {
         json_err(e)
@@ -9978,7 +13425,7 @@ mod app_tests {
             receipt_hashes: vec![],
             import_state: crate::pack::ImportState::None,
             approval_state: crate::pack::ApprovalState::Pending,
-            save_state: crate::pack::SaveState::Unsaved,
+            submit_state: crate::pack::SubmitState::Unsubmitted,
         }
     }
 
@@ -9998,6 +13445,54 @@ mod app_tests {
         }
     }
 
+    fn migration_workspace() -> (tempfile::TempDir, App, crate::layout::ProjectPaths) {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::new();
+        let layout = DraftLayout::for_root(tmp.path());
+        layout.create_all().unwrap();
+        let project_paths = crate::layout::ProjectPaths::for_root(tmp.path());
+        project_paths.create_all().unwrap();
+        write_json(
+            &layout.workspace_json(),
+            &WorkspaceMetadata {
+                schema_version: SCHEMA_VERSION,
+                id: WorkspaceId::generate(),
+                draft_version: "0.3.3".to_string(),
+                created_at: now(),
+            },
+        )
+        .unwrap();
+        let legacy_config = toml::to_string_pretty(&DraftConfig::default())
+            .unwrap()
+            .replace("[submit]", "[save]");
+        write_atomic(&layout.config_toml(), legacy_config.as_bytes()).unwrap();
+        crate::stable::StableHeadStore::new(project_paths.clone())
+            .initialize(tmp.path(), "rcp_migration_test".to_string())
+            .unwrap();
+        (tmp, app, project_paths)
+    }
+
+    fn write_legacy_manifest(
+        path: &Path,
+        pack_id: &str,
+        import_state: crate::pack::ImportState,
+    ) -> Vec<u8> {
+        let mut value = serde_json::to_value(manifest_for(None, pack_id)).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert("schema_version".into(), Value::String("0.3.3".into()));
+        object.insert(
+            "import_state".into(),
+            serde_json::to_value(import_state).unwrap(),
+        );
+        let submit_state = object.remove("submit_state").unwrap();
+        assert_eq!(submit_state, Value::String("unsubmitted".into()));
+        object.insert("save_state".into(), Value::String("unsaved".into()));
+        let mut original = serde_json::to_vec_pretty(&value).unwrap();
+        original.push(b'\n');
+        write_atomic(path, &original).unwrap();
+        original
+    }
+
     #[test]
     fn candidate_rollback_rate_counts_rolled_back_fraction() {
         let manifests = vec![
@@ -10013,5 +13508,390 @@ mod app_tests {
         assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_b"), 0.0);
         // Unknown candidates never divide by zero.
         assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_x"), 0.0);
+    }
+
+    #[test]
+    fn doctor_migrate_succeeds_and_preserves_pending_packs() {
+        let (tmp, app, paths) = migration_workspace();
+        let stored = paths.pack_manifest("pck_pending");
+        let quarantined = paths
+            .quarantine_dir()
+            .join("pck_import_pending/manifest.json");
+        write_legacy_manifest(&stored, "pck_pending", crate::pack::ImportState::None);
+        write_legacy_manifest(
+            &quarantined,
+            "pck_import_pending",
+            crate::pack::ImportState::ImportedQuarantined,
+        );
+
+        let report = app.doctor_migrate(tmp.path(), false).unwrap();
+        assert_eq!(report["applied"], Value::Bool(true));
+        assert_eq!(report["migration_required"], Value::Bool(false));
+
+        let workspace: WorkspaceMetadata = read_json(&paths.workspace_json()).unwrap();
+        assert_eq!(workspace.draft_version, crate::DRAFT_VERSION);
+        let stored: crate::pack::PackManifest = read_json(&stored).unwrap();
+        assert_eq!(stored.schema_version, crate::DRAFT_SCHEMA_VERSION);
+        assert_eq!(stored.approval_state, crate::pack::ApprovalState::Pending);
+        assert_eq!(stored.submit_state, crate::pack::SubmitState::Unsubmitted);
+        let quarantined: crate::pack::PackManifest = read_json(&quarantined).unwrap();
+        assert_eq!(
+            quarantined.import_state,
+            crate::pack::ImportState::ImportedQuarantined
+        );
+        assert_eq!(
+            quarantined.submit_state,
+            crate::pack::SubmitState::Unsubmitted
+        );
+    }
+
+    #[test]
+    fn doctor_migrate_is_idempotent() {
+        let (tmp, app, paths) = migration_workspace();
+        write_legacy_manifest(
+            &paths.pack_manifest("pck_pending"),
+            "pck_pending",
+            crate::pack::ImportState::None,
+        );
+        app.doctor_migrate(tmp.path(), false).unwrap();
+        let backups_before = fs::read_dir(paths.backups_dir()).unwrap().count();
+
+        let report = app.doctor_migrate(tmp.path(), false).unwrap();
+        assert_eq!(report["applied"], Value::Bool(false));
+        assert_eq!(report["migration_required"], Value::Bool(false));
+        assert_eq!(
+            fs::read_dir(paths.backups_dir()).unwrap().count(),
+            backups_before
+        );
+    }
+
+    #[test]
+    fn doctor_migrate_malformed_manifest_leaves_all_sources_unchanged() {
+        let (tmp, app, paths) = migration_workspace();
+        let valid = paths.pack_manifest("pck_a_valid");
+        let malformed = paths.pack_manifest("pck_z_malformed");
+        let valid_original =
+            write_legacy_manifest(&valid, "pck_a_valid", crate::pack::ImportState::None);
+        let malformed_original = b"{ definitely not json\n".to_vec();
+        write_atomic(&malformed, &malformed_original).unwrap();
+        let workspace_original = fs::read(paths.workspace_json()).unwrap();
+        let config_original = fs::read(paths.config_toml()).unwrap();
+
+        let error = app.doctor_migrate(tmp.path(), false).unwrap_err();
+        assert!(error.message.contains("JSON parse failed"));
+        assert_eq!(
+            fs::read(paths.workspace_json()).unwrap(),
+            workspace_original
+        );
+        assert_eq!(fs::read(paths.config_toml()).unwrap(), config_original);
+        assert_eq!(fs::read(valid).unwrap(), valid_original);
+        assert_eq!(fs::read(malformed).unwrap(), malformed_original);
+    }
+
+    #[test]
+    fn doctor_migrate_backups_preserve_original_bytes() {
+        let (tmp, app, paths) = migration_workspace();
+        let stored = paths.pack_manifest("pck_pending");
+        let quarantined = paths
+            .quarantine_dir()
+            .join("pck_import_pending/manifest.json");
+        let workspace_original = fs::read(paths.workspace_json()).unwrap();
+        let config_original = fs::read(paths.config_toml()).unwrap();
+        let stored_original =
+            write_legacy_manifest(&stored, "pck_pending", crate::pack::ImportState::None);
+        let quarantined_original = write_legacy_manifest(
+            &quarantined,
+            "pck_import_pending",
+            crate::pack::ImportState::ImportedQuarantined,
+        );
+
+        let report = app.doctor_migrate(tmp.path(), false).unwrap();
+        let backup = PathBuf::from(report["backup"].as_str().unwrap());
+        assert_eq!(
+            fs::read(backup.join("workspace.json")).unwrap(),
+            workspace_original
+        );
+        assert_eq!(
+            fs::read(backup.join("config.toml")).unwrap(),
+            config_original
+        );
+        assert_eq!(
+            fs::read(backup.join("packs/pck_pending/manifest.json")).unwrap(),
+            stored_original
+        );
+        assert_eq!(
+            fs::read(backup.join("imports/quarantine/pck_import_pending/manifest.json")).unwrap(),
+            quarantined_original
+        );
+    }
+
+    #[test]
+    fn doctor_reports_recoverable_journal_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::new();
+        let layout = DraftLayout::for_root(tmp.path());
+        layout.create_all().unwrap();
+        let project_paths = crate::layout::ProjectPaths::for_root(tmp.path());
+        project_paths.create_all().unwrap();
+        let id = WorkspaceId::generate();
+        write_json(
+            &layout.workspace_json(),
+            &WorkspaceMetadata {
+                schema_version: SCHEMA_VERSION,
+                id: id.clone(),
+                draft_version: crate::DRAFT_VERSION.to_string(),
+                created_at: now(),
+            },
+        )
+        .unwrap();
+        crate::journal::JournalStore::for_root(tmp.path())
+            .start("doctor.migrate", None, serde_json::json!({}))
+            .unwrap();
+
+        let ws = Workspace {
+            id,
+            root: tmp.path().to_path_buf(),
+            layout,
+        };
+        let project = app.doctor_project_scope(&ws).unwrap();
+        let check = project
+            .checks
+            .iter()
+            .find(|check| check.name == "journal-recovery")
+            .unwrap();
+        assert!(!check.ok);
+        assert!(check.detail.contains("interrupted operation"));
+    }
+
+    #[test]
+    fn task_view_uses_shared_status_display() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::new();
+        let layout = DraftLayout::for_root(tmp.path());
+        layout.create_all().unwrap();
+        let project_paths = crate::layout::ProjectPaths::for_root(tmp.path());
+        project_paths.create_all().unwrap();
+        write_json(
+            &layout.workspace_json(),
+            &WorkspaceMetadata {
+                schema_version: SCHEMA_VERSION,
+                id: WorkspaceId::generate(),
+                draft_version: crate::DRAFT_VERSION.to_string(),
+                created_at: now(),
+            },
+        )
+        .unwrap();
+        let task = crate::task::TaskDefinition::new(
+            "review-docs".into(),
+            "Review the docs".into(),
+            "head".into(),
+            "human".into(),
+        )
+        .unwrap();
+        crate::task::TaskStore::for_root(tmp.path())
+            .create(&task)
+            .unwrap();
+        crate::stable::StableHeadStore::new(project_paths)
+            .initialize(tmp.path(), "rcp_test".to_string())
+            .unwrap();
+
+        let view = app.task_view(tmp.path(), "review-docs").unwrap();
+        assert_eq!(view.health_status.kind, crate::status::StatusKind::Defined);
+        assert_eq!(view.health_status.symbol, "◇");
+        assert_eq!(
+            view.review_status_display.kind,
+            crate::status::StatusKind::Pending
+        );
+        assert!(view.recommended_action.contains("draft task spawn"));
+    }
+
+    #[test]
+    fn inbox_includes_failed_execution_and_recoverable_operation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::new();
+        let layout = DraftLayout::for_root(tmp.path());
+        layout.create_all().unwrap();
+        let project_paths = crate::layout::ProjectPaths::for_root(tmp.path());
+        project_paths.create_all().unwrap();
+        write_json(
+            &layout.workspace_json(),
+            &WorkspaceMetadata {
+                schema_version: SCHEMA_VERSION,
+                id: WorkspaceId::generate(),
+                draft_version: crate::DRAFT_VERSION.to_string(),
+                created_at: now(),
+            },
+        )
+        .unwrap();
+        crate::stable::StableHeadStore::new(project_paths)
+            .initialize(tmp.path(), "rcp_test".to_string())
+            .unwrap();
+        let task = crate::task::TaskDefinition::new(
+            "fix-build".into(),
+            "Fix the failing build".into(),
+            "head".into(),
+            "human".into(),
+        )
+        .unwrap();
+        crate::task::TaskStore::for_root(tmp.path())
+            .create(&task)
+            .unwrap();
+        let execution = crate::task::Execution::queued(
+            &task,
+            "codex".into(),
+            vec!["cargo".into(), "test".into()],
+        );
+        let execution_store = crate::task::ExecutionStore::for_root(tmp.path());
+        execution_store.write(&execution).unwrap();
+        execution_store
+            .mark_failed(execution.id.as_str(), "tests failed")
+            .unwrap();
+        crate::journal::JournalStore::for_root(tmp.path())
+            .start(
+                "doctor.migrate",
+                Some("draft".into()),
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        let inbox = app.inbox(tmp.path()).unwrap();
+        assert!(inbox.iter().any(
+            |item| item.kind == "execution_failed" && item.subject_id == execution.id.as_str()
+        ));
+        assert!(inbox
+            .iter()
+            .any(|item| item.kind == "doctor_warning" && item.status == "needs_recovery"));
+    }
+
+    #[test]
+    fn editor_file_lifecycle_uses_guards_backups_and_search() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::new();
+        let layout = DraftLayout::for_root(tmp.path());
+        layout.create_all().unwrap();
+        let project_paths = crate::layout::ProjectPaths::for_root(tmp.path());
+        project_paths.create_all().unwrap();
+        write_json(
+            &layout.workspace_json(),
+            &WorkspaceMetadata {
+                schema_version: SCHEMA_VERSION,
+                id: WorkspaceId::generate(),
+                draft_version: crate::DRAFT_VERSION.to_string(),
+                created_at: now(),
+            },
+        )
+        .unwrap();
+        crate::stable::StableHeadStore::new(project_paths)
+            .initialize(tmp.path(), "rcp_test".to_string())
+            .unwrap();
+
+        let created = app
+            .editor_create_file(tmp.path(), "src/editor.txt", "needle\n")
+            .unwrap();
+        assert_eq!(created.action, "created");
+        assert_eq!(
+            app.editor_search(tmp.path(), "needle", 10).unwrap()[0].path,
+            "src/editor.txt"
+        );
+
+        let renamed = app
+            .editor_rename_file(tmp.path(), "src/editor.txt", "src/renamed.txt")
+            .unwrap();
+        assert_eq!(renamed.old_path.as_deref(), Some("src/editor.txt"));
+        assert!(tmp.path().join("src/renamed.txt").exists());
+
+        let deleted = app
+            .editor_delete_file(tmp.path(), "src/renamed.txt")
+            .unwrap();
+        assert_eq!(deleted.action, "deleted");
+        assert!(deleted.backup_path.is_some());
+        assert!(!tmp.path().join("src/renamed.txt").exists());
+
+        let err = app
+            .editor_create_file(tmp.path(), ".draft/owned.txt", "")
+            .unwrap_err();
+        assert!(matches!(
+            err.kind,
+            DraftErrorKind::ProtectedFileAccess | DraftErrorKind::Storage
+        ));
+    }
+
+    #[test]
+    fn global_config_get_unset_are_scoped_to_global_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let global = tmp.path().join(".draft-global");
+        std::env::set_var("DRAFT_GLOBAL_HOME", &global);
+        let app = App::new();
+
+        app.config_set_global("risk.block_on_critical", "false")
+            .unwrap();
+        let report = app.config_get_global("risk.block_on_critical").unwrap();
+        assert_eq!(
+            report
+                .entries
+                .get("risk.block_on_critical")
+                .map(String::as_str),
+            Some("false")
+        );
+        app.config_unset_global("risk.block_on_critical").unwrap();
+        let report = app.config_get_global("risk.block_on_critical").unwrap();
+        assert_eq!(
+            report
+                .entries
+                .get("risk.block_on_critical")
+                .map(String::as_str),
+            Some("")
+        );
+
+        std::env::remove_var("DRAFT_GLOBAL_HOME");
+    }
+
+    #[test]
+    fn pack_dirty_guard_rejects_edits_after_pack_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = DraftLayout::for_root(tmp.path());
+        layout.create_all().unwrap();
+        let project_paths = crate::layout::ProjectPaths::for_root(tmp.path());
+        project_paths.create_all().unwrap();
+        let workspace_id = WorkspaceId::generate();
+        write_json(
+            &layout.workspace_json(),
+            &WorkspaceMetadata {
+                schema_version: SCHEMA_VERSION,
+                id: workspace_id.clone(),
+                draft_version: crate::DRAFT_VERSION.to_string(),
+                created_at: now(),
+            },
+        )
+        .unwrap();
+        let stable = crate::stable::StableHeadStore::new(project_paths.clone())
+            .initialize(tmp.path(), "rcp_test".to_string())
+            .unwrap();
+        let pack = Changepack::new(
+            workspace_id.clone(),
+            None,
+            None,
+            SnapshotId::generate(),
+            SnapshotId::generate(),
+            Some("dirty-pack".into()),
+        );
+        let mut manifest = manifest_for(None, pack.id.as_str());
+        manifest.base_workspace_hash = stable.workspace_hash.clone();
+        manifest.target_workspace_hash = stable.workspace_hash;
+        crate::pack::PackStore::new(project_paths)
+            .write_manifest(&manifest)
+            .unwrap();
+        std::fs::write(tmp.path().join("src.txt"), "manual edit\n").unwrap();
+        let ws = Workspace {
+            id: workspace_id,
+            root: tmp.path().to_path_buf(),
+            layout,
+        };
+
+        let err =
+            ensure_pack_workspace_matches_target(&ws, &pack, "review", "restore the workspace")
+                .unwrap_err();
+        assert_eq!(err.kind, DraftErrorKind::DirtyWorkspace);
+        assert!(err.message.contains("review baseline"));
     }
 }

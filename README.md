@@ -34,7 +34,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.3.3-7c3aed?style=flat-square" />
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.4-7c3aed?style=flat-square" />
   <img alt="status" src="https://img.shields.io/badge/status-pre--1.0-0ea5e9?style=flat-square" />
   <img alt="local-first" src="https://img.shields.io/badge/local--first-yes-10b981?style=flat-square" />
   <img alt="offline capable" src="https://img.shields.io/badge/offline--capable-yes-14b8a6?style=flat-square" />
@@ -54,7 +54,7 @@ Draft is built for the new workflow where humans and AI agents both create code,
 ```text
 Editor / Agent
       ↓
-Draft CLI + Review Cockpit
+Draft CLI + Console
       ↓
 ChangePacks + Evidence + Events + Receipts
       ↓
@@ -75,15 +75,15 @@ AI agents can generate useful changes quickly, but fast generation creates a new
 
 Draft helps you turn that noise into reviewed, accountable, rollback-safe ChangePacks.
 
-| Problem                            | What Draft Adds                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------- |
-| AI changes are hard to trust       | Changes are captured as named ChangePacks with evidence and provenance.      |
-| Review happens too late            | Draft creates a local approval boundary before save/finalization.      |
-| Workspace state gets messy         | Draft separates working noise from reviewed ChangePacks.                     |
-| Hidden state can leak into changes | `.draft/` is hard-excluded everywhere.                                 |
-| Rollback is unclear                | Rollback can target checkpoints, ChangePacks, or receipts.                   |
-| External tools are too implicit    | Hooks are explicit, local, opaque, policy-checked, and receipt-backed. |
-| Teams need auditability            | Events and receipts make every meaningful action explainable.          |
+| Problem                            | What Draft Adds                                                         |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| AI changes are hard to trust       | Changes are captured as named ChangePacks with evidence and provenance. |
+| Review happens too late            | Draft creates a local approval boundary before submit/finalization.     |
+| Workspace state gets messy         | Draft separates working noise from reviewed ChangePacks.                |
+| Hidden state can leak into changes | `.draft/` is hard-excluded everywhere.                                  |
+| Rollback is unclear                | Rollback can target checkpoints, ChangePacks, or receipts.              |
+| External tools are too implicit    | Hooks are explicit, local, opaque, policy-checked, and receipt-backed.  |
+| Teams need auditability            | Events and receipts make every meaningful action explainable.           |
 
 <p align="center">
   <img src="assets/draft-noise-to-verified-packs.svg" alt="From workspace noise to verified ChangePacks" width="100%" />
@@ -93,14 +93,14 @@ Draft helps you turn that noise into reviewed, accountable, rollback-safe Change
 
 Draft is designed around a few strict rules:
 
-* **Local-first:** project state lives in the workspace under `.draft/`.
-* **Offline-capable:** core CLI flows do not require a network service.
-* **Daemonless by default:** the CLI can run directly without a background daemon.
-* **Tool-neutral:** Draft does not depend on a specific AI model, editor, code host, or agent runtime.
-* **Append-only provenance:** meaningful actions are recorded as hash-chained events.
-* **Review before save:** ChangePacks must pass the local review and approval boundary before finalization.
-* **Safe rollback:** checkpoints, ChangePacks, and receipts can be used as rollback targets.
-* **Hard `.draft/` exclusion:** Draft never includes its private state in ChangePacks, snapshots, saves, rollback plans, or hook candidate checks.
+- **Local-first:** project state lives in the workspace under `.draft/`.
+- **Offline-capable:** core CLI flows do not require a network service.
+- **Daemonless by default:** the CLI can run directly without a background daemon.
+- **Tool-neutral:** Draft does not depend on a specific AI model, editor, code host, or agent runtime.
+- **Append-only provenance:** meaningful actions are recorded as hash-chained events.
+- **Review before submit:** ChangePacks must pass the local review and approval boundary before finalization.
+- **Safe rollback:** checkpoints, ChangePacks, and receipts can be used as rollback targets.
+- **Hard `.draft/` exclusion:** Draft never includes its private state in ChangePacks, snapshots, submits, rollback plans, or hook candidate checks.
 
 ## Quick Start
 
@@ -129,7 +129,7 @@ draft config set identity.username "Ada"
 draft config set identity.email "ada@example.com"
 ```
 
-Create a checkpoint, make changes, package them, review them, approve them, and save them:
+Create a checkpoint, make changes, package them, review them, approve them, and submit them:
 
 ```bash
 draft checkpoint "before change"
@@ -146,7 +146,7 @@ draft verify -p <pck-id-or-name>
 draft risk -p <pck-id-or-name>
 draft review -p <pck-id-or-name>
 draft approve -p <pck-id-or-name> --reason "reviewed"
-draft save -p <pck-id-or-name>
+draft submit -p <pck-id-or-name>
 
 draft receipt list
 ```
@@ -179,12 +179,12 @@ draft create "feature name"
 draft verify -p <ChangePack>
 draft review -p <ChangePack>
 draft approve -p <ChangePack>
-draft save -p <ChangePack>
+draft submit -p <ChangePack>
 draft rollback <target>   # when needed
 ```
 
 <p align="center">
-  <img src="assets/draft-flow.svg" alt="Draft workflow: scan, checkpoint, create, verify, approve, save, rollback" width="100%" />
+  <img src="assets/draft-flow.svg" alt="Draft workflow: scan, checkpoint, create, verify, approve, submit, rollback" width="100%" />
 </p>
 
 ## IDs And Targets
@@ -214,28 +214,18 @@ draft verify -p "update app"
 
 ## Commands
 
-The v0.3.3 command surface is intentionally local and workspace-oriented.
+The v0.3.4 command surface is intentionally local and workspace-oriented.
 
 ```text
 init       doctor     identity   config     hook
 ignore     status     event      checkpoint create
 pack       list       candidate  task       verify
 risk       review     approve    reject     compare
-compose    disperse   save       receipt    storage
-rollback   close      gc         cockpit    mcp
-acp        a2a
+compose    disperse   submit     receipt    storage
+rollback   close      gc         console    extension
 ```
 
-New in v0.3.3: the verified stable-base model — `draft init` creates a verified
-stable base and `stable_head`, `draft save` finalizes packs with configurable
-disposal (`merge_and_dispose`/`dispose_only`) gated by project-state
-verification, save hooks run in before/after phases, saved packs are disposed
-leaving compact receipt provenance, and `draft close`/`draft gc` handle safe
-metadata removal and maintenance. A top-level `proto/` directory defines the
-protocol contracts. Draft treats each changepack as an independent, composable,
-portable, **signed**, locally verifiable unit of change — temporary until
-saved. Event history is `draft event` — there is no `log` command; only
-`--page` and `--limit` apply. See [CHANGELOG.md](CHANGELOG.md).
+New in v0.3.4: the verified stable-base model — `draft init` creates a verified stable base and `stable_head`, `draft submit` finalizes packs with configurable disposal (`merge_and_dispose`/`dispose_only`) gated by project-state verification, submit hooks run in before/after phases, submitted packs are disposed leaving compact receipt provenance, and `draft close`/`draft gc` handle safe metadata removal and maintenance. A top-level `proto/` directory defines the protocol contracts. Draft treats each changepack as an independent, composable, portable, **signed**, locally verifiable unit of change — temporary until submitted. Event history is `draft event` — there is no `log` command; only `--page` and `--limit` apply. See [CHANGELOG.md](CHANGELOG.md).
 
 ### ChangePack Commands
 
@@ -298,7 +288,7 @@ Draft stores provenance as append-only hash-chained event records linked to sign
 
 ### Candidate And Task Commands
 
-Candidates are named execution profiles. They do not represent roles in v0.3.3.
+Candidates are named execution profiles. They do not represent roles in v0.3.4.
 
 Run a task with an explicit instruction boundary:
 
@@ -314,22 +304,22 @@ draft task spawn "<task-name>" -c <candidate-name> -- <instruction>
 
 Candidates can be auto-registered through `draft task spawn`; users do not need to run a separate candidate registration command first.
 
-## Optional Save Hook
+## Optional Submit Hook
 
-`hooks.save` lets Draft call an explicit local command after approval.
+`hooks.submit` lets Draft call an explicit local command after approval.
 
 Example:
 
 ```bash
-draft config set hooks.save "printf %s \"{{message}}\" > .last-draft-save"
+draft config set hooks.submit "printf %s \"{{message}}\" > .last-draft-submit"
 ```
 
-When `draft save` runs, Draft:
+When `draft submit` runs, Draft:
 
 1. renders supported hook variables such as `{{message}}`;
 2. checks local policy;
 3. verifies canonical approval, workspace hash, receipt signatures, event chain, and transparency linkage;
-4. verifies that `.draft/` is not part of the save candidate;
+4. verifies that `.draft/` is not part of the submit candidate;
 5. executes the command from the workspace root;
 6. captures stdout, stderr, exit code, and command hash;
 7. writes a durable receipt.
@@ -359,24 +349,24 @@ Draft stores local project state under `.draft/`:
 status
 snapshots
 ChangePacks
-save candidates
+submit candidates
 rollback plans
 hook candidate checks
 ```
 
-If a save candidate contains `.draft/`, Draft aborts the save, emits a failed `save.completed` event, records a failed receipt, and does not run `hooks.save`.
+If a submit candidate contains `.draft/`, Draft aborts the submit, emits a failed `submit.completed` event, records a failed receipt, and does not run `hooks.submit`.
 
 ## What Draft Is Not
 
 Draft is not:
 
-* a Git replacement;
-* a hosted code review system;
-* a hosted merge workflow;
-* a CI/CD platform;
-* an AI model service;
-* an agent framework;
-* a deployment tool.
+- a Git replacement;
+- a hosted code review system;
+- a hosted merge workflow;
+- a CI/CD platform;
+- an AI model service;
+- an agent framework;
+- a deployment tool.
 
 Draft is the local review layer that can sit in front of those tools.
 
@@ -384,28 +374,19 @@ Draft is the local review layer that can sit in front of those tools.
 
 Start with [docs/README.md](docs/README.md).
 
-| Topic              | Link                                                     |
-| ------------------ | -------------------------------------------------------- |
-| Installation       | [docs/installation.md](docs/installation.md)             |
-| Getting Started    | [docs/getting-started.md](docs/getting-started.md)       |
-| Concepts           | [docs/concepts.md](docs/concepts.md)                     |
-| Architecture       | [docs/architecture.md](docs/architecture.md)             |
-| Command Reference  | [docs/command-reference.md](docs/command-reference.md)   |
-| Configuration      | [docs/configuration.md](docs/configuration.md)           |
-| Storage Layout     | [docs/storage-layout.md](docs/storage-layout.md)         |
-| Event Model        | [docs/event-model.md](docs/event-model.md)               |
-| ChangePacks        | [docs/changepack.md](docs/changepack.md)                 |
-| Protocol Contracts | [docs/protocol.md](docs/protocol.md)                     |
-| Checkpoints        | [docs/checkpoints.md](docs/checkpoints.md)               |
-| Verification       | [docs/verification.md](docs/verification.md)             |
-| Review & Approval  | [docs/review-and-approval.md](docs/review-and-approval.md) |
-| Policy             | [docs/policy.md](docs/policy.md)                         |
-| Candidates & Tasks | [docs/candidates-and-tasks.md](docs/candidates-and-tasks.md) |
-| Safety Model       | [docs/safety-model.md](docs/safety-model.md)             |
-| Services           | [docs/services.md](docs/services.md)                     |
-| Security           | [docs/security.md](docs/security.md)                     |
-| Release Compliance | [docs/release-compliance.md](docs/release-compliance.md) |
-| FAQ                | [docs/faq.md](docs/faq.md)                               |
+| Topic                         | Link                                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------- |
+| Installation                  | [docs/guides/installation.md](docs/guides/installation.md)                   |
+| Getting Started & FAQ         | [docs/guides/getting-started.md](docs/guides/getting-started.md)             |
+| Workflows                     | [docs/guides/workflows.md](docs/guides/workflows.md)                         |
+| Command Reference             | [docs/reference/commands.md](docs/reference/commands.md)                     |
+| Concepts                      | [docs/reference/concepts.md](docs/reference/concepts.md)                     |
+| Configuration                 | [docs/reference/configuration.md](docs/reference/configuration.md)           |
+| Review, Verification & Policy | [docs/reference/review-and-policy.md](docs/reference/review-and-policy.md)   |
+| Architecture & Services       | [docs/internals/architecture.md](docs/internals/architecture.md)             |
+| Storage & Events              | [docs/internals/storage-and-events.md](docs/internals/storage-and-events.md) |
+| Security                      | [docs/internals/security.md](docs/internals/security.md)                     |
+| Protocol Contracts            | [docs/internals/protocol.md](docs/internals/protocol.md)                     |
 
 ## Development
 
@@ -430,15 +411,15 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, development 
 
 ## Project Status
 
-Draft is pre-1.0 software. The current focus is v0.3.3 production readiness:
+Draft is pre-1.0 software. The current focus is v0.3.4 production readiness:
 
-* CLI ergonomics;
-* verified, signed, portable changepacks;
-* AG-UI review cockpit flows;
-* event, receipt, and transparency integrity;
-* import/export and rollback safety;
-* documentation alignment;
-* security, performance, and release compliance.
+- CLI ergonomics;
+- verified, signed, portable changepacks;
+- Draft Console flows;
+- event, receipt, and transparency integrity;
+- import/export and rollback safety;
+- documentation alignment;
+- security, performance, and release compliance.
 
 Public APIs and storage details may still evolve before 1.0.
 

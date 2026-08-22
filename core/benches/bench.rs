@@ -13,7 +13,7 @@ use draft_core::index::AffectedPathIndex;
 use draft_core::layout::ProjectPaths;
 use draft_core::lsif::LsifIndex;
 use draft_core::pack::{
-    ApprovalState, ImportState, PackIntent, PackLockfile, PackManifest, SaveState,
+    ApprovalState, ImportState, PackIntent, PackLockfile, PackManifest, SubmitState,
 };
 use draft_core::pathguard;
 use draft_core::risk;
@@ -197,7 +197,7 @@ fn make_packs(n: usize) -> (Vec<PackManifest>, Vec<PackLockfile>) {
             receipt_hashes: Vec::new(),
             import_state: ImportState::None,
             approval_state: ApprovalState::Pending,
-            save_state: SaveState::Unsaved,
+            submit_state: SubmitState::Unsubmitted,
         });
         let deps = if i % 4 == 3 {
             vec![format!("pck_{:05}", i - 1)]
@@ -291,7 +291,7 @@ fn bench_gc(c: &mut Criterion) {
                 paths.create_all().unwrap();
                 let (mut manifests, _) = make_packs(100);
                 for m in &mut manifests {
-                    m.save_state = SaveState::Saved;
+                    m.submit_state = SubmitState::Submitted;
                     std::fs::create_dir_all(paths.pack_dir(&m.pack_id)).unwrap();
                     draft_core::fsutil::write_json(&paths.pack_manifest(&m.pack_id), m).unwrap();
                 }

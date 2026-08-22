@@ -11,7 +11,7 @@
     "stable_head_after": "rcp_9f8e7d6c5b4a",
     "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "verification_result": "verified",
-    "save_mode": "merge_and_dispose",
+    "submit_mode": "merge_and_dispose",
     "timestamp": "2026-07-01T00:00:00Z",
     "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

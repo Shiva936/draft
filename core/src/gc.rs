@@ -4,7 +4,7 @@ use crate::error::DraftResult;
 use crate::event::EventLog;
 use crate::fsutil;
 use crate::layout::ProjectPaths;
-use crate::pack::{ImportState, PackManifest, SaveState};
+use crate::pack::{ImportState, PackManifest, SubmitState};
 use crate::stable::StableHeadStore;
 use serde::Serialize;
 
@@ -84,8 +84,8 @@ fn active_pack_count(paths: &ProjectPaths) -> DraftResult<usize> {
             count += 1;
             continue;
         };
-        if manifest.save_state != SaveState::Saved
-            && manifest.import_state != ImportState::ImportSaved
+        if manifest.submit_state != SubmitState::Submitted
+            && manifest.import_state != ImportState::ImportSubmitted
         {
             count += 1;
         }
@@ -113,8 +113,8 @@ fn prune_inactive_pack_dirs(paths: &ProjectPaths) -> DraftResult<(usize, usize)>
         let Ok(manifest) = fsutil::read_json::<PackManifest>(&manifest_path) else {
             continue;
         };
-        let finalized = manifest.save_state == SaveState::Saved
-            || manifest.import_state == ImportState::ImportSaved;
+        let finalized = manifest.submit_state == SubmitState::Submitted
+            || manifest.import_state == ImportState::ImportSubmitted;
         if finalized {
             std::fs::remove_dir_all(&path)?;
             disposed += 1;

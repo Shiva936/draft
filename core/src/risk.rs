@@ -163,7 +163,7 @@ pub fn assess(inputs: &RiskInputs) -> RiskReport {
     if inputs.imported {
         score += 15;
         explanations.push("imported pack — untrusted until locally verified".to_string());
-        required.push("locally re-verify the imported pack before save".to_string());
+        required.push("locally re-verify the imported pack before submit".to_string());
     }
 
     // Candidate history (signal only).
@@ -181,7 +181,7 @@ pub fn assess(inputs: &RiskInputs) -> RiskReport {
     let score = score.clamp(0, 100) as u32;
     let level = level_for(score);
     if matches!(level, RiskLevel::High | RiskLevel::Critical) {
-        required.push("require human approval before save".to_string());
+        required.push("require human approval before submit".to_string());
     }
     if explanations.is_empty() {
         explanations.push("small, low-signal change".to_string());

@@ -110,6 +110,33 @@ impl GlobalHome {
     pub fn telemetry_dir(&self) -> PathBuf {
         self.root.join("telemetry")
     }
+    pub fn registry_dir(&self) -> PathBuf {
+        self.root.join("registry")
+    }
+    pub fn services_dir(&self) -> PathBuf {
+        self.root.join("services")
+    }
+    pub fn extensions_dir(&self) -> PathBuf {
+        self.root.join("extensions")
+    }
+    pub fn templates_dir(&self) -> PathBuf {
+        self.root.join("templates")
+    }
+    pub fn indexes_dir(&self) -> PathBuf {
+        self.root.join("indexes")
+    }
+    pub fn doctor_dir(&self) -> PathBuf {
+        self.root.join("doctor")
+    }
+    pub fn logs_dir(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+    pub fn locks_dir(&self) -> PathBuf {
+        self.root.join("locks")
+    }
+    pub fn journal_dir(&self) -> PathBuf {
+        self.root.join("journal")
+    }
     pub fn local_metrics_json(&self) -> PathBuf {
         self.telemetry_dir().join("local-metrics.json")
     }
@@ -125,14 +152,21 @@ impl GlobalHome {
             self.trust_dir(),
             self.policies_dir(),
             self.adapters_dir(),
-            self.adapter_dir("mcp"),
-            self.adapter_dir("acp"),
-            self.adapter_dir("a2a"),
             self.adapter_dir("agui"),
             self.cache_dir(),
             self.models_dir(),
             self.receipts_dir(),
             self.telemetry_dir(),
+            self.registry_dir(),
+            self.services_dir(),
+            self.services_dir().join("tokens"),
+            self.extensions_dir(),
+            self.templates_dir(),
+            self.indexes_dir(),
+            self.doctor_dir(),
+            self.logs_dir(),
+            self.locks_dir(),
+            self.journal_dir(),
         ] {
             ensure_dir(&dir)?;
         }
@@ -174,6 +208,9 @@ mod tests {
         assert!(home.keys_dir().is_dir());
         assert!(home.identity_dir().is_dir());
         assert!(home.telemetry_dir().is_dir());
+        assert!(std::fs::read_dir(home.adapters_dir())
+            .unwrap()
+            .all(|entry| entry.unwrap().file_name().to_string_lossy() == "agui"));
         // Idempotent.
         home.create_all().unwrap();
     }

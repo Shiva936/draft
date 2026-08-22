@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Decision Record",
+  "type": "object",
+  "required": ["schema_version", "id", "decision_type", "pack_id", "base_stable_head", "author", "reason"],
+  "properties": {
+    "schema_version": { "const": "0.3.4" },
+    "id": { "type": "string", "pattern": "^dec_[A-Za-z0-9_-]+$" },
+    "decision_type": { "enum": ["approve", "reject", "waive", "override", "accept_risk", "request_changes", "invalidate"] },
+    "task_id": { "type": ["string", "null"] },
+    "pack_id": { "type": ["string", "null"] },
+    "execution_id": { "type": ["string", "null"] },
+    "base_stable_head": { "type": "string" },
+    "author": { "type": "string" },
+    "reason": { "type": "string" }
+  },
+  "additionalProperties": true
+}

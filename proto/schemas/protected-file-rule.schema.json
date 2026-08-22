@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Protected File Rule",
+  "type": "object",
+  "required": ["schema_version", "pattern", "reason", "action"],
+  "properties": {
+    "schema_version": { "const": "0.3.4" },
+    "pattern": { "type": "string" },
+    "reason": { "type": "string" },
+    "action": { "enum": ["deny", "read_only", "warn"] }
+  },
+  "additionalProperties": true
+}

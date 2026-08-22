@@ -1,0 +1,1 @@
+{"name":"ownership-record","payload_schema":"ownership-record.schema.json","payload":{"schema_version":"0.3.4","pattern":"core/**","owners":["@core"],"review_required":true},"invalid_payload":{"schema_version":"0.3.4","pattern":"core/**","owners":"@core","review_required":true},"expect":{"valid":true}}

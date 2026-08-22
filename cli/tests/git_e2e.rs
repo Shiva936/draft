@@ -61,12 +61,15 @@ fn plain_directory_end_to_end_with_rollback() {
         .args(["approve", "-p", pack_id])
         .assert()
         .success();
-    draft(dir).args(["save", "-p", pack_id]).assert().success();
+    draft(dir)
+        .args(["submit", "-p", pack_id])
+        .assert()
+        .success();
     draft(dir)
         .args(["event"])
         .assert()
         .success()
-        .stdout(contains("save.completed"));
+        .stdout(contains("submit.completed"));
 
     draft(dir)
         .args(["rollback", snapshot_id])

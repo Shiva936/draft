@@ -29,15 +29,16 @@ pub enum PolicyDecision {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Policy {
-    /// A save is blocked unless the pack is explicitly approved.
-    pub require_approval_for_save: bool,
-    /// An unresolved `critical` risk blocks save.
+    /// A submission is blocked unless the pack is explicitly approved.
+    #[serde(alias = "require_approval_for_save")]
+    pub require_approval_for_submit: bool,
+    /// An unresolved `critical` risk blocks submit.
     pub block_on_critical_risk: bool,
-    /// A `high` risk pack requires approval before save.
+    /// A `high` risk pack requires approval before submission.
     pub require_approval_on_high_risk: bool,
-    /// If the workspace hash changed since verification, re-verify before save.
+    /// If the workspace hash changed since verification, re-verify before submission.
     pub require_reverify_on_workspace_change: bool,
-    /// Imported packs must be locally re-verified before they can be saved.
+    /// Imported packs must be locally re-verified before they can be submitted.
     pub require_local_verify_for_imports: bool,
     /// Intents that require the full verification suite (not just selection).
     pub require_full_verify_intents: Vec<String>,
@@ -48,7 +49,7 @@ pub struct Policy {
 impl Default for Policy {
     fn default() -> Self {
         Policy {
-            require_approval_for_save: true,
+            require_approval_for_submit: true,
             block_on_critical_risk: true,
             require_approval_on_high_risk: true,
             require_reverify_on_workspace_change: true,
@@ -63,7 +64,8 @@ impl Default for Policy {
 /// override lower-precedence layers.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct PartialPolicy {
-    require_approval_for_save: Option<bool>,
+    #[serde(alias = "require_approval_for_save")]
+    require_approval_for_submit: Option<bool>,
     block_on_critical_risk: Option<bool>,
     require_approval_on_high_risk: Option<bool>,
     require_reverify_on_workspace_change: Option<bool>,
@@ -74,8 +76,8 @@ struct PartialPolicy {
 
 impl PartialPolicy {
     fn overlay(self, base: &mut Policy) {
-        if let Some(v) = self.require_approval_for_save {
-            base.require_approval_for_save = v;
+        if let Some(v) = self.require_approval_for_submit {
+            base.require_approval_for_submit = v;
         }
         if let Some(v) = self.block_on_critical_risk {
             base.block_on_critical_risk = v;
@@ -167,7 +169,7 @@ mod tests {
     #[test]
     fn safe_default_fails_closed() {
         let p = Policy::safe_default();
-        assert!(p.require_approval_for_save);
+        assert!(p.require_approval_for_submit);
         assert!(p.block_on_critical_risk);
         assert!(p.require_local_verify_for_imports);
         assert!(p.intent_requires_full_verify("security"));
@@ -180,15 +182,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let global = tmp.path().join("default-policy.toml");
         let project = tmp.path().join("policy.toml");
-        std::fs::write(&global, "require_approval_for_save = false\n").unwrap();
-        std::fs::write(&project, "require_approval_for_save = true\n").unwrap();
+        std::fs::write(&global, "require_approval_for_submit = false\n").unwrap();
+        std::fs::write(&project, "require_approval_for_submit = true\n").unwrap();
 
         let resolved = Policy::resolve(Some(&project), Some(&global));
-        assert!(resolved.require_approval_for_save);
+        assert!(resolved.require_approval_for_submit);
 
         // Only global present → global wins over safe default's field value.
         let resolved = Policy::resolve(None, Some(&global));
-        assert!(!resolved.require_approval_for_save);
+        assert!(!resolved.require_approval_for_submit);
     }
 
     #[test]
@@ -198,15 +200,15 @@ mod tests {
         let project = tmp.path().join("policy.toml");
         std::fs::write(
             &global,
-            "require_approval_for_save = false\nblock_on_critical_risk = false\n",
+            "require_approval_for_submit = false\nblock_on_critical_risk = false\n",
         )
         .unwrap();
         // The project layer overrides only one field; the global layer's other
         // field must still apply, and unspecified fields fall to safe default.
-        std::fs::write(&project, "require_approval_for_save = true\n").unwrap();
+        std::fs::write(&project, "require_approval_for_submit = true\n").unwrap();
 
         let resolved = Policy::resolve(Some(&project), Some(&global));
-        assert!(resolved.require_approval_for_save); // project
+        assert!(resolved.require_approval_for_submit); // project
         assert!(!resolved.block_on_critical_risk); // global
         assert!(resolved.require_local_verify_for_imports); // safe default
         assert!(resolved.intent_requires_fuzz("security")); // safe default
@@ -226,7 +228,7 @@ mod tests {
     fn malformed_policy_fails_closed() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("policy.toml");
-        std::fs::write(&project, "require_approval_for_save = \"not-a-bool").unwrap();
+        std::fs::write(&project, "require_approval_for_submit = \"not-a-bool").unwrap();
         assert!(Policy::resolve_checked(Some(&project), None).is_err());
         // Missing files are fine.
         assert!(Policy::resolve_checked(Some(&tmp.path().join("nope.toml")), None).is_ok());

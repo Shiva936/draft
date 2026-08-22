@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Task Template",
+  "type": "object",
+  "required": ["schema_version", "id", "name", "default_risk", "default_mode"],
+  "properties": {
+    "schema_version": { "const": "0.3.4" },
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "default_risk": { "enum": ["low", "medium", "high", "critical"] },
+    "default_mode": { "enum": ["normal", "safe", "plan_first"] },
+    "recommended_candidate_preset": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

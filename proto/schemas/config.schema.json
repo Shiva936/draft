@@ -3,7 +3,7 @@
   "title": "Draft Config",
   "type": "object",
   "properties": {
-    "save": {
+    "submit": {
       "type": "object",
       "properties": {
         "pack_disposal": { "enum": ["merge_and_dispose", "dispose_only"] },
@@ -14,7 +14,7 @@
     "hooks": {
       "type": "object",
       "properties": {
-        "save": { "type": "object" }
+        "submit": { "type": "object" }
       },
       "additionalProperties": true
     }

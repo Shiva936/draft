@@ -23,4 +23,3 @@ Project assets live under `assets/`. Use them in ways that make it clear you are
 ## Tone
 
 Keep public language precise, calm, and implementation-grounded. Prefer “local,” “reviewable,” “receipt-backed,” and “auditable” over broad claims.
-

@@ -242,7 +242,7 @@ mod tests {
             receipt_hashes: Vec::new(),
             import_state: crate::pack::ImportState::None,
             approval_state: crate::pack::ApprovalState::Pending,
-            save_state: crate::pack::SaveState::Unsaved,
+            submit_state: crate::pack::SubmitState::Unsubmitted,
         }
     }
 

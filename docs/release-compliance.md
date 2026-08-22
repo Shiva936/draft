@@ -1,81 +1,50 @@
-# v0.3.3 Release Compliance
+# v0.3.4 Release Compliance
 
-This document is the public release checklist for Draft v0.3.3. It maps the
-v0.3.3 release intent to implementation, tests, and documentation so maintainers
-can decide whether a build is ready to publish. The working `plans/` directory
-remains private repo-planning material; public traceability belongs in this
-checklist, README, release notes, and docs.
+This matrix maps the Draft v0.3.4 release contract to implementation, tests, documentation, and delivery gates. It is the public evidence required for a release-readiness decision; private planning files are not release evidence.
 
 ## Current Verdict
 
-The current tree is expected to satisfy the v0.3.3 local production-readiness
-gates once the release commands below pass. Draft remains local-first and
-daemonless by default. v0.3.3 finalizes the verified stable-base model —
-stable base, `stable_head`, project-state verification, configurable save
-finalization with disposal, close/gc maintenance, composition validation, the
-`proto/` contract layer, and human-readable CLI output — on top of the v0.3.2
-verified changepack system.
+The source candidate implements the v0.3.4 contract and has local evidence for migration safety, dependency security, Rust behavior, and Console reproducibility. Publication remains gated on the required GitHub Actions matrix, five-target dry run, installer smoke tests, and review of the final committed diff.
 
 ## Requirement Matrix
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| Stable base and `stable_head` | Implemented | `draft init` creates the initial stable base and `stable_head` with an `InitialStableBaseCreated` receipt; `stable_head` metadata is hash-verified on every read and by `draft gc`. |
-| Project-state verification | Implemented | Before `stable_head` advances, save re-verifies the composed final state (workspace hash, `.draft/` exclusion, pack evidence, previous head integrity, trust-ledger verification) and records `ProjectStateVerified` or `ProjectStateVerificationFailed`; failure preserves the pack. |
-| Save finalization and modes | Implemented | `[save].pack_disposal` selects `merge_and_dispose` (default) or `dispose_only`; invalid values fail clearly; the pipeline records `SaveStarted`, hook events, verification events, `StableHeadAdvanced`, `SaveFinalized`, and `PackDisposed`/`PackDisposalFailed`. |
-| Pack disposal | Implemented | Disposal is the final successful save step; disposed packs are removed from both stores, dropped from the affected-path index, and are no longer rollback targets (rollback points to the receipt). |
-| `draft close` / `draft gc` | Implemented | Close refuses unsafe pending state without `--force` and never deletes project files; gc prunes disposed/orphaned metadata, rebuilds the stable-graph and affected-path indexes, and validates `stable_head`. |
-| Composition | Implemented | `draft pack compose` / `draft compose` classify independent/dependent/conflicting packs, order dependencies topologically, fail cycles, compute a deterministic `composition_hash`, and record `CompositionCreated`/`CompositionVerified`/`CompositionFailed`. |
-| `proto/` contracts | Implemented | 16 specs, 8 JSON schemas, and 13 test vectors with schema-validated positive/negative payload fixtures; conformance-tested in core tests. |
-| Deterministic verification keys | Implemented | `verification_key` composes workspace, config, toolchain, command, and environment hashes; persisted in `verify.json` and the verification cache manifest. |
-| Human-readable output | Implemented | Default output is human-readable everywhere; JSON only via `--json`, or `--raw` on `draft event` (JSONL). |
-| v0.3.2 migration | Implemented | Opening a v0.3.2 `.draft/` initializes `stable_head`, preserves pending packs, disposes nothing, and records `MigrationCompleted`; covered by a smoke test. |
-| Global and project `.draft/` stores | Implemented | `draft init --global` provisions global identity and signing state; `draft init` provisions project state and v0.3.3 migration paths. |
-| Hard `.draft/` exclusion | Implemented | Central path guards reject `.draft/` paths across pack, diff, import/export, save, rollback, scan, watcher, LSIF, hash, and hook candidate paths. |
-| Signed receipts | Implemented | Trust-relevant actions create Ed25519 receipts; `draft receipt verify <rcp_id>` and `draft receipt verify --all` verify signatures and linkage. |
-| Event and transparency integrity | Implemented | Events are final when appended with their linked receipt id; events and transparency entries are hash-chained; tampering is covered by unit, smoke, and security fixture tests. |
-| Pack manifest and lockfile | Implemented | Canonical v0.3.3 manifests and lockfiles store intent, hashes, lifecycle state, verification, LSIF, and receipt references. |
-| Import/export | Implemented | `.draftpack` (format 2) export embeds content-addressed objects; import supports quarantine, the full imported lifecycle (`imported_quarantined → import_verified → import_approved → import_saved`), local re-verification from embedded content, conflict-checked content application on save, name conflict handling, dry-run, deterministic archives, and fail-closed path/archive/receipt/object validation. |
-| Verification, risk, LSIF, and selection | Implemented | `draft verify <pck_id> --explain/--full/--fuzz` records risk (with the ML-ready feature vector), symbol impact, test selection, fuzz selection, and command evidence; policy escalates full/fuzz verification for configured intents. |
-| Policy enforcement | Implemented | Field-level policy resolution (project > global > safe default) governs the save gate (approval, critical-risk block, high-risk approval, workspace re-verification) and verification escalation; malformed policy files fail closed. |
-| Save and rollback safety | Implemented | Save requires verification, approval, a canonical risk report with no unresolved critical risk, current evidence, and safe paths; rollback accepts `chk_`, `pck_`, and `rcp_` targets (legacy and canonical signed receipts) and supports dry-run. |
-| Pack algebra | Implemented | `draft pack inspect`, `depends`, `conflicts`, and `compose` operate on canonical pack metadata and patch evidence. |
-| AG-UI Review Cockpit | Implemented | `draft cockpit` serves a loopback-only browser cockpit with real pack/risk/diff/event/receipt APIs and CSRF-protected mutations. |
-| Adapters | Implemented/experimental | MCP, ACP client, A2A, and AG-UI are implemented; `acp-comm` (Agent Communication Protocol) is marked experimental. Unsafe MCP operations are refused, and `draft doctor --global` lists every adapter's status. |
-| Benchmarks and fuzzing | Implemented | Criterion benchmarks cover workspace hashing (incl. 10k files, cached), composition at 1k packs, conflict detection, gc cleanup, events, signing, risk, and LSIF; cargo-fuzz targets cover parsers and security boundaries. |
-| CLI without daemon | Implemented | The CLI invokes core directly and does not require `draftd`. |
-| Release workflow | Implemented | Tag-driven GitHub Actions release workflow validates versions, builds supported targets, packages `draft` and `draftd`, publishes versioned GitHub Release assets with GitHub artifact attestations, and marks the newest successful release as latest. |
-| Installers | Implemented | `install.sh` and `install.ps1` fetch GitHub Releases from `Shiva936/draft`, verify `SHA256SUMS`, install into user-local directories by default, handle upgrades, and fail clearly on unsupported systems. |
-| Public documentation | Implemented | README, docs, release notes, and this checklist document the current v0.3.3 behavior and rejected legacy surfaces. |
+| Version and schema consistency | Implemented | Every workspace crate, CLI version string, protocol schema, and frontend package declares v0.3.4; `scripts/validate-version.sh` enforces consistency. |
+| Task-centered orchestration | Implemented | Versioned task definitions, deterministic templates, execution lifecycle, candidate profiles, evidence, decisions, waivers, ownership, inbox items, and status views are implemented in `core/` and exposed through the CLI. |
+| Submit finalization | Implemented | New state uses submit-named config, hooks, manifests, events, receipts, schemas, and lifecycle labels; historical save-named fields remain read-compatible, while the retired `draft save` command is absent. |
+| Migration transaction | Implemented and tested | `draft doctor migrate` discovers every migration target, writes byte-for-byte backups preserving `.draft/` relative paths, validates all transformed workspace/config/manifest data before source writes, uses atomic replacements, and restores originals on commit or completion-event failure. Focused tests cover success, idempotency, stored and quarantined pending-pack preservation, malformed-manifest no-write behavior, and original backup bytes. |
+| Protected data and redaction | Implemented | Central path guards keep `.draft/` and protected content out of candidates, exports, logs, editor writes, and execution output; durable payload redaction has focused tests. |
+| Evidence and submit readiness | Implemented | Evidence freshness, deterministic risk, approval invalidation, expiring waivers, protected-path checks, ownership state, and actionable blockers feed shared readiness/status views. |
+| Project registry and Doctor | Implemented | User-scoped registry sync, project/global index status, migration, journal recovery reporting, and storage stats/gc/compact/prune are exposed and documented. |
+| Draft Console | Implemented | The loopback-only service embeds committed `services/agui/dist/` assets at compile time; the Console source supports type-checking and deterministic production builds. CI rebuilds the assets and rejects a dirty diff. |
+| Extension boundary | Implemented | Versioned manifests, content hashes, atomic local installation, enabled state, and uninstall are supported; Draft does not execute extension entrypoints or ship protocol bridges. |
+| Dependency security | Clean locally | Ratatui 0.30.2 uses patched `lru` 0.18.2, `paste` is absent, Crossterm is unified at 0.29, and `crossbeam-epoch` is patched to 0.9.20. `cargo audit --deny warnings` passes against the current RustSec database. |
+| Rust CI | Configured | Formatting, version checks, installer syntax, strict Clippy, workspace tests, doctests, and release builds run on Ubuntu, macOS, and Windows. |
+| Frontend CI | Configured | A Linux Console job runs `npm ci`, TypeScript checking, high-severity npm audit, production build, and a clean-diff check for the committed `dist/`; release artifact builds depend on it. |
+| Release artifacts | Configured; execution pending | The release workflow builds Linux x64/ARM64, macOS x64/ARM64, and Windows x64 archives, then emits `SHA256SUMS` and GitHub build-provenance attestations. A v0.3.4 dry run must pass before tagging. |
+| Public documentation | Implemented | README, guides, reference, internals, changelog, release notes, roadmap, and this matrix describe the v0.3.4 command and safety boundary. |
 
-## Release Gates
+## Required Release Gates
 
-A v0.3.3 release candidate must pass:
+The committed candidate must pass:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace --all-targets`
 - `cargo test --workspace --doc`
-- `cargo bench` for benchmark visibility before tagging
+- `cargo build --workspace --release`
+- `cargo audit --deny warnings`
 - `scripts/validate-version.sh`
-- shell syntax validation for `install.sh`
-- PowerShell parser validation for `install.ps1` when PowerShell is available
-- a CLI contract audit confirming `draft event` supports only `--raw`,
-  `--page`, and `--limit`, and rejects `draft log`, `draft event -p`, and
-  `draft event -l`
-- a docs audit confirming public docs do not advertise removed event flags or
-  claim stubbed behavior as complete
-- cross-platform smoke testing on Linux, macOS, Windows, and WSL, especially
-  hidden `.draft/` behavior and key-file permissions
+- `bash -n scripts/validate-version.sh scripts/package-release.sh install.sh`
+- `sh -n install.sh`
+- the PowerShell parser check for `install.ps1` on Windows
+- from `services/agui/web/`: `npm ci`, `npm run typecheck`, `npm audit --audit-level=high`, `npm run build`, then `git diff --exit-code -- services/agui/dist`
 
-The release workflow must publish immutable versioned archives and `SHA256SUMS`
-to GitHub Releases, plus GitHub artifact attestations for provenance.
-Installers must use GitHub Releases, not expiring workflow artifacts, as their
-source of truth.
+The pull request matrix must pass on Ubuntu, macOS, and Windows. The tag must not be created until a dry-run release packages all five supported targets successfully.
 
-## Maintainer Notes
+## Publication Verification
 
-Draft v0.3.3 must remain local-first and offline-first. No P0 feature may require
-a hosted service, remote transparency service, marketplace, cloud sync, or
-credential exchange. Hooks are opaque local commands captured as receipt
-evidence; they are not parsed or modeled as native external-tool operations.
+After merging the reviewed candidate, create `v0.3.4` and verify the GitHub Release contains exactly the five platform archives plus `SHA256SUMS`, with provenance attestations for the payload. Smoke-test `install.sh` and `install.ps1`, then confirm `draft --version`, `draftd --version`, initialization, Console startup, and one verify/approve/submit workflow from installed binaries.
+
+The current approximately 884 KB embedded Console bundle is accepted for v0.3.4 because it is local-only. Bundle-size optimization remains post-release work.

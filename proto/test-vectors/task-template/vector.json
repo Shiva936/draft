@@ -1,0 +1,1 @@
+{"name":"task-template","payload_schema":"task-template.schema.json","payload":{"schema_version":"0.3.4","id":"bug_fix","name":"Bug fix","default_risk":"medium","default_mode":"normal","recommended_candidate_preset":"fast"},"invalid_payload":{"schema_version":"0.3.4","id":"bug_fix","name":"Bug fix","default_risk":"unknown","default_mode":"normal"},"expect":{"valid":true}}

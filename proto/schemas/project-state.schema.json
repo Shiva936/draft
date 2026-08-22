@@ -4,7 +4,7 @@
   "type": "object",
   "required": ["schema_version", "workspace_hash", "base_hash", "stable_head"],
   "properties": {
-    "schema_version": { "const": "0.3.3" },
+    "schema_version": { "const": "0.3.4" },
     "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "base_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "stable_head": { "type": "string" }

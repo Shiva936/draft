@@ -6,6 +6,18 @@ pub fn header(title: &str) {
     println!("\n\x1b[1m{title}\x1b[0m");
 }
 
+pub fn section(title: &str) {
+    println!("\n{title}:");
+}
+
+pub fn bullet(value: &str) {
+    println!("  - {value}");
+}
+
+pub fn line(value: &str) {
+    println!("  {value}");
+}
+
 pub fn field(label: &str, value: &str) {
     println!("  {label:<14} {value}");
 }

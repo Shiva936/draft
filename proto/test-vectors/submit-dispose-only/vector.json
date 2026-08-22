@@ -1,0 +1,14 @@
+{
+  "name": "submit-dispose-only",
+  "expect": "disposed_without_merge",
+  "object": "submit",
+  "submit_mode": "dispose_only",
+  "payload_schema": "config.schema.json",
+  "payload": {
+    "submit": { "pack_disposal": "dispose_only" },
+    "hooks": { "submit": { "before": [], "after": [] } }
+  },
+  "invalid_payload": {
+    "submit": { "pack_disposal": "delete_everything" }
+  }
+}

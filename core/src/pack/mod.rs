@@ -1,4 +1,4 @@
-//! Canonical v0.3.3 pack model: manifest, lockfile, intents, and the pack state
+//! Canonical v0.3.4 pack model: manifest, lockfile, intents, and the pack state
 //! machine (PRD §9.5/9.6/9.11/9.12, TDD §17–21).
 //!
 //! A pack lives at `.draft/packs/pck_<id>/` and is described by an immutable
@@ -76,7 +76,7 @@ pub enum ImportState {
     ImportedQuarantined,
     ImportVerified,
     ImportApproved,
-    ImportSaved,
+    ImportSubmitted,
     ImportRejected,
 }
 
@@ -89,12 +89,14 @@ pub enum ApprovalState {
     Rejected,
 }
 
-/// Save lifecycle state.
+/// Submit lifecycle state. Legacy `save_state` fields are accepted on read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SaveState {
-    Unsaved,
-    Saved,
+pub enum SubmitState {
+    #[serde(alias = "unsaved")]
+    Unsubmitted,
+    #[serde(alias = "saved")]
+    Submitted,
     RolledBack,
 }
 
@@ -119,7 +121,8 @@ pub struct PackManifest {
     pub receipt_hashes: Vec<String>,
     pub import_state: ImportState,
     pub approval_state: ApprovalState,
-    pub save_state: SaveState,
+    #[serde(alias = "save_state")]
+    pub submit_state: SubmitState,
 }
 
 impl PackManifest {
@@ -135,14 +138,14 @@ impl PackManifest {
                 ImportState::ImportedQuarantined => "imported_quarantined",
                 ImportState::ImportVerified => "import_verified",
                 ImportState::ImportApproved => "import_approved",
-                ImportState::ImportSaved => "import_saved",
+                ImportState::ImportSubmitted => "import_submitted",
                 ImportState::ImportRejected => "import_rejected",
                 ImportState::None => unreachable!(),
             };
         }
-        match (self.approval_state, self.save_state) {
-            (_, SaveState::RolledBack) => "rolled_back",
-            (_, SaveState::Saved) => "saved",
+        match (self.approval_state, self.submit_state) {
+            (_, SubmitState::RolledBack) => "rolled_back",
+            (_, SubmitState::Submitted) => "submitted",
             (ApprovalState::Rejected, _) => "rejected",
             (ApprovalState::Approved, _) => "approved",
             (ApprovalState::Pending, _) if self.is_verified() => "verified",
@@ -208,7 +211,7 @@ pub fn can_import_transition(from: ImportState, to: ImportState) -> bool {
             | (ImportedQuarantined, ImportRejected)
             | (ImportVerified, ImportRejected)
             | (ImportApproved, ImportRejected)
-            | (ImportApproved, ImportSaved)
+            | (ImportApproved, ImportSubmitted)
     )
 }
 
@@ -394,7 +397,7 @@ mod tests {
             receipt_hashes: vec![],
             import_state: ImportState::None,
             approval_state: ApprovalState::Pending,
-            save_state: SaveState::Unsaved,
+            submit_state: SubmitState::Unsubmitted,
         }
     }
 
@@ -425,9 +428,9 @@ mod tests {
         assert_eq!(m.lifecycle(), "verified");
         m.approval_state = ApprovalState::Approved;
         assert_eq!(m.lifecycle(), "approved");
-        m.save_state = SaveState::Saved;
-        assert_eq!(m.lifecycle(), "saved");
-        m.save_state = SaveState::RolledBack;
+        m.submit_state = SubmitState::Submitted;
+        assert_eq!(m.lifecycle(), "submitted");
+        m.submit_state = SubmitState::RolledBack;
         assert_eq!(m.lifecycle(), "rolled_back");
 
         let mut imp = manifest();
@@ -458,7 +461,7 @@ mod tests {
         // Forward path.
         assert!(can_import_transition(ImportedQuarantined, ImportVerified));
         assert!(can_import_transition(ImportVerified, ImportApproved));
-        assert!(can_import_transition(ImportApproved, ImportSaved));
+        assert!(can_import_transition(ImportApproved, ImportSubmitted));
         // Re-verification resets approval; allowed from verified/approved.
         assert!(can_import_transition(ImportVerified, ImportVerified));
         assert!(can_import_transition(ImportApproved, ImportVerified));
@@ -468,11 +471,11 @@ mod tests {
         assert!(can_import_transition(ImportApproved, ImportRejected));
         // Illegal jumps and terminal states.
         assert!(!can_import_transition(ImportedQuarantined, ImportApproved));
-        assert!(!can_import_transition(ImportedQuarantined, ImportSaved));
-        assert!(!can_import_transition(ImportVerified, ImportSaved));
+        assert!(!can_import_transition(ImportedQuarantined, ImportSubmitted));
+        assert!(!can_import_transition(ImportVerified, ImportSubmitted));
         assert!(!can_import_transition(ImportRejected, ImportVerified));
-        assert!(!can_import_transition(ImportSaved, ImportVerified));
-        assert!(!can_import_transition(ImportSaved, ImportRejected));
+        assert!(!can_import_transition(ImportSubmitted, ImportVerified));
+        assert!(!can_import_transition(ImportSubmitted, ImportRejected));
     }
 
     #[test]

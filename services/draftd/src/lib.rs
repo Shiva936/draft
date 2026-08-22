@@ -100,7 +100,7 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
         })
         .into_response(id),
         "decision.approve" => with_path(&req, |p| {
-            app.cockpit_decide(
+            app.decide_pack(
                 p,
                 &string_param(&req, "pack")?,
                 true,
@@ -109,7 +109,7 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
         })
         .into_response(id),
         "decision.reject" => with_path(&req, |p| {
-            app.cockpit_decide(
+            app.decide_pack(
                 p,
                 &string_param(&req, "pack")?,
                 false,
@@ -134,8 +134,8 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
             )
         })
         .into_response(id),
-        "save.run" => with_path(&req, |p| {
-            app.save(p, &string_param(&req, "pack")?, BTreeMap::new())
+        "submit.run" => with_path(&req, |p| {
+            app.submit(p, &string_param(&req, "pack")?, BTreeMap::new())
         })
         .into_response(id),
         "rollback.run" => with_path(&req, |p| {
@@ -210,7 +210,7 @@ fn run_job(app: &App, path: &Path, req: &Request, kind: &str) -> DraftResult<Val
             &string_param(req, "right")?,
             &string_param(req, "output")?,
         )?),
-        "save" => to_value(app.save(path, &string_param(req, "pack")?, BTreeMap::new())?),
+        "submit" => to_value(app.submit(path, &string_param(req, "pack")?, BTreeMap::new())?),
         "rollback" => to_value(app.rollback(path, &string_param(req, "target")?, true)?),
         "index-rebuild" => to_value(app.index_rebuild(path)?),
         other => Err(DraftError::new(
