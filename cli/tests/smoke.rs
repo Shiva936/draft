@@ -232,7 +232,12 @@ fn cli_startup_and_init_are_available_in_debug_builds() {
         String::from_utf8_lossy(&initialized.stderr)
     );
     let report: serde_json::Value = serde_json::from_slice(&initialized.stdout).unwrap();
-    assert_eq!(report["root"], dir.to_string_lossy().as_ref());
+    let reported_root = report["root"].as_str().expect("init root must be a string");
+    assert!(
+        same_canonical_path(std::path::Path::new(reported_root), dir),
+        "reported root {reported_root} does not resolve to {}",
+        dir.display()
+    );
     assert_eq!(report["created"], true);
 }
 
