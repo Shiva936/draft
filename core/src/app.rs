@@ -13166,9 +13166,11 @@ fn hex_decode(input: &str) -> DraftResult<Vec<u8>> {
     }
     let mut out = Vec::with_capacity(input.len() / 2);
     let bytes = input.as_bytes();
-    for pair in bytes.chunks_exact(2) {
-        let high = hex_value(pair[0])?;
-        let low = hex_value(pair[1])?;
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    for &[high, low] in pairs {
+        let high = hex_value(high)?;
+        let low = hex_value(low)?;
         out.push((high << 4) | low);
     }
     Ok(out)
@@ -13508,6 +13510,13 @@ mod app_tests {
         assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_b"), 0.0);
         // Unknown candidates never divide by zero.
         assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_x"), 0.0);
+    }
+
+    #[test]
+    fn hex_decode_validates_pairs_and_digits() {
+        assert_eq!(hex_decode("00aFff").unwrap(), vec![0x00, 0xaf, 0xff]);
+        assert_eq!(hex_decode("0").unwrap_err().message, "invalid hex length");
+        assert_eq!(hex_decode("0g").unwrap_err().message, "invalid hex byte");
     }
 
     #[test]
