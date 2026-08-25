@@ -1,16 +1,18 @@
 # Getting Started
 
-This guide walks through a complete Draft v0.3.4 workflow using only local files and the CLI.
+This guide walks through a complete Draft workflow using only local files and the CLI.
 
 ## Create A Workspace
 
 ```bash
 draft init
-draft config set identity.username "Ada"
-draft config set identity.email "ada@example.com"
+draft config set user.name "Ada"
+draft config set user.email "ada@example.com"
 ```
 
 `draft init` creates `.draft/`, writes default configuration, creates the event stream, prepares the object store, and builds the local index. Running it again fails safely so accidental reinitialization cannot rewrite workspace state.
+
+`user.name` and `user.email` are optional display/contact metadata, not security identity. A project value overrides the global value. An absent name resolves to the non-persisted fallback `unknown`; an absent email stays absent.
 
 ## Capture A Baseline
 
@@ -30,7 +32,7 @@ draft status
 
 Status compares the current workspace to the latest snapshot and reports added, modified, deleted, renamed, type-changed, and permission-changed files.
 
-## Create A ChangePack
+## Create A Pack
 
 ```bash
 draft create "parser cleanup"
@@ -38,15 +40,15 @@ draft list
 draft pack
 ```
 
-A ChangePack is Draft’s reviewable unit. It contains a patch reference, evidence references, task links, review decisions, approvals, risk results, verification results, submit receipts, and provenance hashes.
+A Pack is Draft’s reviewable unit. It contains a patch reference, evidence references, task links, review decisions, approvals, risk results, verification results, submit receipts, and provenance hashes.
 
 ## Verify And Review
 
 ```bash
-draft verify -p <ChangePack-id-or-name>
-draft risk -p <ChangePack-id-or-name>
-draft review -p <ChangePack-id-or-name>
-draft approve -p <ChangePack-id-or-name> --reason "verified locally"
+draft verify -p <Pack-id-or-name>
+draft risk -p <Pack-id-or-name>
+draft review -p <Pack-id-or-name>
+draft approve -p <Pack-id-or-name> --reason "verified locally"
 ```
 
 Verification runs configured commands and stores stdout, stderr, exit code, and timing as evidence. Risk analysis records findings that policy can use. Approval is required before submit when the default policy is active.
@@ -54,12 +56,12 @@ Verification runs configured commands and stores stdout, stderr, exit code, and 
 ## Submit
 
 ```bash
-draft submit -p <ChangePack-id-or-name>
+draft submit -p <Pack-id-or-name>
 draft receipt list
 draft receipt show <receipt-id>
 ```
 
-Submit finalizes the approved ChangePack and writes a durable receipt. With the default `merge_and_dispose` mode, Draft verifies the resulting project state, advances `stable_head`, runs configured after-submit hooks, and disposes the active ChangePack metadata. `dispose_only` delegates permanence to configured hooks and does not advance `stable_head`. A required hook failure preserves the pack. If `.draft/` appears in the submit candidate, Draft aborts, records a failed receipt, emits `submit.completed` with failure status, and does not run submit hooks.
+Submit finalizes the approved Pack and writes a durable receipt. With the default `merge_and_dispose` mode, Draft verifies the resulting project state, advances `stable_head`, runs configured after-submit hooks, and disposes only mutable Pack staging. Immutable revisions and trust history remain. `dispose_only` delegates permanence to configured hooks and does not advance `stable_head`. A required hook failure preserves staging. If `.draft/` appears in the submit candidate, Draft aborts before hooks run.
 
 ## Roll Back
 

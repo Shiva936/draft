@@ -100,14 +100,19 @@ fn create_verified_reviewed_pack(dir: &std::path::Path, name: &str) -> String {
 
 fn write_rich_hook_config(dir: &std::path::Path, command: &str, continue_on_error: bool) {
     let content = format!(
-        r#"[identity]
-username = "Ada"
+        r#"schema_version = 1
+
+[user]
+name = "Ada"
 email = "ada@example.com"
 
 [submit]
 message_template = "{{{{title}}}}"
 
 [hooks.submit]
+kind = "entry"
+
+[hooks.submit.entry]
 command = "{}"
 enabled = true
 phase = "after_success"
@@ -132,16 +137,19 @@ block_if_tests_fail = true
 
 fn write_phased_hook_config(dir: &std::path::Path, before: &str, after: &str) {
     let content = format!(
-        r#"[identity]
-username = "Ada"
+        r#"schema_version = 1
+
+[user]
+name = "Ada"
 email = "ada@example.com"
 
 [submit]
 message_template = "{{{{title}}}}"
 
 [hooks.submit]
-before = [{{ command = "{}", enabled = true, shell = "default", cwd = "workspace" }}]
-after = [{{ command = "{}", enabled = true, shell = "default", cwd = "workspace" }}]
+kind = "phases"
+before = [{{ kind = "entry", entry = {{ command = "{}", enabled = true, shell = "default", cwd = "workspace" }} }}]
+after = [{{ kind = "entry", entry = {{ command = "{}", enabled = true, shell = "default", cwd = "workspace" }} }}]
 
 [verification]
 default_profile = "standard"
@@ -161,8 +169,10 @@ block_if_tests_fail = true
 fn write_dispose_only_config(dir: &std::path::Path) {
     std::fs::write(
         dir.join(".draft/config.toml"),
-        r#"[identity]
-username = "Ada"
+        r#"schema_version = 1
+
+[user]
+name = "Ada"
 email = "ada@example.com"
 
 [submit]
@@ -252,18 +262,18 @@ fn console_is_the_only_ui_command_and_extensions_are_management_only() {
     assert!(help.lines().any(|line| line.starts_with("  console")));
     assert!(!help.lines().any(|line| line.starts_with("  ui")));
     assert!(!help.lines().any(|line| line.starts_with("  cockpit")));
+    assert!(!help.lines().any(|line| line.starts_with("  identity")));
 
     draft(dir)
         .args(["console", "--help"])
         .assert()
         .success()
-        .stdout(contains("--port"));
-    draft(dir)
-        .args(["console", "--port", "0"])
-        .assert()
-        .failure()
-        .stderr(contains("PROJECT_SCOPE_REQUIRED"));
-    for retired in ["ui", "cockpit"] {
+        .stdout(
+            contains("--port")
+                .and(contains("--project"))
+                .and(contains("--no-open")),
+        );
+    for retired in ["ui", "cockpit", "identity"] {
         draft(dir).args([retired, "--help"]).assert().failure();
     }
     draft(dir)
@@ -285,21 +295,28 @@ fn extension_packages_can_be_managed_but_not_executed() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     let package = dir.join("example-extension");
-    std::fs::create_dir_all(&package).unwrap();
-    std::fs::write(package.join("entrypoint.sh"), "#!/bin/sh\n").unwrap();
+    std::fs::create_dir_all(package.join("contributions")).unwrap();
+    std::fs::create_dir_all(package.join("docs")).unwrap();
+    std::fs::write(package.join("contributions/task.json"), "{}").unwrap();
+    std::fs::write(package.join("docs/readme.md"), "# Example\n").unwrap();
+    std::fs::write(package.join("LICENSE.txt"), "Example license\n").unwrap();
     std::fs::write(
         package.join("extension.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": "0.3.4",
+            "schema_version": 1,
             "id": "example",
             "name": "Example",
             "version": "1.0.0",
             "publisher": "test",
             "draft_api": "^0.3.4",
-            "entrypoint": {"kind": "executable", "path": "entrypoint.sh"},
-            "capabilities": [],
-            "permissions": [],
-            "commands": []
+            "contributions": [{
+                "id": "example-task",
+                "kind": "task_template",
+                "path": "contributions/task.json"
+            }],
+            "documentation": ["docs/readme.md"],
+            "licenses": ["LICENSE.txt"],
+            "assets": []
         }))
         .unwrap(),
     )
@@ -347,7 +364,7 @@ fn init_status_ignore_and_events_work_without_vcs() {
     );
     assert!(dir.join(".draft/config.toml").exists());
     assert!(dir.join(".draft/.ignore").exists());
-    assert!(dir.join(".draft/events/events.jsonl").exists());
+    assert!(dir.join(".draft/events/event.log").exists());
 
     std::fs::write(dir.join("app.txt"), "hello\n").unwrap();
     std::fs::create_dir_all(dir.join("notes")).unwrap();
@@ -682,14 +699,14 @@ fn close_and_gc_follow_local_maintenance_contracts() {
         .args(["close"])
         .assert()
         .failure()
-        .stderr(contains("pending changepack"));
+        .stderr(contains("pending pack"));
     assert!(dirty.join(".draft").exists());
     draft(&dirty).args(["close", "--force"]).assert().success();
     assert!(!dirty.join(".draft").exists());
 }
 
 #[test]
-fn changepack_verify_approve_and_submit_native_only() {
+fn pack_verify_approve_and_submit_native_only() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
@@ -723,24 +740,15 @@ fn changepack_verify_approve_and_submit_native_only() {
         .args(["approve", "-p", pack_id, "--reason", "reviewed"])
         .assert()
         .success();
-    draft(dir)
-        .args(["submit", "-p", pack_id])
-        .assert()
-        .success()
-        .stdout(contains("ChangePack submitted"));
-
-    let receipts = draft(dir)
-        .args(["receipt", "list", "--json"])
+    let submitted = draft(dir)
+        .args(["submit", "-p", pack_id, "--json"])
         .output()
         .unwrap();
-    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
-    assert!(receipts
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["overall_status"] == "submitted"
-            && r["hook_status"] == "not_configured"
-            && r["native_submit_status"] == "submitted"));
+    assert!(submitted.status.success());
+    let submitted: serde_json::Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    assert_eq!(submitted["overall_status"], "submitted");
+    assert_eq!(submitted["hook_status"], "not_configured");
+    assert_eq!(submitted["native_submit_status"], "submitted");
 }
 
 #[test]
@@ -787,13 +795,13 @@ fn top_level_pack_ux_supports_create_list_switch_and_delete() {
         .write_stdin("n\n")
         .assert()
         .failure()
-        .stderr(contains("ChangePack deletion aborted"));
+        .stderr(contains("Pack deletion aborted"));
     draft(dir)
         .args(["pack", "-d", "first"])
         .write_stdin("y\n")
         .assert()
         .success()
-        .stdout(contains("ChangePack deleted"));
+        .stdout(contains("Pack deleted"));
     draft(dir)
         .args(["list"])
         .assert()
@@ -807,7 +815,7 @@ fn top_level_pack_ux_supports_create_list_switch_and_delete() {
 }
 
 #[test]
-fn pack_delete_keeps_current_cleanup_semantics_for_pack_owned_task_and_run() {
+fn pack_delete_preserves_independent_task_and_execution_history() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
@@ -831,18 +839,24 @@ fn pack_delete_keeps_current_cleanup_semantics_for_pack_owned_task_and_run() {
         .unwrap();
     let pack_id = pack["id"].as_str().unwrap();
     let task_id = pack["task_id"].as_str().unwrap();
-    let run_id = pack["run_id"].as_str().unwrap();
+    let execution_id = pack["execution_id"].as_str().unwrap();
 
     assert!(dir.join(format!(".draft/tasks/{task_id}.json")).exists());
-    assert!(dir.join(format!(".draft/runs/{run_id}.json")).exists());
+    assert!(dir
+        .join(format!(".draft/executions/{execution_id}.json"))
+        .exists());
     draft(dir)
         .args(["pack", "-d", pack_id])
         .write_stdin("y\n")
         .assert()
         .success();
-    assert!(!dir.join(format!(".draft/changepacks/{pack_id}")).exists());
-    assert!(!dir.join(format!(".draft/tasks/{task_id}.json")).exists());
-    assert!(!dir.join(format!(".draft/runs/{run_id}.json")).exists());
+    assert!(!dir
+        .join(format!(".draft/pack-workspaces/{pack_id}"))
+        .exists());
+    assert!(dir.join(format!(".draft/tasks/{task_id}.json")).exists());
+    assert!(dir
+        .join(format!(".draft/executions/{execution_id}.json"))
+        .exists());
 }
 
 #[test]
@@ -854,11 +868,11 @@ fn init_fails_when_workspace_already_initialized() {
         .args(["init"])
         .assert()
         .failure()
-        .stderr(contains("already initialized"));
+        .stderr(contains("already exists"));
 }
 
 #[test]
-fn event_command_supports_pagination_and_rejects_legacy_flags() {
+fn event_command_supports_pagination_and_rejects_retired_flags() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
@@ -871,12 +885,12 @@ fn event_command_supports_pagination_and_rejects_legacy_flags() {
         .args(["event", "--page", "1", "--limit", "1"])
         .assert()
         .success()
-        .stdout(contains("pack.selected"));
+        .stdout(contains("PackCreated"));
     draft(dir)
         .args(["event", "--limit", "1"])
         .assert()
         .success()
-        .stdout(contains("pack.selected"));
+        .stdout(contains("PackCreated"));
 
     let raw = draft(dir)
         .args(["event", "--raw", "--limit", "1"])
@@ -889,7 +903,7 @@ fn event_command_supports_pagination_and_rejects_legacy_flags() {
     );
     let raw_stdout = String::from_utf8(raw.stdout).unwrap();
     let raw_event: serde_json::Value = serde_json::from_str(raw_stdout.trim()).unwrap();
-    assert_eq!(raw_event["type"], "pack.selected");
+    assert_eq!(raw_event["type"], "PackCreated");
 
     draft(dir).args(["log"]).assert().failure();
     draft(dir).args(["events"]).assert().failure();
@@ -938,7 +952,7 @@ fn public_docs_do_not_advertise_retired_event_commands() {
                 && !(lower.contains("no `draft log`")
                     || lower.contains("there is no `draft log`")
                     || lower.contains("rejects `draft log`")
-                    || lower.contains("rejected legacy surfaces")
+                    || lower.contains("rejected retired surfaces")
                     || lower.contains("unsupported"))
             {
                 violations.push(format!("{} advertises draft log", file.display()));
@@ -1144,12 +1158,12 @@ fn disperse_splits_patch_files_into_review_required_outputs() {
     let first = outputs[0].as_str().unwrap();
     let second = outputs[1].as_str().unwrap();
     let first_patch: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join(format!(".draft/changepacks/{first}/patch.json")))
+        &std::fs::read_to_string(dir.join(format!(".draft/pack-workspaces/{first}/patch.json")))
             .unwrap(),
     )
     .unwrap();
     let second_patch: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.join(format!(".draft/changepacks/{second}/patch.json")))
+        &std::fs::read_to_string(dir.join(format!(".draft/pack-workspaces/{second}/patch.json")))
             .unwrap(),
     )
     .unwrap();
@@ -1199,58 +1213,116 @@ fn raw_hooks_submit_is_opaque_and_captures_receipt() {
         .args(["approve", "-p", pack_id])
         .assert()
         .success();
-    draft(dir)
-        .args(["submit", "-p", pack_id])
-        .assert()
-        .success();
+    let submitted = draft(dir)
+        .args(["submit", "-p", pack_id, "--json"])
+        .output()
+        .unwrap();
+    assert!(submitted.status.success());
+    let submitted: serde_json::Value = serde_json::from_slice(&submitted.stdout).unwrap();
     assert!(dir.join("submitted-message.txt").exists());
     let submitted_message = std::fs::read_to_string(dir.join("submitted-message.txt")).unwrap();
     assert!(submitted_message.contains("opaque-submit"));
-    let receipts = draft(dir)
-        .args(["receipt", "list", "--json"])
-        .output()
+    let working_dir = submitted["hook_results"][0]["working_dir"]
+        .as_str()
         .unwrap();
-    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
-    assert!(receipts.as_array().unwrap().iter().any(|r| {
-        let Some(working_dir) = r["hook_results"][0]["working_dir"].as_str() else {
-            return false;
-        };
-        r["hook_results"][0]["command_hash"].is_string()
-            && r["hook_results"][0]["exit_code"] == 0
-            && same_canonical_path(std::path::Path::new(working_dir), dir)
-            && r["hook_results"][0]["stdout_ref"].is_string()
-            && r["hook_results"][0]["stderr_ref"].is_string()
-            && r["hook_status"] == "succeeded"
-            && r["overall_status"] == "submitted"
-            && r["risk_level"] != "unknown"
-            && r["event_refs"]
-                .as_array()
-                .map(|refs| !refs.is_empty())
-                .unwrap_or(false)
-    }));
-    assert!(receipts
+    assert!(submitted["hook_results"][0]["command_hash"].is_string());
+    assert_eq!(submitted["hook_results"][0]["exit_code"], 0);
+    assert!(same_canonical_path(std::path::Path::new(working_dir), dir));
+    assert!(submitted["hook_results"][0]["stdout_ref"].is_string());
+    assert!(submitted["hook_results"][0]["stderr_ref"].is_string());
+    assert_eq!(submitted["hook_status"], "succeeded");
+    assert_eq!(submitted["overall_status"], "submitted");
+    assert_ne!(submitted["risk_level"], "unknown");
+    assert!(submitted["event_refs"]
         .as_array()
-        .unwrap()
-        .iter()
-        .any(|r| r["kind"] == "hook" && r["status"] == "succeeded"));
+        .is_some_and(|refs| !refs.is_empty()));
 }
 
 #[test]
-fn final_decision_requires_human_actor() {
+fn retired_workspace_profile_fails_closed_but_doctor_and_close_recover() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    std::fs::write(dir.join(".draft/identity.json"), [0xff, 0xfe, 0xfd]).unwrap();
+    draft(dir)
+        .args(["status"])
+        .assert()
+        .failure()
+        .stderr(contains("unsupported pre-release profile state"));
+    draft(dir)
+        .args(["doctor"])
+        .assert()
+        .failure()
+        .stdout(contains("identity.json"));
+    draft(dir).args(["close", "--force"]).assert().success();
+    assert!(!dir.join(".draft").exists());
+}
+
+#[test]
+fn retired_config_namespace_and_xdg_profile_fail_without_value_parsing() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
     std::fs::write(
-        dir.join(".draft/identity.json"),
-        r#"{"id":"act_agent","kind":"agent","display_name":"agent"}"#,
+        dir.join(".draft/config.toml"),
+        "schema_version = 1\n[identity]\nemail = [not valid TOML\n",
     )
     .unwrap();
-    let pack_id = create_verified_reviewed_pack(dir, "agent-blocked");
     draft(dir)
-        .args(["approve", "-p", &pack_id])
+        .args(["status"])
         .assert()
         .failure()
-        .stderr(contains("human actor"));
+        .stderr(contains("unsupported pre-release profile"));
+    draft(dir)
+        .args(["doctor"])
+        .assert()
+        .failure()
+        .stdout(contains("unsupported pre-release profile"));
+    draft(dir).args(["close", "--force"]).assert().success();
+
+    let second = tempfile::tempdir().unwrap();
+    let dir = second.path();
+    draft(dir).args(["init"]).assert().success();
+    let xdg = dir.join("xdg");
+    std::fs::create_dir_all(xdg.join("draft")).unwrap();
+    std::fs::write(xdg.join("draft/identity.toml"), [0xff, 0xfe, 0xfd]).unwrap();
+    draft(dir)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args(["status"])
+        .assert()
+        .failure()
+        .stderr(contains("identity.toml"));
+    draft(dir)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .args(["doctor"])
+        .assert()
+        .failure()
+        .stdout(contains("identity.toml"));
+}
+
+#[test]
+fn user_profile_rejects_empty_values_and_unset_represents_absence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    draft(dir).args(["init"]).assert().success();
+    for key in ["user.name", "user.email"] {
+        draft(dir)
+            .args(["config", "set", key, "   "])
+            .assert()
+            .failure()
+            .stderr(contains("cannot be empty"));
+    }
+    draft(dir)
+        .args(["config", "set", "user.email", "contact label"])
+        .assert()
+        .success();
+    draft(dir)
+        .args(["config", "unset", "user.email"])
+        .assert()
+        .success();
+    let config = std::fs::read_to_string(dir.join(".draft/config.toml")).unwrap();
+    assert!(!config.contains("contact label"));
+    assert!(!config.contains("email"));
 }
 
 #[test]
@@ -1332,7 +1404,7 @@ fn phased_submit_hooks_run_before_disposal() {
             .trim(),
         "after"
     );
-    assert!(!dir.join(".draft/packs").join(&pack_id).exists());
+    assert!(dir.join(".draft/packs").join(&pack_id).exists());
 }
 
 #[test]
@@ -1350,8 +1422,8 @@ fn dispose_only_does_not_advance_stable_head() {
         .success();
 
     assert_eq!(stable_head_id(dir), before);
-    assert!(!dir.join(".draft/packs").join(&pack_id).exists());
-    assert!(!dir.join(".draft/changepacks").join(&pack_id).exists());
+    assert!(dir.join(".draft/packs").join(&pack_id).exists());
+    assert!(!dir.join(".draft/pack-workspaces").join(&pack_id).exists());
 }
 
 #[test]
@@ -1362,20 +1434,15 @@ fn hooks_submit_failure_obeys_continue_on_error() {
     write_rich_hook_config(dir, failing_command(), true);
     let pack_id = create_verified_approved_pack(dir, "continue-hook-failure");
 
-    draft(dir)
-        .args(["submit", "-p", &pack_id])
-        .assert()
-        .success();
-    let receipts = draft(dir)
-        .args(["receipt", "list", "--json"])
+    let submitted = draft(dir)
+        .args(["submit", "-p", &pack_id, "--json"])
         .output()
         .unwrap();
-    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
-    assert!(receipts.as_array().unwrap().iter().any(|r| {
-        r["native_submit_status"] == "submitted"
-            && r["hook_status"] == "failed"
-            && r["overall_status"] == "submitted_with_hook_failure"
-    }));
+    assert!(submitted.status.success());
+    let submitted: serde_json::Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    assert_eq!(submitted["native_submit_status"], "submitted");
+    assert_eq!(submitted["hook_status"], "failed");
+    assert_eq!(submitted["overall_status"], "submitted_with_hook_failure");
 }
 
 #[test]
@@ -1391,16 +1458,9 @@ fn hooks_submit_failure_fails_closed_by_default() {
         .assert()
         .failure()
         .stderr(contains("SUBMIT_FAILED"));
-    let receipts = draft(dir)
-        .args(["receipt", "list", "--json"])
-        .output()
-        .unwrap();
-    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
-    assert!(receipts.as_array().unwrap().iter().any(|r| {
-        r["native_submit_status"] == "submitted"
-            && r["hook_status"] == "failed"
-            && r["overall_status"] == "failed"
-    }));
+    let events = canonical_event_log(dir);
+    assert!(events.contains("SubmitHookFailed"));
+    assert!(events.contains("SubmitCompleted"));
 }
 
 #[test]
@@ -1460,7 +1520,7 @@ fn submit_requires_current_passed_verification_receipt() {
     draft(dir).args(["init"]).assert().success();
     let pack_id = create_verified_approved_pack(dir, "stale-verification");
     let patch_path = dir
-        .join(".draft/changepacks")
+        .join(".draft/pack-workspaces")
         .join(&pack_id)
         .join("patch.json");
     let mut patch: serde_json::Value =
@@ -1472,7 +1532,7 @@ fn submit_requires_current_passed_verification_receipt() {
         .args(["submit", "-p", &pack_id])
         .assert()
         .failure()
-        .stderr(contains("current passed verification receipt"));
+        .stderr(contains("patch graph digest mismatch"));
 }
 
 #[test]
@@ -1482,14 +1542,19 @@ fn hooks_submit_rejects_workspace_escape_and_draft_env_override() {
     draft(dir).args(["init"]).assert().success();
     std::fs::write(
         dir.join(".draft/config.toml"),
-        r#"[identity]
-username = "Ada"
+        r#"schema_version = 1
+
+[user]
+name = "Ada"
 email = "ada@example.com"
 
 [submit]
 message_template = "{{title}}"
 
 [hooks.submit]
+kind = "entry"
+
+[hooks.submit.entry]
 command = "echo should-not-run"
 cwd = ".."
 
@@ -1513,17 +1578,22 @@ block_if_tests_fail = true
 
     std::fs::write(
         dir.join(".draft/config.toml"),
-        r#"[identity]
-username = "Ada"
+        r#"schema_version = 1
+
+[user]
+name = "Ada"
 email = "ada@example.com"
 
 [submit]
 message_template = "{{title}}"
 
 [hooks.submit]
+kind = "entry"
+
+[hooks.submit.entry]
 command = "echo should-not-run"
 
-[hooks.submit.env]
+[hooks.submit.entry.env]
 DRAFT_RECEIPT_ID = "fake"
 
 [verification]
@@ -1617,9 +1687,9 @@ fn storage_doctor_checks_receipt_references_and_draft_exclusion() {
         .unwrap()
         .iter()
         .find(|receipt| {
-            receipt["changepack_id"] == pack_id && receipt["hook_receipt_refs"].is_array()
+            receipt["subject_id"] == pack_id && receipt["event_type"] == "PackSubmitted"
         })
-        .unwrap()["id"]
+        .unwrap()["receipt_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -1628,10 +1698,7 @@ fn storage_doctor_checks_receipt_references_and_draft_exclusion() {
         .join(format!("{submit_receipt_id}.json"));
     let mut receipt: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&receipt_path).unwrap()).unwrap();
-    receipt["hook_receipt_refs"]
-        .as_array_mut()
-        .unwrap()
-        .push(serde_json::json!("rcp_missing"));
+    receipt["signature"] = serde_json::json!("tampered");
     std::fs::write(
         &receipt_path,
         serde_json::to_string_pretty(&receipt).unwrap(),
@@ -1641,14 +1708,14 @@ fn storage_doctor_checks_receipt_references_and_draft_exclusion() {
         .args(["storage", "doctor"])
         .assert()
         .success()
-        .stdout(contains("missing hook receipt ref rcp_missing"));
+        .stdout(contains("signature"));
 
     let tmp2 = tempfile::tempdir().unwrap();
     let dir2 = tmp2.path();
     draft(dir2).args(["init"]).assert().success();
     let active_pack_id = create_verified_approved_pack(dir2, "doctor-active");
     let patch_path = dir2
-        .join(".draft/changepacks")
+        .join(".draft/pack-workspaces")
         .join(&active_pack_id)
         .join("patch.json");
     let mut patch: serde_json::Value =
@@ -1669,8 +1736,8 @@ fn storage_doctor_checks_receipt_references_and_draft_exclusion() {
     draft(dir2)
         .args(["storage", "doctor", "--json"])
         .assert()
-        .success()
-        .stdout(contains("\"draft_hard_excluded\": false"));
+        .failure()
+        .stderr(contains("CORRUPT_DATA").and(contains("patch graph digest mismatch")));
 }
 
 #[test]
@@ -1765,7 +1832,7 @@ fn policy_failures_use_documented_exit_codes() {
 }
 
 #[test]
-fn rollback_receipts_must_be_explicitly_reversible() {
+fn signed_submit_receipts_are_explicit_rollback_targets() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
@@ -1790,29 +1857,17 @@ fn rollback_receipts_must_be_explicitly_reversible() {
 
     std::fs::write(dir.join("app.txt"), "v3\n").unwrap();
     let pack_id = create_verified_approved_pack(dir, "non-reversible-submit");
-    draft(dir)
-        .args(["submit", "-p", &pack_id])
-        .assert()
-        .success();
-    let receipts = draft(dir)
-        .args(["receipt", "list", "--json"])
+    let submitted = draft(dir)
+        .args(["submit", "-p", &pack_id, "--json"])
         .output()
         .unwrap();
-    let receipts: serde_json::Value = serde_json::from_slice(&receipts.stdout).unwrap();
-    let submit_receipt = receipts
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["changepack_id"] == pack_id)
-        .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    assert!(submitted.status.success());
+    let submitted: serde_json::Value = serde_json::from_slice(&submitted.stdout).unwrap();
+    let submit_receipt = submitted["id"].as_str().unwrap().to_string();
     draft(dir)
         .args(["rollback", &submit_receipt])
         .assert()
-        .failure()
-        .stderr(contains("not reversible"));
+        .success();
 
     draft(dir)
         .args(["rollback", checkpoint_id])
@@ -1830,8 +1885,7 @@ fn pack_export_import_quarantine_name_conflicts_and_security() {
     let artifact = root.path().join("pack.draftpack");
 
     // Source: create, verify, approve, export the portable pack, then submit it.
-    // v0.3.3 disposes submitted pack metadata, so export must happen before submit
-    // unless the pack was retained explicitly outside active storage.
+    // Immutable canonical history remains after mutable staging is disposed.
     draft(&src).args(["init"]).assert().success();
     let pack_id = create_verified_approved_pack(&src, "portable");
     draft(&src)
@@ -1849,7 +1903,7 @@ fn pack_export_import_quarantine_name_conflicts_and_security() {
         .args(["submit", "-p", &pack_id])
         .assert()
         .success();
-    assert!(!src.join(".draft/packs").join(&pack_id).exists());
+    assert!(src.join(".draft/packs").join(&pack_id).exists());
 
     // Destination: import enters quarantine (imported_quarantined).
     draft(&dst).args(["init"]).assert().success();
@@ -1861,13 +1915,13 @@ fn pack_export_import_quarantine_name_conflicts_and_security() {
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["quarantined"], true);
     let imported_id = report["pack_id"].as_str().unwrap();
-    let manifest = dst
+    let quarantine = dst
         .join(".draft/imports/quarantine")
         .join(imported_id)
-        .join("manifest.json");
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
-    assert_eq!(manifest["import_state"], "imported_quarantined");
+        .join("quarantine.json");
+    let quarantine: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&quarantine).unwrap()).unwrap();
+    assert_eq!(quarantine["trust_evaluation"], "quarantined");
 
     // Duplicate name without --name fails; with a unique --name it succeeds.
     draft(&dst)
@@ -2053,7 +2107,7 @@ fn write_tar_with_entry(path: &std::path::Path, name: &str, data: &[u8]) {
 }
 
 #[test]
-fn submit_aborts_if_pack_candidate_contains_draft_dir() {
+fn tampered_pack_candidate_fails_before_submit() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
@@ -2071,7 +2125,7 @@ fn submit_aborts_if_pack_candidate_contains_draft_dir() {
     let pack: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let pack_id = pack["id"].as_str().unwrap();
     let patch_path = dir
-        .join(".draft/changepacks")
+        .join(".draft/pack-workspaces")
         .join(pack_id)
         .join("patch.json");
     let mut patch: serde_json::Value =
@@ -2093,26 +2147,9 @@ fn submit_aborts_if_pack_candidate_contains_draft_dir() {
     draft(dir)
         .args(["verify", "-p", pack_id])
         .assert()
-        .success();
-    draft(dir)
-        .args(["review", "-p", pack_id])
-        .assert()
-        .success();
-    draft(dir)
-        .args(["approve", "-p", pack_id])
-        .assert()
-        .success();
-    draft(dir)
-        .args(["submit", "-p", pack_id])
-        .assert()
         .failure()
-        .stderr(contains("SUBMIT_FAILED").and(contains(".draft/ is included")));
+        .stderr(contains("CORRUPT_DATA").and(contains("patch graph digest mismatch")));
     assert!(!dir.join("should-not-exist").exists());
-    draft(dir)
-        .args(["event"])
-        .assert()
-        .success()
-        .stdout(contains("submit.completed"));
 }
 
 #[test]
@@ -2264,15 +2301,20 @@ fn project_policy_can_disable_critical_block() {
     risk["risk_level"] = serde_json::Value::String("critical".into());
     std::fs::write(&risk_path, serde_json::to_string_pretty(&risk).unwrap()).unwrap();
 
-    // Canonical policy keys are top-level; prepend so any legacy tables in the
-    // seeded policy.toml stay in their own sections.
+    // Canonical policy keys are top-level and unique.
     let policy_path = dir.join(".draft/policy.toml");
-    let existing = std::fs::read_to_string(&policy_path).unwrap_or_default();
+    let existing = std::fs::read_to_string(&policy_path).unwrap();
     std::fs::write(
         &policy_path,
-        format!(
-            "block_on_critical_risk = false\nrequire_approval_on_high_risk = false\n{existing}"
-        ),
+        existing
+            .replace(
+                "block_on_critical_risk = true",
+                "block_on_critical_risk = false",
+            )
+            .replace(
+                "require_approval_on_high_risk = true",
+                "require_approval_on_high_risk = false",
+            ),
     )
     .unwrap();
 
@@ -2305,14 +2347,14 @@ fn import_rejects_wrong_schema_receipt() {
         .success();
 
     // Tamper: inject a wrong-schema receipt into an otherwise valid artifact.
-    let archive = draft_core::importexport::read_archive(&artifact).unwrap();
+    let archive = draft_core::pack::archive::read_archive(&artifact).unwrap();
     let mut entries: Vec<(String, Vec<u8>)> = archive.entries.into_iter().collect();
     entries.push((
         "receipts/rcp_bogus.json".to_string(),
         br#"{"not":"a receipt"}"#.to_vec(),
     ));
     let tampered = root.path().join("tampered.draftpack");
-    draft_core::importexport::write_archive(&tampered, &entries).unwrap();
+    draft_core::pack::archive::write_archive(&tampered, &entries).unwrap();
 
     draft(&dst).args(["init"]).assert().success();
     // Rejected under --dry-run and for real; quarantine stays empty.
@@ -2320,12 +2362,12 @@ fn import_rejects_wrong_schema_receipt() {
         .args(["pack", "--import", tampered.to_str().unwrap(), "--dry-run"])
         .assert()
         .failure()
-        .stderr(contains("receipt"));
+        .stderr(contains("artifact digest mismatch"));
     draft(&dst)
         .args(["pack", "--import", tampered.to_str().unwrap()])
         .assert()
         .failure()
-        .stderr(contains("receipt"));
+        .stderr(contains("artifact digest mismatch"));
     let quarantine = dst.join(".draft/imports/quarantine");
     let empty = !quarantine.exists() || std::fs::read_dir(&quarantine).unwrap().next().is_none();
     assert!(empty, "quarantine must stay empty after a rejected import");
@@ -2360,7 +2402,7 @@ fn import_fails_on_tampered_embedded_object() {
         .success();
 
     // Format 2 must embed the content-addressed objects for the patch.
-    let archive = draft_core::importexport::read_archive(&artifact).unwrap();
+    let archive = draft_core::pack::archive::read_archive(&artifact).unwrap();
     let object_names: Vec<String> = archive
         .entries
         .keys()
@@ -2380,14 +2422,14 @@ fn import_fails_on_tampered_embedded_object() {
         }
     }
     let tampered = root.path().join("tampered.draftpack");
-    draft_core::importexport::write_archive(&tampered, &entries).unwrap();
+    draft_core::pack::archive::write_archive(&tampered, &entries).unwrap();
 
     draft(&dst).args(["init"]).assert().success();
     draft(&dst)
         .args(["pack", "--import", tampered.to_str().unwrap()])
         .assert()
         .failure()
-        .stderr(contains("content hash mismatch"));
+        .stderr(contains("artifact digest mismatch"));
 }
 
 #[test]
@@ -2399,7 +2441,8 @@ fn imported_pack_full_lifecycle_to_submit() {
     std::fs::create_dir_all(&dst).unwrap();
     let artifact = root.path().join("pack.draftpack");
 
-    // Workspace A: full local trust path, export, then submit/dispose.
+    // Workspace A: full local trust path, export, then submit. Immutable
+    // canonical history remains after staging disposal.
     draft(&src).args(["init"]).assert().success();
     let pack_id = create_verified_approved_pack(&src, "lifecycle");
     draft(&src)
@@ -2416,11 +2459,11 @@ fn imported_pack_full_lifecycle_to_submit() {
         .args(["submit", "-p", &pack_id])
         .assert()
         .success();
-    assert!(!src.join(".draft/packs").join(&pack_id).exists());
+    assert!(src.join(".draft/packs").join(&pack_id).exists());
 
-    // Workspace B: same baseline so the change applies cleanly.
+    // Workspace B: the exported pack is based on Draft's empty initial pack,
+    // so leave the destination at that same baseline.
     draft(&dst).args(["init"]).assert().success();
-    std::fs::write(dst.join("app.txt"), "v1\n").unwrap();
 
     let out = draft(&dst)
         .args(["pack", "--import", artifact.to_str().unwrap(), "--json"])
@@ -2445,7 +2488,8 @@ fn imported_pack_full_lifecycle_to_submit() {
 
     // Quarantined: origin trust never carries over.
     let report = inspect(&dst, &id);
-    assert_eq!(report["lifecycle"], "imported_quarantined");
+    assert_eq!(report["lifecycle"], "draft");
+    assert_eq!(report["quarantine"]["trust_evaluation"], "quarantined");
     assert_eq!(report["verified"], false);
 
     // Submit and approve are blocked before local verification.
@@ -2462,7 +2506,7 @@ fn imported_pack_full_lifecycle_to_submit() {
 
     // Local re-verification from embedded content.
     draft(&dst).args(["verify", &id]).assert().success();
-    assert_eq!(inspect(&dst, &id)["lifecycle"], "import_verified");
+    assert_eq!(inspect(&dst, &id)["lifecycle"], "verified");
 
     // Approval is still required before submit.
     draft(&dst)
@@ -2471,16 +2515,21 @@ fn imported_pack_full_lifecycle_to_submit() {
         .failure()
         .stderr(contains("approved"));
     draft(&dst).args(["approve", "-p", &id]).assert().success();
-    assert_eq!(inspect(&dst, &id)["lifecycle"], "import_approved");
+    assert_eq!(inspect(&dst, &id)["lifecycle"], "approved");
 
-    // Submit applies the embedded content and disposes active import metadata.
+    // Submit applies the embedded content and promotes the immutable pack.
     draft(&dst).args(["submit", "-p", &id]).assert().success();
     assert_eq!(
         std::fs::read_to_string(dst.join("app.txt")).unwrap(),
         "v2\n"
     );
     assert!(!dst.join(".draft/imports/quarantine").join(&id).exists());
-    assert!(!dst.join(".draft/packs").join(&id).exists());
+    assert!(dst.join(".draft/packs").join(&id).exists());
+    let promoted: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dst.join(".draft/packs").join(&id).join("quarantine.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(promoted["trust_evaluation"], "promoted");
 
     // The full trust chain in B verifies, and every lifecycle event exists.
     draft(&dst)
@@ -2636,18 +2685,18 @@ fn import_verify_fails_on_tampered_changes_patch() {
         .args(["verify", &id])
         .assert()
         .failure()
-        .stderr(contains("changes_hash"));
+        .stderr(contains("immutable revision"));
     // State is unchanged: still quarantined.
-    let manifest: serde_json::Value = serde_json::from_slice(
+    let quarantine: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
             dst.join(".draft/imports/quarantine")
                 .join(&id)
-                .join("manifest.json"),
+                .join("quarantine.json"),
         )
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(manifest["import_state"], "imported_quarantined");
+    assert_eq!(quarantine["trust_evaluation"], "quarantined");
 }
 
 /// Find canonical receipt ids in `.draft/receipts` for a given event type.
@@ -2782,7 +2831,7 @@ fn pack_depends_reports_shared_symbol_packs() {
     );
 }
 
-// ---- v0.3.3 pipeline, migration, and rollback-guidance contracts ----------
+// ---- Canonical pipeline and rollback-guidance contracts -------------------
 
 fn canonical_event_log(dir: &std::path::Path) -> String {
     std::fs::read_to_string(dir.join(".draft/events/event.log")).unwrap_or_default()
@@ -2854,8 +2903,8 @@ fn project_state_verification_failure_preserves_pack_and_reports_checks() {
     draft(dir).args(["init"]).assert().success();
     let pack_id = create_verified_approved_pack(dir, "ps-verify-fail");
 
-    // Corrupt stable_head metadata: project-state verification must fail the
-    // submit, preserve the pack, and record ProjectStateVerificationFailed.
+    // Corrupt stable_head metadata: authoritative corruption is reported in
+    // its own category before submit emits any new state.
     let head_path = dir.join(".draft/stable_head/head.json");
     let tampered = std::fs::read_to_string(&head_path)
         .unwrap()
@@ -2866,15 +2915,15 @@ fn project_state_verification_failure_preserves_pack_and_reports_checks() {
         .args(["submit", "-p", &pack_id])
         .assert()
         .failure()
-        .stderr(contains("project-state verification failed").and(contains("stable_head")));
+        .stderr(contains("CORRUPT_DATA").and(contains("verification_result")));
 
     assert!(
         dir.join(".draft/packs").join(&pack_id).exists()
-            || dir.join(".draft/changepacks").join(&pack_id).exists(),
+            || dir.join(".draft/pack-workspaces").join(&pack_id).exists(),
         "failed project-state verification must preserve the pack"
     );
     let events = canonical_event_log(dir);
-    assert!(events.contains("ProjectStateVerificationFailed"));
+    assert!(!events.contains("ProjectStateVerificationFailed"));
     assert!(!events.contains("StableHeadAdvanced"));
 }
 
@@ -2888,46 +2937,13 @@ fn rollback_to_disposed_pack_fails_clearly_and_points_to_receipt() {
         .args(["submit", "-p", &pack_id])
         .assert()
         .success();
-    assert!(!dir.join(".draft/packs").join(&pack_id).exists());
+    assert!(dir.join(".draft/packs").join(&pack_id).exists());
 
     draft(dir)
         .args(["rollback", &pack_id])
         .assert()
         .failure()
-        .stderr(contains("submitted and disposed").and(contains("rcp_")));
-}
-
-#[test]
-fn migration_from_previous_state_initializes_stable_head_and_preserves_packs() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path();
-    draft(dir).args(["init"]).assert().success();
-    std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
-    draft(dir).args(["checkpoint", "base"]).assert().success();
-    std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
-    draft(dir)
-        .args(["create", "pending-pack"])
-        .assert()
-        .success();
-
-    // A v0.3.2 workspace has no stable_head store: removing it simulates the
-    // old on-disk state. Any subsequent open must migrate non-destructively.
-    std::fs::remove_dir_all(dir.join(".draft/stable_head")).unwrap();
-    draft(dir).args(["status"]).assert().success();
-
-    assert!(dir.join(".draft/stable_head/head.json").exists());
-    let events = canonical_event_log(dir);
-    assert!(
-        events.contains("MigrationCompleted"),
-        "migration must record a MigrationCompleted event"
-    );
-    assert!(events.contains("\"packs_preserved\":true") || events.contains("packs_preserved"));
-    // The pending pack survived the migration.
-    draft(dir)
-        .args(["list"])
-        .assert()
-        .success()
-        .stdout(contains("pending-pack"));
+        .stderr(contains("staging snapshot was disposed").and(contains("rcp_")));
 }
 
 #[test]
@@ -2965,23 +2981,24 @@ fn pack_compose_records_composition_events_and_hash() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
     draft(dir).args(["init"]).assert().success();
-    std::fs::write(dir.join("a.txt"), "a-v1\n").unwrap();
-    std::fs::write(dir.join("b.txt"), "b-v1\n").unwrap();
-    draft(dir).args(["checkpoint", "base"]).assert().success();
+    let base_id = std::fs::read_to_string(dir.join(".draft/selected-pack"))
+        .unwrap()
+        .trim()
+        .to_string();
 
     std::fs::write(dir.join("a.txt"), "a-v2\n").unwrap();
     let out = draft(dir)
-        .args(["create", "pack-a", "--json"])
+        .args(["create", "pack-a", "-p", &base_id, "--json"])
         .output()
         .unwrap();
     let a: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let a_id = a["id"].as_str().unwrap().to_string();
     draft(dir).args(["verify", &a_id]).assert().success();
 
-    draft(dir).args(["checkpoint", "mid"]).assert().success();
+    std::fs::remove_file(dir.join("a.txt")).unwrap();
     std::fs::write(dir.join("b.txt"), "b-v2\n").unwrap();
     let out = draft(dir)
-        .args(["create", "pack-b", "--json"])
+        .args(["create", "pack-b", "-p", &base_id, "--json"])
         .output()
         .unwrap();
     let b: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -3007,6 +3024,22 @@ fn pack_compose_records_composition_events_and_hash() {
             .starts_with("sha256:"),
         "compose must report a deterministic composition_hash: {report}"
     );
+    let composed_id = report["pack_id"].as_str().unwrap();
+    draft(dir)
+        .args(["pack", "inspect", composed_id])
+        .assert()
+        .success();
+    let artifact = dir.join("composed.draftpack");
+    draft(dir)
+        .args([
+            "pack",
+            "--export",
+            composed_id,
+            "--output",
+            artifact.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
 
     let events = canonical_event_log(dir);
     assert!(events.contains("CompositionCreated"));

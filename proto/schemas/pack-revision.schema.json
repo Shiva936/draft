@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/pack-revision.schema.json",
+  "title": "Draft Pack Revision",
+  "type": "object",
+  "required": [
+    "schema_version", "pack_id", "manifest_digest", "revision_id", "revision_number",
+    "revision_digest", "base_digest", "content_digest", "diff_digest", "target_digest",
+    "resolved_dependency_digests", "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "pack_id": { "type": "string", "pattern": "^pck_[A-Za-z0-9_-]+$" },
+    "manifest_digest": { "$ref": "#/$defs/digest" },
+    "revision_id": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]+$" },
+    "revision_number": { "type": "integer", "minimum": 1 },
+    "revision_digest": { "$ref": "#/$defs/digest" },
+    "base_digest": { "$ref": "#/$defs/digest" },
+    "content_digest": { "$ref": "#/$defs/digest" },
+    "diff_digest": { "$ref": "#/$defs/digest" },
+    "target_digest": { "$ref": "#/$defs/digest" },
+    "resolved_dependency_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" } },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

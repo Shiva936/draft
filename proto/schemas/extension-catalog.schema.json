@@ -1,0 +1,507 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/extension-catalog.schema.json",
+  "title": "Draft Signed Extension Catalog",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/root_envelope"
+    },
+    {
+      "$ref": "#/$defs/timestamp_envelope"
+    },
+    {
+      "$ref": "#/$defs/snapshot_envelope"
+    },
+    {
+      "$ref": "#/$defs/targets_envelope"
+    },
+    {
+      "$ref": "#/$defs/source_status"
+    }
+  ],
+  "$defs": {
+    "signature": {
+      "type": "object",
+      "required": [
+        "key_id",
+        "signature"
+      ],
+      "properties": {
+        "key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "key": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "public_key"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "ed25519"
+        },
+        "public_key": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "role_spec": {
+      "type": "object",
+      "required": [
+        "key_ids",
+        "threshold"
+      ],
+      "properties": {
+        "key_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "descriptor": {
+      "type": "object",
+      "required": [
+        "version",
+        "length",
+        "sha256"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "publisher",
+        "draft_api",
+        "artifact_path",
+        "length",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]{1,64}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publisher": {
+          "type": "string",
+          "minLength": 1
+        },
+        "draft_api": {
+          "const": "^0.3.4"
+        },
+        "artifact_path": {
+          "type": "string",
+          "pattern": "^[^/].*\\.tar$"
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 33554432
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "delegation": {
+      "type": "object",
+      "required": [
+        "role",
+        "keys",
+        "key_ids",
+        "threshold",
+        "path_prefixes"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "keys": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/key"
+          }
+        },
+        "key_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path_prefixes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]+$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "root_signed": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "catalog_id",
+        "role",
+        "version",
+        "expires_at",
+        "keys",
+        "roles"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "catalog_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "const": "root"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "keys": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/key"
+          }
+        },
+        "roles": {
+          "type": "object",
+          "required": [
+            "root",
+            "timestamp",
+            "snapshot",
+            "targets"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/role_spec"
+          }
+        },
+        "revoked_key_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "revoked_packages": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9._-]{1,64}$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "timestamp_signed": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "catalog_id",
+        "role",
+        "version",
+        "expires_at",
+        "snapshot"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "catalog_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "const": "timestamp"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/descriptor"
+        }
+      },
+      "additionalProperties": false
+    },
+    "snapshot_signed": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "catalog_id",
+        "role",
+        "version",
+        "expires_at",
+        "roles"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "catalog_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "const": "snapshot"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "roles": {
+          "type": "object",
+          "required": [
+            "targets"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/descriptor"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "targets_signed": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "catalog_id",
+        "role",
+        "version",
+        "expires_at",
+        "packages"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "catalog_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/target"
+          }
+        },
+        "delegations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/delegation"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "root_envelope": {
+      "type": "object",
+      "required": [
+        "signed",
+        "signatures"
+      ],
+      "properties": {
+        "signed": {
+          "$ref": "#/$defs/root_signed"
+        },
+        "signatures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/signature"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "timestamp_envelope": {
+      "type": "object",
+      "required": [
+        "signed",
+        "signatures"
+      ],
+      "properties": {
+        "signed": {
+          "$ref": "#/$defs/timestamp_signed"
+        },
+        "signatures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/signature"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "snapshot_envelope": {
+      "type": "object",
+      "required": [
+        "signed",
+        "signatures"
+      ],
+      "properties": {
+        "signed": {
+          "$ref": "#/$defs/snapshot_signed"
+        },
+        "signatures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/signature"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "targets_envelope": {
+      "type": "object",
+      "required": [
+        "signed",
+        "signatures"
+      ],
+      "properties": {
+        "signed": {
+          "$ref": "#/$defs/targets_signed"
+        },
+        "signatures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/signature"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "source_status": {
+      "type": "object",
+      "required": [
+        "source",
+        "configured",
+        "trusted",
+        "usability",
+        "cached_package_count"
+      ],
+      "properties": {
+        "source": {
+          "type": "object"
+        },
+        "configured": {
+          "const": true
+        },
+        "trusted": {
+          "type": "boolean"
+        },
+        "usability": {
+          "enum": [
+            "untrusted",
+            "usable",
+            "expired",
+            "invalid",
+            "unavailable"
+          ]
+        },
+        "root_version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "cached_package_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

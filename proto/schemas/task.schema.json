@@ -24,31 +24,125 @@
     "updated_at",
     "created_by",
     "base_stable_head",
+    "status",
+    "priority",
+    "next_actions",
     "metadata"
   ],
   "properties": {
-    "schema_version": { "const": "0.3.4" },
-    "id": { "type": "string", "pattern": "^tsk_[A-Za-z0-9_-]+$" },
-    "name": { "type": "string" },
-    "kind": { "enum": ["defined", "inline", "imported", "generated"] },
-    "template": { "type": ["string", "null"] },
-    "goal": { "type": "string" },
-    "allowed_zones": { "type": "array" },
-    "forbidden_zones": { "type": "array" },
-    "success_criteria": { "type": "array" },
-    "risk": { "enum": ["low", "medium", "high", "critical"] },
-    "mode": { "enum": ["normal", "safe", "plan_first"] },
-    "required_evidence": { "type": "array" },
-    "review_questions": { "type": "array" },
-    "candidate_preset": { "type": ["string", "null"] },
-    "schedule": { "type": ["object", "null"] },
-    "parent_pack": { "type": ["string", "null"] },
-    "source_context": { "type": ["object", "null"] },
-    "created_at": { "type": "string" },
-    "updated_at": { "type": "string" },
-    "created_by": { "type": "string" },
-    "base_stable_head": { "type": "string" },
-    "metadata": { "type": "object" }
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^tsk_[A-Za-z0-9_-]+$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "defined",
+        "inline",
+        "imported",
+        "generated"
+      ]
+    },
+    "template": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "goal": {
+      "type": "string"
+    },
+    "allowed_zones": {
+      "type": "array"
+    },
+    "forbidden_zones": {
+      "type": "array"
+    },
+    "success_criteria": {
+      "type": "array"
+    },
+    "risk": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "normal",
+        "safe",
+        "plan_first"
+      ]
+    },
+    "required_evidence": {
+      "type": "array"
+    },
+    "review_questions": {
+      "type": "array"
+    },
+    "candidate_preset": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schedule": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "parent_pack": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_context": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string"
+    },
+    "base_stable_head": {
+      "type": "string"
+    },
+    "status": {
+      "enum": ["open", "in_progress", "blocked", "completed", "cancelled"]
+    },
+    "priority": {
+      "enum": ["low", "normal", "high", "urgent"]
+    },
+    "due_at": {
+      "type": ["string", "null"]
+    },
+    "next_actions": {
+      "type": "array"
+    },
+    "assignee_ref": {
+      "type": ["object", "null"]
+    },
+    "metadata": {
+      "type": "object"
+    }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/task.schema.json"
 }

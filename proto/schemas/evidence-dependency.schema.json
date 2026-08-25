@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/evidence-dependency.schema.json",
+  "title": "Draft Evidence Dependency",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "evidence_id",
+    "subject_pack_id",
+    "subject_revision",
+    "subject_digest",
+    "dependencies",
+    "valid"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "evidence_id": {
+      "type": "string"
+    },
+    "subject_pack_id": {
+      "type": "string"
+    },
+    "subject_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "subject_digest": {
+      "type": "string"
+    },
+    "dependencies": {
+      "type": "array"
+    },
+    "valid": {
+      "type": "boolean"
+    },
+    "invalidated_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "invalidation_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "superseding_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Notification",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "deduplication_key",
+    "kind",
+    "title",
+    "message",
+    "severity",
+    "created_at",
+    "updated_at",
+    "context",
+    "occurrences"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^ntf_"
+    },
+    "deduplication_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resolved_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "read_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "dismissed_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "workspace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "context": {},
+    "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "next_safe_action": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "occurrences": {
+      "type": "array"
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/notification.schema.json"
+}

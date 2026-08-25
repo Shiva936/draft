@@ -47,7 +47,7 @@
 
 **Draft** is a local-first compatibility layer for reviewing and controlling software changes before they become part of your real workflow.
 
-It sits between your editor, AI agents, CLI tools, and external automation. Draft turns workspace changes into **ChangePacks** with evidence, verification results, review state, approval state, durable receipts, and safe rollback targets.
+It sits between your editor, AI agents, CLI tools, and external automation. Draft turns workspace changes into **Packs** with evidence, verification results, review state, approval state, durable receipts, and safe rollback targets.
 
 Draft is built for the new workflow where humans and AI agents both create code, but the project still needs a trusted review boundary.
 
@@ -56,7 +56,7 @@ Editor / Agent
       ↓
 Draft CLI + Console
       ↓
-ChangePacks + Evidence + Events + Receipts
+Packs + Evidence + Events + Receipts
       ↓
 .draft/ local store
       ↓
@@ -73,20 +73,20 @@ Draft does **not** replace Git, editors, CI, agents, or deployment tools. It giv
 
 AI agents can generate useful changes quickly, but fast generation creates a new problem: workspace noise.
 
-Draft helps you turn that noise into reviewed, accountable, rollback-safe ChangePacks.
+Draft helps you turn that noise into reviewed, accountable, rollback-safe Packs.
 
-| Problem                            | What Draft Adds                                                         |
-| ---------------------------------- | ----------------------------------------------------------------------- |
-| AI changes are hard to trust       | Changes are captured as named ChangePacks with evidence and provenance. |
-| Review happens too late            | Draft creates a local approval boundary before submit/finalization.     |
-| Workspace state gets messy         | Draft separates working noise from reviewed ChangePacks.                |
-| Hidden state can leak into changes | `.draft/` is hard-excluded everywhere.                                  |
-| Rollback is unclear                | Rollback can target checkpoints, ChangePacks, or receipts.              |
-| External tools are too implicit    | Hooks are explicit, local, opaque, policy-checked, and receipt-backed.  |
-| Teams need auditability            | Events and receipts make every meaningful action explainable.           |
+| Problem                            | What Draft Adds                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| AI changes are hard to trust       | Changes are captured as named Packs with evidence and provenance.      |
+| Review happens too late            | Draft creates a local approval boundary before submit/finalization.    |
+| Workspace state gets messy         | Draft separates working noise from reviewed Packs.                     |
+| Hidden state can leak into changes | `.draft/` is hard-excluded everywhere.                                 |
+| Rollback is unclear                | Rollback can target checkpoints, Packs, or receipts.                   |
+| External tools are too implicit    | Hooks are explicit, local, opaque, policy-checked, and receipt-backed. |
+| Teams need auditability            | Events and receipts make every meaningful action explainable.          |
 
 <p align="center">
-  <img src="assets/draft-noise-to-verified-packs.svg" alt="From workspace noise to verified ChangePacks" width="100%" />
+  <img src="assets/draft-noise-to-verified-packs.svg" alt="From workspace noise to verified Packs" width="100%" />
 </p>
 
 ## Core Principles
@@ -98,9 +98,9 @@ Draft is designed around a few strict rules:
 - **Daemonless by default:** the CLI can run directly without a background daemon.
 - **Tool-neutral:** Draft does not depend on a specific AI model, editor, code host, or agent runtime.
 - **Append-only provenance:** meaningful actions are recorded as hash-chained events.
-- **Review before submit:** ChangePacks must pass the local review and approval boundary before finalization.
-- **Safe rollback:** checkpoints, ChangePacks, and receipts can be used as rollback targets.
-- **Hard `.draft/` exclusion:** Draft never includes its private state in ChangePacks, snapshots, submits, rollback plans, or hook candidate checks.
+- **Review before submit:** Packs must pass the local review and approval boundary before finalization.
+- **Safe rollback:** checkpoints, Packs, and receipts can be used as rollback targets.
+- **Hard `.draft/` exclusion:** Draft never includes its private state in Packs, snapshots, submits, rollback plans, or hook candidate checks.
 
 ## Quick Start
 
@@ -122,12 +122,14 @@ Then initialize Draft in a workspace:
 draft init
 ```
 
-Set your local identity:
+Optionally set non-security display/contact metadata. Use `--global` for a machine-wide default; a project value overrides it:
 
 ```bash
-draft config set identity.username "Ada"
-draft config set identity.email "ada@example.com"
+draft config set user.name "Ada" --global
+draft config set user.email "ada@example.com" --global
 ```
+
+These fields never change Draft's stable actor ID, signing keys, trust, authorization, attribution, receipts, event hashes, or workspace/Pack digests. If no name is configured, Draft resolves the non-persisted fallback `unknown`.
 
 Create a checkpoint, make changes, package them, review them, approve them, and submit them:
 
@@ -162,11 +164,11 @@ cargo run -p draft-cli -- init
   <img src="assets/draft-cli-demo.gif" alt="Animated terminal demo of Draft commands" width="88%" />
 </p>
 
-## The ChangePack Flow
+## The Pack Flow
 
-Draft’s main object is a **ChangePack**.
+Draft’s main object is a **Pack**.
 
-A ChangePack is a local, reviewable unit of change. It contains the change set, evidence, verification results, review decisions, approval state, and event references needed to understand what happened.
+A Pack is a local, reviewable unit of change. It contains the change set, evidence, verification results, review decisions, approval state, and event references needed to understand what happened.
 
 Typical flow:
 
@@ -176,10 +178,10 @@ draft checkpoint "before agent run"
 agent/editor changes files
 draft status
 draft create "feature name"
-draft verify -p <ChangePack>
-draft review -p <ChangePack>
-draft approve -p <ChangePack>
-draft submit -p <ChangePack>
+draft verify -p <Pack>
+draft review -p <Pack>
+draft approve -p <Pack>
+draft submit -p <Pack>
 draft rollback <target>   # when needed
 ```
 
@@ -193,7 +195,7 @@ Draft uses stable ID prefixes:
 
 ```text
 chk_<id>  checkpoint
-pck_<id>  ChangePack
+pck_<id>  Pack
 rcp_<id>  receipt
 ```
 
@@ -205,7 +207,7 @@ draft rollback pck_<id>
 draft rollback rcp_<id>
 ```
 
-Most ChangePack commands accept either a ChangePack ID or a unique ChangePack name:
+Most Pack commands accept either a Pack ID or a unique Pack name:
 
 ```bash
 draft verify -p pck_abc123
@@ -214,50 +216,49 @@ draft verify -p "update app"
 
 ## Commands
 
-The v0.3.4 command surface is intentionally local and workspace-oriented.
+The command surface is intentionally local and workspace-oriented.
 
 ```text
-init       doctor     identity   config     hook
-ignore     status     event      checkpoint create
-pack       list       candidate  task       verify
+init       service    project    doctor     console
+extension  config     hook       ignore     status
+event      task       inbox      waive      checkpoint
+create     pack       list       candidate  verify
 risk       review     approve    reject     compare
-compose    disperse   submit     receipt    storage
-rollback   close      gc         console    extension
+compose    disperse   submit     rollback   receipt
+close      gc         storage
 ```
 
-New in v0.3.4: the verified stable-base model — `draft init` creates a verified stable base and `stable_head`, `draft submit` finalizes packs with configurable disposal (`merge_and_dispose`/`dispose_only`) gated by project-state verification, submit hooks run in before/after phases, submitted packs are disposed leaving compact receipt provenance, and `draft close`/`draft gc` handle safe metadata removal and maintenance. A top-level `proto/` directory defines the protocol contracts. Draft treats each changepack as an independent, composable, portable, **signed**, locally verifiable unit of change — temporary until submitted. Event history is `draft event` — there is no `log` command; only `--page` and `--limit` apply. See [CHANGELOG.md](CHANGELOG.md).
+### Pack Commands
 
-### ChangePack Commands
-
-Create a new ChangePack:
+Create a new Pack:
 
 ```bash
 draft create <name> [-p <base-pck-id-or-name>]
 ```
 
-ChangePack names must be unique.
+Pack names must be unique.
 
-Show the current selected ChangePack:
+Show the current selected Pack:
 
 ```bash
 draft pack
 ```
 
-Select a ChangePack by ID or name:
+Select a Pack by ID or name:
 
 ```bash
 draft pack -s <pck-id-or-name>
 ```
 
-Delete a ChangePack by ID or name:
+Delete a Pack by ID or name:
 
 ```bash
 draft pack -d <pck-id-or-name>
 ```
 
-Deleting a ChangePack preserves event history and receipts. Draft removes the pack directory, removes task/run records owned only by that pack, and garbage-collects unreachable objects.
+Deleting a Pack preserves event history and receipts. Draft removes the pack directory, removes task/run records owned only by that pack, and garbage-collects unreachable objects.
 
-List generated ChangePacks:
+List generated Packs:
 
 ```bash
 draft list
@@ -288,7 +289,7 @@ Draft stores provenance as append-only hash-chained event records linked to sign
 
 ### Candidate And Task Commands
 
-Candidates are named execution profiles. They do not represent roles in v0.3.4.
+Candidates are named execution profiles. They do not represent roles.
 
 Run a task with an explicit instruction boundary:
 
@@ -336,7 +337,7 @@ Draft stores local project state under `.draft/`:
 ├─ content-addressed objects
 ├─ snapshots and checkpoints
 ├─ tasks and runs
-├─ ChangePacks and evidence
+├─ Packs and evidence
 ├─ reviews and approvals
 ├─ receipts
 ├─ rebuildable indexes
@@ -348,13 +349,15 @@ Draft stores local project state under `.draft/`:
 ```text
 status
 snapshots
-ChangePacks
+Packs
 submit candidates
 rollback plans
 hook candidate checks
 ```
 
 If a submit candidate contains `.draft/`, Draft aborts the submit, emits a failed `submit.completed` event, records a failed receipt, and does not run `hooks.submit`.
+
+Persisted and wire boundaries are self-describing. Each registered contract owns its own `schema_version`; every contract shipped currently supports only version `1`, but one contract can evolve without changing unrelated contracts. `draft_version` records product provenance and does not decide workspace compatibility. `/api/v1/...` remains the stable Console HTTP compatibility boundary.
 
 ## What Draft Is Not
 
@@ -403,7 +406,7 @@ Useful local loop:
 ```bash
 cargo run -p draft-cli -- init
 cargo run -p draft-cli -- status
-cargo run -p draft-cli -- create "test changepack"
+cargo run -p draft-cli -- create "test pack"
 cargo run -p draft-cli -- list
 ```
 
@@ -411,10 +414,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, development 
 
 ## Project Status
 
-Draft is pre-1.0 software. The current focus is v0.3.4 production readiness:
+Draft is pre-1.0 software. The current focus is production readiness:
 
 - CLI ergonomics;
-- verified, signed, portable changepacks;
+- verified, signed, portable packs;
 - Draft Console flows;
 - event, receipt, and transparency integrity;
 - import/export and rollback safety;

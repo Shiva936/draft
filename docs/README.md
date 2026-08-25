@@ -1,6 +1,6 @@
 # Draft Documentation
 
-Draft v0.3.4 is organized around local verified ChangePacks. These documents serve users, agent actors, contributors, and maintainers of the open-source project.
+Draft is organized around local verified Packs. These documents serve users, agent actors, contributors, and maintainers of the open-source project.
 
 ## Guides
 
@@ -11,7 +11,7 @@ Draft v0.3.4 is organized around local verified ChangePacks. These documents ser
 ## Reference
 
 - [Command Reference](reference/commands.md) documents the CLI surface.
-- [Concepts](reference/concepts.md) explains workspaces, checkpoints, ChangePacks, tasks, executions, evidence, comparison, and composition.
+- [Concepts](reference/concepts.md) explains workspaces, checkpoints, Packs, tasks, executions, evidence, comparison, and composition.
 - [Configuration](reference/configuration.md) covers config files, submit modes, hooks, precedence, and ignore rules.
 - [Review, Verification, And Policy](reference/review-and-policy.md) covers evidence gates, risk, approval, policy, and Draft Console.
 
@@ -20,11 +20,14 @@ Draft v0.3.4 is organized around local verified ChangePacks. These documents ser
 - [Architecture](internals/architecture.md) explains crate, service, daemon, and authority boundaries.
 - [Storage And Events](internals/storage-and-events.md) describes `.draft/` stores, objects, receipts, and the event chain.
 - [Security](internals/security.md) documents local trust and safety boundaries.
-- [Protocol Contracts](internals/protocol.md) indexes canonical specifications, schemas, and compatibility fixtures.
-- [Release Compliance](release-compliance.md) maps v0.3.4 requirements to implementation, tests, and publication gates.
+- [Protocol Contracts](internals/protocol.md) indexes canonical specifications, schemas, and conformance fixtures.
 
-## v0.3.4 Boundary
+## Release
 
-Draft v0.3.4 is local-first. It stores verified, signed, portable ChangePacks in `.draft/`, supports optional opaque `hooks.*` command execution, and does not implement network, hosted-service, marketplace, cloud-sync, or native external-action behavior.
+- [Release Compliance](release-compliance.md) maps release requirements to implementation, tests, and publication gates.
+
+## Draft Boundary
+
+Draft is local-first. It stores verified, signed, portable Packs in `.draft/`, supports optional opaque `hooks.*` command execution, and does not implement network, hosted-service, marketplace, cloud-sync, or native external-action behavior.
 
 Draft does not read external tool metadata to decide what changed. The workspace scanner walks files directly and applies only Draft's own rules plus the hard `.draft/` exclusion.

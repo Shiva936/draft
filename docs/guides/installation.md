@@ -1,6 +1,6 @@
 # Installation
 
-Draft v0.3.4 publishes versioned GitHub Release binaries for Linux, macOS, WSL, and native Windows. Building from source is also supported.
+Draft publishes versioned GitHub Release binaries for Linux, macOS, WSL, and native Windows. Building from source is also supported.
 
 ## Requirements
 
@@ -68,6 +68,20 @@ curl -fsSL https://raw.githubusercontent.com/Shiva936/draft/master/install.sh | 
 ```powershell
 $env:DRAFT_UPDATE_PATH = "1"; irm https://raw.githubusercontent.com/Shiva936/draft/master/install.ps1 | iex
 ```
+
+### WSL Runtime Directory Troubleshooting
+
+`draftd` is a user-scoped process and should not be run with `sudo`. If WSL sets `XDG_RUNTIME_DIR` to a missing or unusable directory such as `/run/user/1000`, Draft falls back to `~/.local/state/draft/draftd.sock`.
+
+For releases without the automatic fallback, recover the current shell with:
+
+```bash
+unset XDG_RUNTIME_DIR
+draftd --detach
+draftd status
+```
+
+`draftd start` runs in the foreground. Use `draftd --detach` or `draft service start` when the daemon should continue in the background.
 
 ## Upgrades
 

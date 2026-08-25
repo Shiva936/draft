@@ -1,9 +1,9 @@
 # Architecture
 
-Draft v0.3.4 is structured as a local-first Rust workspace:
+Draft is structured as a local-first workspace built in Rust:
 
 ```text
-cli / tui
+cli / tui / web
     |
 optional draftd service
     |
@@ -14,11 +14,13 @@ global + project .draft/ durable stores
 
 ## Crate Boundaries
 
-`core/` owns the domain model and durable stores. It implements config, scanning, snapshots, tasks, runs, changepacks, import/export, evidence, verification, risk, policy, review, approval, compare, compose, submit, signed receipts, rollback, events, transparency, object storage, LSIF, and indexing.
+`core/` owns the domain model and durable stores. It implements config, scanning, snapshots, tasks, executions, packs, import/export, evidence, verification, risk, policy, review, approval, compare, compose, submit, signed receipts, rollback, events, transparency, object storage, LSIF, and indexing.
 
 `cli/` exposes the command-line interface. It invokes `draft-core` directly so the CLI stays usable without a daemon.
 
-`tui/` renders Draft Console in terminal workflows. The TUI should be able to operate from core state directly or through service-backed live updates.
+`tui/` renders terminal review workflows from core state.
+
+`console/` owns the browser Console boundary. Its Rust crate provides loopback HTTP transport, browser/session security, daemon integration, and embedded assets. `console/web/` owns React presentation source and `console/dist/` is the committed reproducible build. Console does not own Draft domain behavior.
 
 `services/` contains optional local services:
 
@@ -35,10 +37,10 @@ global + project .draft/ durable stores
 1. A user or agent changes workspace files.
 2. Draft scans the workspace directly, excluding `.draft/`.
 3. A checkpoint records a baseline snapshot.
-4. A ChangePack captures the delta against a snapshot.
+4. A Pack captures the delta against a snapshot.
 5. Verification and risk attach evidence and policy inputs.
-6. Review decisions approve or reject the ChangePack.
-7. Submit verifies the final project state, writes durable receipts, advances `stable_head` when configured, and disposes active pack metadata.
+6. Review decisions approve or reject the Pack.
+7. Submit verifies the final project state, writes durable receipts, advances `stable_head` when configured, and disposes mutable staging while retaining immutable pack history.
 8. Optional phased `hooks.submit` execution is captured as receipt evidence.
 9. Every important transition appends a hash-chained event; trust-relevant transitions create signed receipts linked through the transparency chain.
 
@@ -48,7 +50,7 @@ JSON and JSONL records are the durable source of truth. SQLite indexes are rebui
 
 ## Safety Boundary
 
-`.draft/` is private Draft metadata. It is not a workspace change candidate. Any implementation that introduces `.draft/` into status, snapshots, ChangePacks, submit, rollback, or external command execution is a release blocker.
+`.draft/` is private Draft metadata. It is not a workspace change candidate. Any implementation that introduces `.draft/` into status, snapshots, Packs, submit, rollback, or external command execution is a release blocker.
 
 ## Local Services
 
@@ -76,7 +78,9 @@ The locks service supplies cross-platform local file guards for operations such 
 
 ### Draft Console Service
 
-`draft console` starts the local AG-UI service on loopback. It serves pack, risk, receipt, task, inbox, Doctor, event, import/export, and editor workflows without exposing signing keys. Mutations use the same core policy paths as the CLI and require a per-session CSRF token.
+`draft console` starts the authenticated Console gateway on loopback. It serves pack, risk, receipt, task, inbox, Doctor, event, import/export, settings, and editor workflows without exposing signing keys. Mutations use typed daemon operations and the same core policy paths as the CLI, and require a per-session CSRF token. HTTP/browser translation and presentation stay in `console/`; all domain validation, transitions, persistence, and canonical operations stay in `draftd`, services, and `draft-core`.
+
+The existing `~/.draft/adapters/agui/` namespace is reserved for intentional external AG-UI adapter configuration. It is unrelated to the browser Console package and ownership boundary.
 
 Extension packages can be installed, inspected, enabled, disabled, and uninstalled with `draft extension`. Their entrypoints are not executable through the Draft CLI.
 

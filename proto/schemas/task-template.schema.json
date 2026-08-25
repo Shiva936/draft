@@ -1,15 +1,69 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/task-template.schema.json",
   "title": "Draft Task Template",
   "type": "object",
-  "required": ["schema_version", "id", "name", "default_risk", "default_mode"],
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "default_risk",
+    "default_mode",
+    "default_required_evidence",
+    "default_review_questions",
+    "default_forbidden_zones",
+    "success_criteria_shape",
+    "decomposition_rules"
+  ],
   "properties": {
-    "schema_version": { "const": "0.3.4" },
-    "id": { "type": "string" },
-    "name": { "type": "string" },
+    "schema_version": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
     "default_risk": { "enum": ["low", "medium", "high", "critical"] },
     "default_mode": { "enum": ["normal", "safe", "plan_first"] },
-    "recommended_candidate_preset": { "type": ["string", "null"] }
+    "default_required_evidence": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "default_review_questions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/review_question" }
+    },
+    "default_forbidden_zones": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "recommended_candidate_preset": { "type": ["string", "null"] },
+    "success_criteria_shape": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "decomposition_rules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/decomposition_rule" }
+    }
   },
-  "additionalProperties": true
+  "additionalProperties": false,
+  "$defs": {
+    "review_question": {
+      "type": "object",
+      "required": ["question", "blocking"],
+      "properties": {
+        "question": { "type": "string", "minLength": 1 },
+        "blocking": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "decomposition_rule": {
+      "type": "object",
+      "required": ["id", "description", "zones"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "zones": { "type": "array", "items": { "type": "string" } },
+        "child_template": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  }
 }

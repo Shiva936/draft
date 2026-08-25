@@ -47,7 +47,13 @@ while IFS= read -r manifest; do
       fail "$manifest package '$package_name' has version '$package_version', expected '$expected'"
     fi
   fi
-done < <(git ls-files '*Cargo.toml')
+done < <(
+  find . \
+    \( -path './.git' -o -path './target' -o -path './fuzz/target' -o -path './console/web/node_modules' \) \
+    -prune -o \
+    -name Cargo.toml -type f -print \
+    | sort
+)
 
 if [ -f Cargo.lock ]; then
   while IFS='|' read -r package_name package_version; do

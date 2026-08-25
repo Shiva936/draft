@@ -5,10 +5,12 @@
   "submit_mode": "dispose_only",
   "payload_schema": "config.schema.json",
   "payload": {
+    "schema_version": 1,
     "submit": { "pack_disposal": "dispose_only" },
-    "hooks": { "submit": { "before": [], "after": [] } }
+    "hooks": { "submit": { "kind": "phases", "before": [], "after": [] } }
   },
   "invalid_payload": {
+    "schema_version": 1,
     "submit": { "pack_disposal": "delete_everything" }
   }
 }

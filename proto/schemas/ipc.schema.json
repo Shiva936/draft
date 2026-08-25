@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft IPC Request",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "protocol",
+    "id",
+    "correlation_id",
+    "method",
+    "params"
+  ],
+  "properties": {
+    "protocol": {
+      "const": "draft-ipc"
+    },
+    "id": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "operation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "method": {
+      "type": "string"
+    },
+    "params": {},
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/ipc.schema.json"
+}

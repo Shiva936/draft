@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/canonical-source-view.schema.json",
+  "title": "Draft Canonical Source View",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "entries",
+    "content_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "kind",
+          "digest",
+          "bytes",
+          "executable"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "text",
+              "binary",
+              "symlink"
+            ]
+          },
+          "digest": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "executable": {
+            "type": "boolean"
+          },
+          "symlink_target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "content_digest": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

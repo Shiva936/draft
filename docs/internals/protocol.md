@@ -1,20 +1,22 @@
 # Protocol Contracts
 
-Draft user and operator documentation lives under `docs/`. Canonical protocol contracts live under `proto/` so implementations, tests, and external tools can refer to one stable source of truth.
+Draft user documentation lives under `docs/`. Canonical protocol descriptions, schemas, and validation fixtures live under `proto/` so implementations and tools refer to stable unversioned names.
 
-Use `proto/specs/` for human-readable rules, `proto/schemas/` for JSON schema contracts, and `proto/test-vectors/` for compatibility fixtures.
+The compile-time-closed Rust `ContractId` registry is the descriptive source of contract membership, boundary kind, schema artifact, and independent current/supported version policy. `VersionedContract::CONTRACT` statically maps production Rust types into it. Persisted and wire values remain self-describing through their own `schema_version`; metadata validates expected policy and does not reinterpret bytes. Registry/schema/generated-artifact drift fails tests or CI. All v0.3.4 contracts support only version `1`.
+
+`draft_version` is product/provenance metadata. Compatibility is decided by the registered contracts actually present, not by comparing that product string. Extension `draft_api` constraints independently match product API SemVer. Console `/api/v1/...` is the intentional HTTP compatibility boundary.
 
 ## Specs
 
 - [Canonicalization](../../proto/specs/canonicalization.md)
-- [ChangePack](../../proto/specs/changepack.md)
 - [Close](../../proto/specs/close.md)
 - [Compatibility](../../proto/specs/compatibility.md)
 - [Composition](../../proto/specs/composition.md)
 - [Event Ledger](../../proto/specs/event-ledger.md)
-- [Future DraftHub Readiness](../../proto/specs/future-drafthub-readiness.md)
+- [Future Readiness](../../proto/specs/future-readiness.md)
 - [GC](../../proto/specs/gc.md)
 - [Import/Export](../../proto/specs/import-export.md)
+- [Pack](../../proto/specs/pack.md)
 - [Path Safety](../../proto/specs/path-safety.md)
 - [Project State](../../proto/specs/project-state.md)
 - [Receipt](../../proto/specs/receipt.md)
@@ -25,39 +27,54 @@ Use `proto/specs/` for human-readable rules, `proto/schemas/` for JSON schema co
 
 ## Schemas
 
-- [Activity Event](../../proto/schemas/activity-event.schema.json)
 - [Candidate Profile](../../proto/schemas/candidate-profile.schema.json)
-- [ChangePack](../../proto/schemas/changepack.schema.json)
+- [Canonical Source View](../../proto/schemas/canonical-source-view.schema.json)
 - [Composition](../../proto/schemas/composition.schema.json)
 - [Configuration](../../proto/schemas/config.schema.json)
+- [Console HTTP](../../proto/schemas/console-http.schema.json)
 - [Decision Record](../../proto/schemas/decision-record.schema.json)
-- [Doctor Operation](../../proto/schemas/doctor-operation.schema.json)
+- [Draftpack Provenance](../../proto/schemas/draftpack-provenance.schema.json)
+- [Draftpack](../../proto/schemas/draftpack.schema.json)
 - [Editor Session](../../proto/schemas/editor-session.schema.json)
 - [Event](../../proto/schemas/event.schema.json)
+- [Evidence Dependency](../../proto/schemas/evidence-dependency.schema.json)
 - [Evidence State](../../proto/schemas/evidence-state.schema.json)
 - [Execution](../../proto/schemas/execution.schema.json)
+- [Extension Catalog](../../proto/schemas/extension-catalog.schema.json)
+- [Extension Package](../../proto/schemas/extension-package.schema.json)
 - [Inbox Item](../../proto/schemas/inbox-item.schema.json)
-- [Ownership Record](../../proto/schemas/ownership-record.schema.json)
-- [Project Registry Entry](../../proto/schemas/project-registry-entry.schema.json)
+- [IPC](../../proto/schemas/ipc.schema.json)
+- [Lease](../../proto/schemas/lease.schema.json)
+- [Notification](../../proto/schemas/notification.schema.json)
+- [Operation](../../proto/schemas/operation.schema.json)
+- [Pack Lifecycle](../../proto/schemas/pack-lifecycle.schema.json)
+- [Pack Lock](../../proto/schemas/pack-lock.schema.json)
+- [Pack Quarantine](../../proto/schemas/pack-quarantine.schema.json)
+- [Pack Revision](../../proto/schemas/pack-revision.schema.json)
+- [Pack](../../proto/schemas/pack.schema.json)
 - [Project State](../../proto/schemas/project-state.schema.json)
-- [Protected File Rule](../../proto/schemas/protected-file-rule.schema.json)
 - [Receipt](../../proto/schemas/receipt.schema.json)
+- [Project Registry](../../proto/schemas/registry.schema.json)
+- [Risk](../../proto/schemas/risk.schema.json)
+- [Rollback Plan](../../proto/schemas/rollback-plan.schema.json)
+- [Rollback Record](../../proto/schemas/rollback-record.schema.json)
 - [Stable Head](../../proto/schemas/stable-head.schema.json)
+- [Submit Record](../../proto/schemas/submit-record.schema.json)
 - [Task Template](../../proto/schemas/task-template.schema.json)
 - [Task](../../proto/schemas/task.schema.json)
 - [Verification](../../proto/schemas/verification.schema.json)
 - [Waiver](../../proto/schemas/waiver.schema.json)
+- [Workspace Revision](../../proto/schemas/workspace-revision.schema.json)
 
 ## Test Vectors
 
-- [Activity Event](../../proto/test-vectors/activity-event/vector.json)
 - [Candidate Profile](../../proto/test-vectors/candidate-profile/vector.json)
 - [Close Clean Repo](../../proto/test-vectors/close-clean-repo/vector.json)
 - [Close With Pending Pack](../../proto/test-vectors/close-with-pending-pack/vector.json)
+- [Configuration](../../proto/test-vectors/config/vector.json)
 - [Conflicting Packs](../../proto/test-vectors/conflicting-packs/vector.json)
 - [Decision Record](../../proto/test-vectors/decision-record/vector.json)
 - [Dependent Packs](../../proto/test-vectors/dependent-packs/vector.json)
-- [Doctor Operation](../../proto/test-vectors/doctor-operation/vector.json)
 - [Editor Session](../../proto/test-vectors/editor-session/vector.json)
 - [Evidence State](../../proto/test-vectors/evidence-state/vector.json)
 - [Execution](../../proto/test-vectors/execution/vector.json)
@@ -65,9 +82,7 @@ Use `proto/specs/` for human-readable rules, `proto/schemas/` for JSON schema co
 - [Inbox Item](../../proto/test-vectors/inbox-item/vector.json)
 - [Independent Packs](../../proto/test-vectors/independent-packs/vector.json)
 - [Invalid Signature](../../proto/test-vectors/invalid-signature/vector.json)
-- [Ownership Record](../../proto/test-vectors/ownership-record/vector.json)
-- [Project Registry Entry](../../proto/test-vectors/project-registry-entry/vector.json)
-- [Protected File Rule](../../proto/test-vectors/protected-file-rule/vector.json)
+- [Project Registry](../../proto/test-vectors/registry/vector.json)
 - [Stable Composition](../../proto/test-vectors/stable-composition/vector.json)
 - [Submit Dispose Only](../../proto/test-vectors/submit-dispose-only/vector.json)
 - [Submit Merge And Dispose](../../proto/test-vectors/submit-merge-and-dispose/vector.json)

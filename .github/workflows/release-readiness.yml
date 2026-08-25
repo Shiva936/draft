@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/agui/web
+        working-directory: console/web
 
     steps:
       - name: Checkout
@@ -22,13 +22,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: services/agui/web/package-lock.json
+          cache-dependency-path: console/web/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
       - name: Type-check
         run: npm run typecheck
+
+      - name: Component tests
+        run: npm test
 
       - name: Audit dependencies
         run: npm audit --audit-level=high
@@ -40,8 +43,21 @@ jobs:
         working-directory: .
         shell: bash
         run: |
-          git diff --exit-code -- services/agui/dist
-          test -z "$(git status --porcelain --untracked-files=all -- services/agui/dist)"
+          git diff --exit-code -- console/dist
+          test -z "$(git status --porcelain --untracked-files=all -- console/dist)"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build real Console processes
+        working-directory: .
+        run: cargo build --locked -p draft-cli -p draftd
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Real Console browser and screenshot tests
+        run: npm run test:e2e
 
   security:
     name: RustSec audit
@@ -89,6 +105,30 @@ jobs:
       - name: Version consistency
         shell: bash
         run: scripts/validate-version.sh
+
+      - name: Console architecture contracts
+        shell: bash
+        run: scripts/check-console-architecture.sh
+
+      - name: Core architecture contracts
+        shell: bash
+        run: scripts/check-core-architecture.sh
+
+      - name: Canonical contract names
+        shell: bash
+        run: scripts/check-draft-contract-names.sh
+
+      - name: Closed per-contract schema registry
+        shell: bash
+        run: scripts/check-contract-registry.sh
+
+      - name: Documentation consistency
+        shell: bash
+        run: scripts/check-docs-consistency.sh
+
+      - name: Generated Console contract drift
+        shell: bash
+        run: scripts/check-generated-console-contracts.sh
 
       - name: Installer syntax
         shell: bash

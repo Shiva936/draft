@@ -30,7 +30,10 @@ fn second_acquire_times_out_while_held() {
     let err = lm
         .acquire(LockType::Submit, Duration::from_millis(200))
         .unwrap_err();
-    assert_eq!(err.kind, draft_core::error::DraftErrorKind::LockTimeout);
+    assert_eq!(
+        err.kind,
+        draft_core::support::error::DraftErrorKind::LockTimeout
+    );
 }
 
 #[test]

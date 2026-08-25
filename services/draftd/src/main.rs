@@ -93,19 +93,29 @@ fn spawn_detached() -> std::io::Result<()> {
     Ok(())
 }
 
-fn pid_path() -> PathBuf {
-    draft_store::state_dir().join("draftd.pid")
+fn pid_path() -> std::io::Result<PathBuf> {
+    draft_store::state_dir()
+        .map(|path| path.join("draftd.pid"))
+        .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 fn serve() -> std::io::Result<()> {
-    let store = Arc::new(ServiceStore::open_default());
+    let store = Arc::new(
+        ServiceStore::open_default().map_err(|error| std::io::Error::other(error.to_string()))?,
+    );
     let sessions = Arc::new(SessionManager::new());
     let stop = Arc::new(AtomicBool::new(false));
 
-    // Write PID file (best-effort).
-    let _ = std::fs::create_dir_all(draft_store::state_dir());
-    let _ = std::fs::write(pid_path(), std::process::id().to_string());
-    store.log("draftd started");
+    let recovered =
+        draftd::recover_jobs(&store).map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    let state_dir =
+        draft_store::state_dir().map_err(|error| std::io::Error::other(error.to_string()))?;
+    std::fs::create_dir_all(&state_dir)?;
+    std::fs::write(pid_path()?, std::process::id().to_string())?;
+    store.log(&format!(
+        "draftd started; recovered {recovered} durable jobs"
+    ));
 
     let handler_store = store.clone();
     let handler_sessions = sessions.clone();
@@ -113,9 +123,18 @@ fn serve() -> std::io::Result<()> {
         Arc::new(move |req: Request| draftd::dispatch(&handler_store, &handler_sessions, req));
 
     let sock = draft_ipc::socket_path();
-    let result = draft_ipc::serve(&sock, stop, handler);
+    let result = draft_ipc::serve(&sock, stop, handler).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("could not serve IPC socket {}: {error}", sock.display()),
+        )
+    });
 
-    let _ = std::fs::remove_file(pid_path());
+    if let Err(error) = std::fs::remove_file(pid_path()?) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error);
+        }
+    }
     store.log("draftd stopped");
     result
 }

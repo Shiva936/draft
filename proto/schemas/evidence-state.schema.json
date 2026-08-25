@@ -2,16 +2,80 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Draft Evidence State",
   "type": "object",
-  "required": ["schema_version", "id", "kind", "state", "produced_at"],
+  "required": [
+    "schema_version",
+    "id",
+    "kind",
+    "state",
+    "result",
+    "invalidated_by",
+    "produced_at"
+  ],
   "properties": {
-    "schema_version": { "const": "0.3.4" },
-    "id": { "type": "string", "pattern": "^evd_[A-Za-z0-9_-]+$" },
-    "task_id": { "type": ["string", "null"] },
-    "pack_id": { "type": ["string", "null"] },
-    "execution_id": { "type": ["string", "null"] },
-    "kind": { "type": "string" },
-    "state": { "enum": ["fresh", "stale", "missing", "failed", "waived", "running", "not_applicable"] },
-    "produced_at": { "type": "string" }
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^evd_[A-Za-z0-9_-]+$"
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pack_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "execution_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "fresh",
+        "stale",
+        "missing",
+        "failed",
+        "waived",
+        "running",
+        "not_applicable"
+      ]
+    },
+    "result": {},
+    "produced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "stale_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "invalidated_by": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "receipt_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
   },
-  "additionalProperties": true
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/evidence-state.schema.json"
 }

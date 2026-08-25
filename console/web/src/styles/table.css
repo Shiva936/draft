@@ -1,0 +1,155 @@
+.table-wrap {
+  overflow-x: auto;
+}
+
+table.data {
+  width: 100%;
+  /* Narrow viewports scroll the table rather than crushing its columns. */
+  min-width: 560px;
+  border-collapse: collapse;
+  font-size: var(--font-size-small);
+}
+
+table.data th {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-eyebrow);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+}
+
+table.data th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+table.data td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-default);
+  vertical-align: middle;
+}
+
+table.data tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+table.data tbody tr:hover {
+  background: var(--color-bg-subtle);
+}
+
+table.data tbody tr.selectable {
+  cursor: pointer;
+}
+
+table.data tbody tr.selected {
+  background: var(--color-accent-subtle);
+  box-shadow: inset 2px 0 var(--color-accent-default);
+}
+
+table.data td.shrink,
+table.data th.shrink {
+  width: 1%;
+  white-space: nowrap;
+}
+
+table.data td.right,
+table.data th.right {
+  text-align: right;
+}
+
+.cell-primary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.cell-primary > .icon {
+  color: var(--color-text-muted);
+}
+
+.cell-text {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.cell-text > strong {
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-text > small {
+  font-size: var(--font-size-eyebrow);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-stack {
+  display: grid;
+  gap: 3px;
+}
+
+.cell-stack > small {
+  font-size: var(--font-size-eyebrow);
+  color: var(--color-text-muted);
+}
+
+.cell-stack > small.warning { color: var(--color-status-warning); }
+.cell-stack > small.danger { color: var(--color-status-danger); }
+.cell-stack > small.success { color: var(--color-status-success); }
+
+.empty-cell {
+  color: var(--color-text-muted);
+}
+
+/* Pagination --------------------------------------------------------------- */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pagination button {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-surface);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.pagination button:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-default);
+}
+
+.pagination button.active {
+  background: var(--color-accent-default);
+  border-color: var(--color-accent-default);
+  color: var(--color-text-onaccent);
+}
+
+.pagination button:disabled {
+  opacity: 0.45;
+}

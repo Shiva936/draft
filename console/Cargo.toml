@@ -1,0 +1,19 @@
+[package]
+name = "draft-console"
+version = "0.3.4"
+edition = "2021"
+
+[dependencies]
+draft-ipc = { path = "../services/ipc" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal"] }
+futures-util = "0.3"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["limit", "timeout"] }
+rand = "0.8"
+include_dir = "0.7"
+
+[dev-dependencies]
+tempfile = "3"

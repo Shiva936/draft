@@ -1,10 +1,10 @@
 # Configuration
 
-Draft project configuration is private metadata stored under `.draft/`.
+Draft project configuration is private metadata stored under `.draft/`. The canonical configuration contract owns its numeric schema marker, currently `schema_version = 1`. Missing, malformed, or unsupported versions fail closed.
 
 ## Files
 
-- `.draft/config.toml`: identity, submit behavior, hooks, and verification defaults.
+- `.draft/config.toml`: user display metadata, submit behavior, hooks, and verification defaults.
 - `.draft/policy.toml`: submit, review, risk, and verification gates.
 - `.draft/verify.toml`: local verification command configuration.
 - `.draft/.ignore`: Draft-specific scan exclusions.
@@ -13,25 +13,37 @@ Draft project configuration is private metadata stored under `.draft/`.
 
 ```bash
 draft config
-draft config get identity.username
-draft config set identity.username "Ada"
-draft config unset identity.email
+draft config get user.name
+draft config set user.name "Ada"
+draft config set user.email "ada@example.com" --global
+draft config unset user.email
 ```
 
 Hook shortcuts use the same config store:
 
 ```bash
 draft hook
-draft hook get submit
 draft hook set submit "printf %s \"{{message}}\" > .last-draft-submit"
 draft hook unset submit
 draft hook run <hook-name>
 ```
 
-## Identity
+Read a hook value with `draft config get hooks.<name>`.
 
-- `identity.username`: human-readable actor name used in events, receipts, reviews, and approvals.
-- `identity.email`: optional actor email stored only as Draft metadata.
+## User Profile
+
+- `user.name`: optional display name.
+- `user.email`: optional display/contact string.
+
+Both values are trimmed, bounded, non-empty, and reject control data. Email is intentionally not subjected to restrictive deliverability or full RFC syntax checks because it is not an authentication identifier. Use `draft config unset user.email` to represent absence; Draft never stores an empty value.
+
+Resolution is project `user.name`, then global `user.name`, then the built-in `unknown` fallback. The fallback is in-memory only and is never written to a configuration file. Email resolves project then global, with no built-in value.
+
+These values are strictly non-authoritative. They do not affect actor IDs, signing or public keys, authorization, trust, receipt identity or verification, candidate attribution, workspace/source/Pack digests, event hashes, or ownership. A newly rendered presentation may include a non-authoritative display snapshot beside the stable actor ID.
+
+Profile/config audit events record the stable actor ID, scope, changed key names, operation/correlation metadata when applicable, and resulting config digest. They do not copy profile values into immutable global/system logs.
+
+There is no `draft identity` command and no `identity.*` compatibility alias. `.draft/identity.json`, retired XDG profile files, `[identity]`, `identity.*`, and former combined actor/profile fields are unsupported pre-release state. Normal operations fail closed without interpreting or migrating their values. `draft doctor`, relevant inspection/status paths, and `draft close` may identify the condition or safely remove an unsupported workspace, but never consume the retired profile as configuration.
 
 ## Submit Behavior
 
@@ -52,21 +64,25 @@ A missing value uses the default. An invalid value fails clearly at load time an
 
 ## Hooks
 
-Draft v0.3.4 supports generic, user-configured shell hooks under `hooks.*`. Draft treats every hook as opaque: it does not infer whether a command commits to Git, updates Jujutsu, runs a script, pushes to a forge, or performs another external action.
+Draft supports generic, user-configured shell hooks under `hooks.*`. Draft treats every hook as opaque: it does not infer whether a command commits to Git, updates Jujutsu, runs a script, pushes to a forge, or performs another external action.
 
 ### Configuration Shapes
 
-A raw submit hook is the compatibility form for one before-submit command:
+A raw submit hook is one before-submit command:
 
 ```toml
-[hooks]
-submit = "printf %s \"{{message}}\" > .last-draft-submit"
+[hooks.submit]
+kind = "raw"
+command = "printf %s \"{{message}}\" > .last-draft-submit"
 ```
 
 A rich entry adds execution controls:
 
 ```toml
 [hooks.submit]
+kind = "entry"
+
+[hooks.submit.entry]
 command = "./scripts/before-draft-submit.sh \"{{message}}\""
 enabled = true
 shell = "default"
@@ -74,7 +90,7 @@ cwd = "workspace"
 timeout_ms = 300000
 continue_on_error = false
 
-[hooks.submit.env]
+[hooks.submit.entry.env]
 CI = "1"
 ```
 
@@ -82,8 +98,9 @@ The phased form supports multiple before and after commands:
 
 ```toml
 [hooks.submit]
-before = [{ command = "cargo fmt --check" }]
-after  = [{ command = "git add -A && git commit -m \"{{message}}\"" }]
+kind = "phases"
+before = [{ kind = "raw", command = "cargo fmt --check" }]
+after  = [{ kind = "raw", command = "git add -A && git commit -m \"{{message}}\"" }]
 ```
 
 Before hooks run before final project-state verification and finalization. After hooks run after `stable_head` advancement in `merge_and_dispose` mode but before pack disposal. A required non-zero exit fails submit and preserves the pack; `continue_on_error = true` allows finalization to continue and records a submitted-with-hook-failure result.
@@ -92,7 +109,7 @@ Before hooks run before final project-state verification and finalization. After
 
 ### Placeholders
 
-Hook commands use canonical `{{name}}` placeholders. Legacy single-brace placeholders are invalid.
+Hook commands use `{{name}}` placeholders. Single-brace placeholders are invalid.
 
 Built-in placeholders are:
 
@@ -101,11 +118,10 @@ Built-in placeholders are:
 {{title}}
 {{description}}
 {{task_id}}
-{{run_id}}
-{{changepack_id}}
+{{execution_id}}
+{{pack_id}}
 {{receipt_id}}
 {{actor_name}}
-{{actor_email}}
 {{timestamp}}
 {{verified}}
 {{risk_level}}
@@ -114,6 +130,8 @@ Built-in placeholders are:
 {{hook_name}}
 {{hook_phase}}
 ```
+
+For the stable placeholder name, `actor_name` carries the stable security actor ID. It does not resolve `user.name`; user profile values never enter hook commands or their environment.
 
 Missing placeholders fail before execution and obey `continue_on_error`.
 
@@ -152,11 +170,12 @@ Example commands include:
 
 ```toml
 [hooks.submit]
+kind = "phases"
 before = [
-  { command = "./scripts/check-before-submit.sh" },
+  { kind = "raw", command = "./scripts/check-before-submit.sh" },
 ]
 after = [
-  { command = "./scripts/publish-after-review.sh \"{{message}}\" \"{{ticket}}\"", timeout_ms = 120000 },
+  { kind = "entry", entry = { command = "./scripts/publish-after-review.sh \"{{message}}\" \"{{ticket}}\"", timeout_ms = 120000 } },
 ]
 ```
 
@@ -198,4 +217,4 @@ draft ignore list
 
 Rules are stored as plain lines. Blank lines and comments are ignored. Draft supports path-prefix and file-pattern matching, and negated rules can re-include a path unless it is below `.draft/`, which can never be re-included. Use forward slashes; Draft normalizes platform path separators before matching.
 
-Keep ignore rules narrow. Broad rules can hide files from ChangePacks, verification, and rollback planning. When in doubt, leave files visible for review or policy to decide.
+Keep ignore rules narrow. Broad rules can hide files from Packs, verification, and rollback planning. When in doubt, leave files visible for review or policy to decide.

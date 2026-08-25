@@ -1,6 +1,6 @@
 # Security Model
 
-Draft v0.3.4 is a local tool. Its security model focuses on protecting the local workspace, preserving signed audit evidence, and preventing Draft metadata from entering user change candidates.
+Draft is a local tool. Its security model focuses on protecting the local workspace, preserving signed audit evidence, and preventing Draft metadata from entering user change candidates.
 
 ## Trust Boundary
 
@@ -20,7 +20,7 @@ Untrusted or sensitive:
 
 ## Hard `.draft/` Exclusion
 
-`.draft/` is private metadata. Draft excludes it from status, scans, snapshots, ChangePacks, submit candidates, rollback plans, watcher paths, and hook candidate checks.
+`.draft/` is private metadata. Draft excludes it from status, scans, snapshots, Packs, submit candidates, rollback plans, watcher paths, and hook candidate checks.
 
 If `.draft/` appears in a submit candidate, Draft:
 
@@ -40,6 +40,14 @@ draft receipt verify --all
 ```
 
 This detects edits, missing links, parse failures, bad receipt signatures, and transparency-chain tampering. Event hashing and signed receipts are tamper-evident, not a substitute for backups.
+
+## Security Identity And User Profile
+
+The stable actor ID, Ed25519 signing/private key, published public-key records, trust state, authorization, ownership, candidate attribution, receipt identity, and canonical hashes are security/provenance state. They cannot be edited through profile configuration.
+
+`user.name` and `user.email` are strictly non-security display/contact metadata. Changing them may alter selected config-layer bytes, the effective resolved profile, newly rendered non-authoritative display snapshots, and newly appended redacted config/profile audit events only. All pre-existing actor/key/ trust state, historical events and hashes, historical receipts and signatures, candidate attribution, workspace/source/Pack digests, and authorization or ownership results remain byte-for-byte or semantically identical and continue to verify.
+
+Retired pre-release profile state is rejected without consuming its values. This includes `.draft/identity.json`, retired XDG profile files, `[identity]`, `identity.*`, retired profile environment variables, and former combined actor/profile fields. Diagnostics and `draft close` may identify the condition, guide recovery, or remove an unsupported workspace, but cannot treat the data as valid configuration.
 
 ## Import Boundary
 
@@ -63,4 +71,4 @@ Report security issues using the process in the root [SECURITY.md](../../SECURIT
 
 ## Non-Goals
 
-Draft v0.3.4 does not provide hosted collaboration, pull requests, native merge behavior, remote synchronization, deployment, marketplace behavior, or credential exchange.
+Draft does not provide hosted collaboration, pull requests, native merge behavior, remote synchronization, deployment, marketplace behavior, or credential exchange.

@@ -1,14 +1,14 @@
 # Example .draft/config.toml for Draft.
 
-[identity]
-username = "Ada"
+schema_version = 1
+
+[user]
+name = "Ada"
 email = "ada@example.com"
 
-[save]
-message_template = "{{title}}\n\n{{description}}\n\nDraft-Task: {{task_id}}\nDraft-Run: {{run_id}}\nDraft-Changepack: {{changepack_id}}\nDraft-Verified: {{verified}}\nDraft-Risk: {{risk_level}}\nDraft-Receipt: {{receipt_id}}\nDraft-Actor: {{actor_name}} <{{actor_email}}>"
-
-[hooks]
-save = ""
+[submit]
+message_template = "{{title}}\n\n{{description}}\n\nDraft-Task: {{task_id}}\nDraft-Execution: {{execution_id}}\nDraft-Pack: {{pack_id}}\nDraft-Verified: {{verified}}\nDraft-Risk: {{risk_level}}\nDraft-Receipt: {{receipt_id}}\nDraft-Actor: {{actor_name}}"
+pack_disposal = "merge_and_dispose"
 
 [verification]
 default_profile = "standard"

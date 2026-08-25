@@ -67,7 +67,7 @@ test = false
 doc = false
 
 [[bin]]
-name = "agui_request"
-path = "fuzz_targets/agui_request.rs"
+name = "console_request"
+path = "fuzz_targets/console_request.rs"
 test = false
 doc = false

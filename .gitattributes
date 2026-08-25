@@ -1,2 +1,2 @@
 # Console assets are reproducible build output, not hand-edited source.
-services/agui/dist/** linguist-generated=true -whitespace
+console/dist/** linguist-generated=true -whitespace

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/lease.schema.json",
+  "title": "Draft Fenced Lease",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "lease_id",
+    "scope",
+    "operation_id",
+    "fencing_token",
+    "acquired_at",
+    "expires_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "lease_id": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "operation_id": {
+      "type": "string"
+    },
+    "fencing_token": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "acquired_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

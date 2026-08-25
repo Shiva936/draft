@@ -1,6 +1,6 @@
 # Contributing To Draft
 
-Draft is a local-first change-control tool. Contributions should preserve the existing boundary: Draft owns `.draft/`, verifies and saves changepacks locally, and treats `hooks.*` as opaque command strings.
+Draft is a local-first change-control tool. Contributions should preserve the existing boundary: Draft owns `.draft/`, verifies and submits packs locally, and treats `hooks.*` as opaque command strings.
 
 ## Development Setup
 
@@ -12,7 +12,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo audit --deny warnings
 
-cd services/agui/web
+cd console/web
 npm ci
 npm run typecheck
 npm audit --audit-level=high
@@ -23,7 +23,8 @@ The workspace is split into:
 
 - `core/`: Draft-native data model and local store behavior;
 - `cli/`: command-line interface that works without a daemon;
-- `tui/`: Console rendering and interaction layer;
+- `tui/`: terminal review rendering and interaction layer;
+- `console/`: browser Console gateway, `web/` source, and embedded `dist/` assets;
 - `services/`: optional local background services;
 - `docs/`: public user and maintainer documentation.
 
@@ -33,7 +34,7 @@ The workspace is split into:
 - Keep CLI flows functional without `draftd`.
 - Prefer deterministic serialized data for anything hashed.
 - Record important actions as receipts and events.
-- Add tests for every behavior that affects save, rollback, policy, evidence, or event integrity.
+- Add tests for every behavior that affects submit, rollback, policy, evidence, or event integrity.
 - Do not add hidden network behavior.
 - Do not infer external system semantics from local files or command strings.
 

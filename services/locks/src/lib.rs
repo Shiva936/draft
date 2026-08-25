@@ -1,12 +1,12 @@
 //! Workspace lock manager (FR-SVC-006). Thin, named wrapper over the core
-//! advisory file lock ([`draft_core::lock::FileGuard`]). Locks live under
+//! advisory file lock ([`draft_core::support::lock::FileGuard`]). Locks live under
 //! `.draft/locks/` so they coordinate across the CLI (embedded) and `draftd`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use draft_core::error::DraftResult;
-use draft_core::lock::FileGuard;
+use draft_core::support::error::DraftResult;
+use draft_core::support::lock::FileGuard;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockType {

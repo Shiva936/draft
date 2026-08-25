@@ -5,8 +5,9 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use draft_core::common::WorkspacePath;
-use draft_core::{App, ChangepackStatus};
+use draft_core::app::App;
+use draft_core::pack::lifecycle::PackLifecycle;
+use draft_core::support::common::WorkspacePath;
 use ratatui::backend::CrosstermBackend;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -28,7 +29,7 @@ pub struct ConsoleModel {
 #[derive(Debug, Clone)]
 pub struct ConsolePack {
     pub id: String,
-    pub status: ChangepackStatus,
+    pub status: PackLifecycle,
     pub name: String,
     pub files: Vec<WorkspacePath>,
     pub risk_level: String,
@@ -98,12 +99,12 @@ pub fn load_model(cwd: &Path) -> Result<ConsoleModel, String> {
             .unwrap_or_default();
         packs.push(ConsolePack {
             id: report.pack.id.to_string(),
-            status: report.pack.status,
+            status: report.lifecycle,
             name: report.pack.name.unwrap_or_default(),
             files: report.patch.files.iter().map(|f| f.path.clone()).collect(),
             risk_level: risk
                 .as_ref()
-                .map(|risk| risk.level.label().to_string())
+                .map(|risk| risk.level.as_str().to_string())
                 .unwrap_or_else(|| "unknown".to_string()),
             risk_hotspots: risk
                 .as_ref()
@@ -131,7 +132,7 @@ pub fn load_model(cwd: &Path) -> Result<ConsoleModel, String> {
             Err(_) => {
                 if !matches!(
                     pack.status,
-                    ChangepackStatus::Approved | ChangepackStatus::Submitted
+                    PackLifecycle::Approved | PackLifecycle::Submitted
                 ) {
                     blockers.push(format!("{} requires approval before submit", pack.id));
                 }
@@ -192,7 +193,7 @@ pub fn render_text(model: &ConsoleModel) -> String {
             out.push_str(&format!("  {} {reference}\n", pack.id));
         }
     }
-    out.push_str("\nChangePacks\n");
+    out.push_str("\nPacks\n");
     if model.packs.is_empty() {
         out.push_str("  none\n");
     }
@@ -281,7 +282,7 @@ fn render_frame(frame: &mut ratatui::Frame<'_>, model: &ConsoleModel) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(
-        List::new(packs).block(Block::default().borders(Borders::ALL).title("ChangePacks")),
+        List::new(packs).block(Block::default().borders(Borders::ALL).title("Packs")),
         chunks[1],
     );
 
@@ -311,7 +312,7 @@ mod tests {
             changes: vec!["Modified app.txt".to_string()],
             packs: vec![ConsolePack {
                 id: "pck_1".to_string(),
-                status: ChangepackStatus::Draft,
+                status: PackLifecycle::Draft,
                 name: "demo".to_string(),
                 files: vec![WorkspacePath::from("app.txt")],
                 risk_level: "high".to_string(),

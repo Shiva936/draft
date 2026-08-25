@@ -1,6 +1,6 @@
-use draft_ipc::{socket_path, Request};
+use draft_ipc::{socket_path, HandshakeRequest, Request, IPC_CAPABILITIES, IPC_PROTOCOL};
 use draft_sessions::SessionManager;
-use draft_store::ServiceStore;
+use draft_store::{ServiceJobRecord, ServiceJobStatus, ServiceStore};
 use serde_json::{json, Value};
 use std::sync::{Mutex, OnceLock};
 
@@ -49,7 +49,7 @@ fn daemon_dispatcher_covers_control_plane() {
     let workspace = tempfile::tempdir().unwrap();
     let global = tempfile::tempdir().unwrap();
     let _global_home = EnvVarGuard::set("DRAFT_GLOBAL_HOME", global.path().join(".draft"));
-    let store = ServiceStore::open(state.path().to_path_buf());
+    let store = ServiceStore::open(state.path().to_path_buf()).unwrap();
     let sessions = SessionManager::new();
     let path = workspace.path().display().to_string();
 
@@ -107,7 +107,12 @@ fn daemon_dispatcher_covers_control_plane() {
         &sessions,
         "7",
         "task.create",
-        json!({ "path": workspace.path().display().to_string(), "title": "update app" }),
+        json!({
+            "path": workspace.path().display().to_string(),
+            "name": "update-app",
+            "goal": "update app",
+            "success_criteria": ["app contains the requested update"]
+        }),
     );
     assert!(resp.ok, "{:?}", resp.error);
     let task_id = resp.result.as_ref().unwrap()["id"]
@@ -162,13 +167,34 @@ fn daemon_dispatcher_covers_control_plane() {
         ("20", "events.replay", json!({})),
         ("21", "index.rebuild", json!({})),
         ("22", "rollback.run", json!({ "target": snapshot_id })),
-        ("24", "run.list", json!({})),
+        ("24", "execution.list", json!({})),
     ] {
         let mut params = extra;
         params["path"] = json!(workspace.path().display().to_string());
         let resp = call(&store, &sessions, id, method, params);
         assert!(resp.ok, "{method} failed: {:?}", resp.error);
     }
+
+    let summaries = call(
+        &store,
+        &sessions,
+        "canonical-pack-summaries",
+        "pack.canonical.list",
+        json!({ "path": workspace.path().display().to_string() }),
+    );
+    assert!(summaries.ok, "{:?}", summaries.error);
+    let candidate = summaries
+        .result
+        .as_ref()
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|pack| pack["pack_id"] == pack_id)
+        .unwrap();
+    assert_eq!(candidate["name"], "candidate");
+    assert_eq!(candidate["submit_state"], "submitted");
+    assert!(candidate["valid_actions"].is_array());
 
     let receipts = call(
         &store,
@@ -214,17 +240,34 @@ fn daemon_dispatcher_covers_control_plane() {
         }),
     );
     assert!(resp.ok, "{:?}", resp.error);
-    let job_id = resp.result.as_ref().unwrap()["id"].as_str().unwrap();
-    assert_eq!(resp.result.as_ref().unwrap()["status"], "completed");
+    let job_id = resp.result.as_ref().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(resp.result.as_ref().unwrap()["status"], "queued");
 
-    let resp = call(
+    let mut resp = call(
         &store,
         &sessions,
         "job-2",
         "job.status",
         json!({ "job_id": job_id }),
     );
+    for _ in 0..100 {
+        if resp.result.as_ref().unwrap()["status"] == "completed" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        resp = call(
+            &store,
+            &sessions,
+            "job-2",
+            "job.status",
+            json!({ "job_id": job_id }),
+        );
+    }
     assert!(resp.ok, "{:?}", resp.error);
+    assert_eq!(resp.result.as_ref().unwrap()["status"], "completed");
     assert_eq!(resp.result.unwrap()["kind"], "scan");
 
     let resp = call(&store, &sessions, "job-3", "job.list", Value::Null);
@@ -250,9 +293,250 @@ fn daemon_dispatcher_covers_control_plane() {
 }
 
 #[test]
+fn durable_jobs_recover_and_honor_cancellation() {
+    let _env_lock = env_lock().lock().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let global = tempfile::tempdir().unwrap();
+    let _global_home = EnvVarGuard::set("DRAFT_GLOBAL_HOME", global.path().join(".draft"));
+    let store = ServiceStore::open(state.path().to_path_buf()).unwrap();
+    let sessions = SessionManager::new();
+    let path = workspace.path().display().to_string();
+    assert!(
+        call(
+            &store,
+            &sessions,
+            "recover-init",
+            "workspace.init",
+            json!({ "path": path }),
+        )
+        .ok
+    );
+
+    let queued = ServiceJobRecord {
+        schema_version: draft_core::contracts::current_version(
+            draft_core::contracts::ContractId::ServiceJob,
+        ),
+        id: "job_recovery_test".into(),
+        kind: "scan".into(),
+        workspace_path: path.clone(),
+        status: ServiceJobStatus::Running,
+        submitted_at: chrono::Utc::now(),
+        started_at: Some(chrono::Utc::now()),
+        ended_at: None,
+        result: None,
+        error: None,
+        operation_id: Some("op_recovery_test".into()),
+        workspace_id: None,
+        phase: "executing".into(),
+        progress_completed: 0,
+        progress_total: Some(1),
+        cancellation_requested: false,
+        params: json!({ "path": path, "kind": "scan" }),
+        correlation_id: "cor_recovery_test".into(),
+        attempt: 1,
+        recovered_at: None,
+    };
+    store.save_job(&queued).unwrap();
+    assert_eq!(draftd::recover_jobs(&store).unwrap(), 1);
+    for _ in 0..100 {
+        let current = store.load_job(&queued.id).unwrap().unwrap();
+        if current.status == ServiceJobStatus::Completed {
+            assert_eq!(current.attempt, 2);
+            assert!(current.recovered_at.is_some());
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        store.load_job(&queued.id).unwrap().unwrap().status,
+        ServiceJobStatus::Completed
+    );
+
+    let mut cancelled = queued;
+    cancelled.id = "job_cancel_test".into();
+    cancelled.status = ServiceJobStatus::Queued;
+    cancelled.started_at = None;
+    cancelled.attempt = 0;
+    cancelled.cancellation_requested = false;
+    store.save_job(&cancelled).unwrap();
+    let response = call(
+        &store,
+        &sessions,
+        "cancel",
+        "job.cancel",
+        json!({ "job_id": cancelled.id }),
+    );
+    assert!(response.ok, "{:?}", response.error);
+    assert_eq!(response.result.unwrap()["status"], "cancelled");
+    assert_eq!(draftd::recover_jobs(&store).unwrap(), 0);
+}
+
+#[test]
 fn socket_path_is_local() {
     let _env_lock = env_lock().lock().unwrap();
     std::env::remove_var("XDG_RUNTIME_DIR");
     let p = socket_path();
     assert!(p.to_string_lossy().ends_with("draftd.sock"));
+}
+
+#[test]
+fn ipc_negotiates_capabilities_and_rejects_invalid_contracts() {
+    let store_root = tempfile::tempdir().unwrap();
+    let store = ServiceStore::open(store_root.path().to_path_buf()).unwrap();
+    let sessions = SessionManager::new();
+    let request = Request::new(
+        "handshake",
+        "service.handshake",
+        serde_json::to_value(HandshakeRequest {
+            protocol: IPC_PROTOCOL.into(),
+            schema_version: draft_core::contracts::current_version(
+                draft_core::contracts::ContractId::IpcHandshakeRequest,
+            ),
+            requested_capabilities: vec!["cancellation".into(), "unknown".into()],
+            client_name: "test".into(),
+            client_version: "0.3.4".into(),
+        })
+        .unwrap(),
+    );
+    let response = draftd::dispatch(&store, &sessions, request);
+    assert!(response.ok, "{:?}", response.error);
+    assert_eq!(response.result.as_ref().unwrap()["protocol"], IPC_PROTOCOL);
+    assert_eq!(
+        response.result.as_ref().unwrap()["capabilities"],
+        json!(["cancellation"])
+    );
+    assert!(IPC_CAPABILITIES.contains(&"cancellation"));
+
+    let mut future = Request::new("future", "service.ping", Value::Null);
+    future.protocol = "draft-ipc-other".into();
+    let response = draftd::dispatch(&store, &sessions, future);
+    assert!(!response.ok);
+    assert_eq!(response.error.unwrap().code, "UNSUPPORTED_PROTOCOL");
+
+    let mut future = Request::new("future", "service.ping", Value::Null);
+    future.schema_version = 2;
+    let response = draftd::dispatch(&store, &sessions, future);
+    assert!(!response.ok);
+    assert_eq!(response.error.unwrap().code, "UNSUPPORTED_SCHEMA");
+}
+
+#[test]
+fn mutation_operation_ids_replay_identical_results_and_reject_parameter_reuse() {
+    let _env_lock = env_lock().lock().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let global = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let _global_home = EnvVarGuard::set("DRAFT_GLOBAL_HOME", global.path().join(".draft"));
+    let store = ServiceStore::open(state.path().to_path_buf()).unwrap();
+    let sessions = SessionManager::new();
+    let operation_id = "op_integration_replay";
+    let request = || {
+        Request::new(
+            "init",
+            "workspace.init",
+            json!({ "path": workspace.path().display().to_string() }),
+        )
+        .with_operation_id(operation_id)
+    };
+    let first = draftd::dispatch(&store, &sessions, request());
+    assert!(first.ok, "{:?}", first.error);
+    let replay = draftd::dispatch(&store, &sessions, request());
+    assert!(replay.ok, "{:?}", replay.error);
+    assert_eq!(first.result, replay.result);
+
+    let conflicting = draftd::dispatch(
+        &store,
+        &sessions,
+        Request::new(
+            "other",
+            "workspace.init",
+            json!({ "path": other.path().display().to_string() }),
+        )
+        .with_operation_id(operation_id),
+    );
+    assert!(!conflicting.ok);
+    assert_eq!(conflicting.error.unwrap().code, "CONFLICT_DETECTED");
+    assert!(!other.path().join(".draft").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn daemon_falls_back_when_xdg_runtime_directory_is_missing() {
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    struct ChildGuard(Option<Child>);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(child) = &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let missing_runtime = root.path().join("missing-runtime");
+    let executable = env!("CARGO_BIN_EXE_draftd");
+
+    let child = Command::new(executable)
+        .arg("start")
+        .env("HOME", &home)
+        .env("XDG_RUNTIME_DIR", &missing_runtime)
+        .env_remove("XDG_STATE_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut daemon = ChildGuard(Some(child));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut running = false;
+    while Instant::now() < deadline {
+        if let Some(status) = daemon.0.as_mut().unwrap().try_wait().unwrap() {
+            panic!("draftd exited before answering status: {status}");
+        }
+        let status = Command::new(executable)
+            .arg("status")
+            .env("HOME", &home)
+            .env("XDG_RUNTIME_DIR", &missing_runtime)
+            .env_remove("XDG_STATE_HOME")
+            .output()
+            .unwrap();
+        if status.status.success()
+            && String::from_utf8_lossy(&status.stdout).contains("draftd: running")
+        {
+            running = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(running, "draftd did not answer on the fallback socket");
+    assert!(!missing_runtime.exists());
+    assert!(home.join(".local/state/draft/draftd.sock").exists());
+
+    let stopped = Command::new(executable)
+        .arg("stop")
+        .env("HOME", &home)
+        .env("XDG_RUNTIME_DIR", &missing_runtime)
+        .env_remove("XDG_STATE_HOME")
+        .output()
+        .unwrap();
+    assert!(stopped.status.success());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if daemon.0.as_mut().unwrap().try_wait().unwrap().is_some() {
+            daemon.0.take();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("draftd did not stop after the shutdown request");
 }

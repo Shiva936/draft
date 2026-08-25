@@ -3,10 +3,10 @@
 //! rejects it and nothing is mutated. The `fuzz/` crate provides libFuzzer
 //! targets over the same parsers for deeper, nightly fuzzing.
 
-use draft_core::importexport::read_archive;
+use draft_core::pack::archive::read_archive;
 use draft_core::pack::PackManifest;
-use draft_core::pathguard::{self, PathViolation};
-use draft_core::receipt::ReceiptRecord;
+use draft_core::support::pathguard::{self, PathViolation};
+use draft_core::trust::receipt::ReceiptRecord;
 
 /// Build a raw ustar archive with an arbitrary (possibly malicious) entry.
 fn raw_tar(entries: &[(&str, &[u8], u8)]) -> Vec<u8> {
@@ -181,14 +181,19 @@ fn manifest_parser_rejects_corrupt_and_wrong_schema() {
     // Corrupt JSON.
     assert!(serde_json::from_str::<PackManifest>("{ not json ").is_err());
     // Wrong schema version fails the support check.
-    let m: PackManifest = serde_json::from_str(
-        r#"{"schema_version":"0.2.0","pack_id":"pck_x","name":"n","description":"",
-            "intent":"feature","origin":"local","actor":"a","candidate":null,
-            "created_at":"t","base_workspace_hash":"h","target_workspace_hash":"h",
-            "changes_hash":"h","risk_hash":"","verify_hash":"","lsif_hash":"",
-            "receipt_hashes":[],"import_state":"none","approval_state":"pending",
-            "submit_state":"unsaved"}"#,
-    )
+    let m: PackManifest = serde_json::from_value(serde_json::json!({
+        "schema_version": 2,
+        "pack_id": "pck_x",
+        "manifest_digest": "sha256:manifest",
+        "name": "n",
+        "description": "",
+        "intent": "feature",
+        "provenance": {"origin": "local"},
+        "author_id": "actor_a",
+        "candidate_id": null,
+        "declared_dependencies": [],
+        "created_at": "2026-01-01T00:00:00Z"
+    }))
     .unwrap();
     assert!(m.ensure_supported().is_err());
 }
@@ -203,6 +208,6 @@ fn receipt_parser_rejects_corrupt() {
 
 #[test]
 fn event_parser_rejects_corrupt_line() {
-    use draft_core::event::EventRecord;
+    use draft_core::trust::event::EventRecord;
     assert!(serde_json::from_str::<EventRecord>("{ garbage").is_err());
 }

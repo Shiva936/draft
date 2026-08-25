@@ -1,11 +1,11 @@
 # Storage And Events
 
-Draft stores private state in two hidden `.draft/` stores. The global store (`~/.draft/`) holds user/device identity, signing keys, trust data, adapter config, and reusable cache state. The project store (`<workspace>/.draft/`) holds workspace changepacks, events, receipts, transparency data, checkpoints, evidence, and indexes. Both stores are native to Draft v0.3.4 and independent of external tools.
+Draft stores private state in two hidden `.draft/` stores. The global store (`~/.draft/`) holds the stable security actor, signing keys, trust data, global configuration, adapter config, and reusable cache state. The project store (`<workspace>/.draft/`) holds workspace packs, events, receipts, transparency data, checkpoints, evidence, and indexes. Both stores are native to Draft v0.3.4 and independent of external tools.
 
 ## Global Store
 
-- `~/.draft/config.toml`: global defaults.
-- `~/.draft/identity/`: actor and candidate registry.
+- `~/.draft/config.toml`: global defaults, including optional `user.*` display/contact metadata.
+- `~/.draft/identity/`: stable security actor and candidate registry; profile fields are forbidden here.
 - `~/.draft/keys/signing.key`: private Ed25519 signing key.
 - `~/.draft/trust/`: trusted and revoked public-key metadata.
 - `~/.draft/adapters/`: local adapter configuration.
@@ -15,7 +15,7 @@ The global store never stores project pack data.
 
 ## Project Top-Level Files
 
-- `.draft/workspace.json`: workspace id, schema version, Draft version, and creation time.
+- `.draft/workspace.json`: workspace id, its contract schema version, product/provenance `draft_version`, and creation time. `draft_version` does not determine workspace compatibility.
 - `.draft/config.toml`: workspace configuration.
 - `.draft/.ignore`: Draft ignore rules.
 - `.draft/verify.toml`: verification command configuration.
@@ -27,12 +27,12 @@ The global store never stores project pack data.
 - `.draft/objects/`: content-addressed blobs for file contents, stdout, stderr, messages, and evidence.
 - `.draft/snapshots/`: workspace manifests created by checkpoints and rollback-sensitive operations.
 - `.draft/tasks/`: local task records.
-- `.draft/runs/`: opaque command run records.
-- `.draft/changepacks/`: ChangePack manifests, patches, reviews, and linked metadata.
+- `.draft/executions/`: canonical task execution records.
+- `.draft/pack-workspaces/`: mutable staging state while deriving immutable revisions.
 - `.draft/evidence/`: verification and run evidence.
 - `.draft/receipts/`: durable action receipts.
 - `.draft/transparency/`: local tamper-evident receipt/event chain.
-- `.draft/packs/`: canonical v0.3.4 pack manifests, lockfiles, patches, and evidence summaries.
+- `.draft/packs/`: canonical immutable pack manifests, revisions, lockfiles, and evidence summaries.
 - `.draft/imports/quarantine/`: untrusted imported `.draftpack` artifacts, including their embedded content objects (`objects/<hash>`). A quarantined pack's whole directory moves to `.draft/packs/` when the import is submitted.
 - `.draft/exports/`: local export outputs when requested.
 - `.draft/lsif/`: basic offline symbol index.
@@ -41,6 +41,12 @@ The global store never stores project pack data.
 - `.draft/tmp/`: temporary files for atomic writes.
 
 The project store never stores the private signing key.
+
+## Contract And Container Boundaries
+
+Every independently decoded persisted or transmitted Draft contract owns a closed `ContractId`, stable unversioned identifier, and independent current and supported schema-version policy. Every policy currently supports only version `1`. Artifacts remain self-describing through their own `schema_version`; registry metadata validates the expected Rust contract and never reinterprets existing bytes.
+
+A canonical SQLite database, archive, file, envelope, or other independently decoded container owns the version for that boundary. Rows or subrecords that are never encoded outside it inherit the container version. A member that is independently hash-addressed, signed, copied, persisted, transmitted, or decoded is a separate registered boundary with its own metadata. New contracts require a new compile-time `ContractId`; arbitrary runtime registration and string-selected production dispatch are not supported.
 
 ## Authority And Caches
 

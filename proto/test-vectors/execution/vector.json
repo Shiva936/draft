@@ -2,7 +2,7 @@
   "name": "execution",
   "payload_schema": "execution.schema.json",
   "payload": {
-    "schema_version": "0.3.4",
+    "schema_version": 1,
     "id": "exe_demo",
     "task_id": "tsk_demo",
     "candidate": "manual",
@@ -29,7 +29,7 @@
     "risk_result": null
   },
   "invalid_payload": {
-    "schema_version": "0.3.4",
+    "schema_version": 1,
     "id": "exe_demo",
     "task_id": "bad",
     "candidate": "manual",

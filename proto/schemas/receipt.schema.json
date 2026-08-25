@@ -1,26 +1,31 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Draft Receipt",
+  "$id": "https://draft.dev/schemas/receipt.schema.json",
+  "title": "Draft Signed Receipt",
   "type": "object",
-  "required": ["receipt_id", "receipt_type", "workspace_hash", "verification_result", "timestamp", "event_hash", "previous_event_hash"],
+  "required": [
+    "schema_version", "receipt_id", "event_type", "subject_id", "actor_id",
+    "candidate_id", "workspace_id", "workspace_hash", "event_hash",
+    "previous_event_hash", "timestamp", "policy_version", "draft_version",
+    "signature_algorithm", "public_key_id", "signature"
+  ],
   "properties": {
+    "schema_version": { "const": 1 },
     "receipt_id": { "type": "string", "pattern": "^rcp_[A-Za-z0-9_-]+$" },
-    "receipt_type": { "type": "string" },
-    "base_before": { "type": ["string", "null"] },
-    "base_after": { "type": ["string", "null"] },
-    "stable_head_before": { "type": ["string", "null"] },
-    "stable_head_after": { "type": ["string", "null"] },
-    "pack_digest": { "type": ["string", "null"] },
-    "pack_summary": { "type": ["object", "null"] },
-    "composition_hash": { "type": ["string", "null"] },
+    "event_type": { "type": "string", "minLength": 1 },
+    "subject_id": { "type": ["string", "null"] },
+    "actor_id": { "type": "string", "minLength": 1 },
+    "candidate_id": { "type": ["string", "null"] },
+    "workspace_id": { "type": "string", "minLength": 1 },
     "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "verification_result": { "enum": ["verified", "failed"] },
-    "hook_results": { "type": "array" },
-    "submit_mode": { "enum": ["merge_and_dispose", "dispose_only", null] },
-    "timestamp": { "type": "string" },
-    "signer": { "type": ["string", "null"] },
-    "event_hash": { "type": "string" },
-    "previous_event_hash": { "type": "string" }
+    "event_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "previous_event_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "policy_version": { "type": "string" },
+    "draft_version": { "type": "string", "minLength": 1 },
+    "signature_algorithm": { "const": "Ed25519" },
+    "public_key_id": { "type": "string", "minLength": 1 },
+    "signature": { "type": "string", "minLength": 1 }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

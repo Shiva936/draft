@@ -2,7 +2,7 @@
   "name": "task",
   "payload_schema": "task.schema.json",
   "payload": {
-    "schema_version": "0.3.4",
+    "schema_version": 1,
     "id": "tsk_demo",
     "name": "demo",
     "kind": "defined",
@@ -28,10 +28,15 @@
     "updated_at": "2026-07-13T00:00:00Z",
     "created_by": "human",
     "base_stable_head": "head",
+    "status": "open",
+    "priority": "normal",
+    "due_at": null,
+    "next_actions": [],
+    "assignee_ref": null,
     "metadata": {}
   },
   "invalid_payload": {
-    "schema_version": "0.3.4",
+    "schema_version": 1,
     "id": "bad",
     "name": "demo",
     "kind": "defined",
@@ -52,6 +57,11 @@
     "updated_at": "2026-07-13T00:00:00Z",
     "created_by": "human",
     "base_stable_head": "head",
+    "status": "open",
+    "priority": "normal",
+    "due_at": null,
+    "next_actions": [],
+    "assignee_ref": null,
     "metadata": {}
   },
   "expect": {

@@ -1,6 +1,6 @@
 //! Terminal output helpers for Draft-native CLI responses.
 
-use draft_core::error::DraftError;
+use draft_core::support::error::DraftError;
 
 pub fn header(title: &str) {
     println!("\n\x1b[1m{title}\x1b[0m");

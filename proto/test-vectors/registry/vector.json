@@ -1,0 +1,31 @@
+{
+  "name": "registry",
+  "payload_schema": "registry.schema.json",
+  "payload": {
+    "schema_version": 1,
+    "revision": 1,
+    "updated_at": "2026-08-23T00:00:00Z",
+    "entries": [{
+      "schema_version": 1,
+      "workspace_id": "workspace-demo",
+      "name": "demo",
+      "repository_path": "/tmp/demo",
+      "storage_path": "/tmp/demo/.draft",
+      "created_at": "2026-08-23T00:00:00Z",
+      "last_seen_at": "2026-08-23T00:00:00Z",
+      "last_stable_head": null,
+      "draft_version": "0.3.4",
+      "health": "healthy",
+      "location_revision": 1,
+      "path_history": [],
+      "last_workspace_revision": null
+    }]
+  },
+  "invalid_payload": {
+    "schema_version": 1,
+    "revision": 1,
+    "updated_at": "2026-08-23T00:00:00Z",
+    "entries": [{ "workspace_id": "workspace-demo" }]
+  },
+  "expect": { "valid": true }
+}

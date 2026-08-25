@@ -1,8 +1,12 @@
 plans/
 target/
 node_modules/
+console/web/.playwright-*.json
+console/web/playwright-report/
+console/web/test-results/
 fuzz/target/
 fuzz/corpus/
 fuzz/artifacts/
 fuzz/Cargo.lock
 .prettierrc
+sample/

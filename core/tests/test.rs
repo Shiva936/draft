@@ -1,4 +1,5 @@
-use draft_core::{App, ChangepackStatus};
+use draft_core::app::App;
+use draft_core::pack::lifecycle::PackLifecycle;
 use std::path::Path;
 
 fn setup() -> (tempfile::TempDir, App) {
@@ -64,12 +65,9 @@ fn compare_and_compose_allow_same_file_non_overlapping_hunks() {
         .unwrap();
     assert!(composed.compatible);
     assert_eq!(composed.files, 2);
-    let pack = app
-        .pack_show(dir.path(), &composed.output_pack_id)
-        .unwrap()
-        .pack;
-    assert_eq!(pack.status, ChangepackStatus::Draft);
-    assert_eq!(pack.source_pack_ids.len(), 2);
+    let report = app.pack_show(dir.path(), &composed.output_pack_id).unwrap();
+    assert_eq!(report.lifecycle, PackLifecycle::Draft);
+    assert_eq!(report.pack.source_pack_ids.len(), 2);
 }
 
 #[test]
@@ -133,7 +131,7 @@ fn durable_events_redact_common_secret_shapes() {
         .iter()
         .find(|event| event.event_type == "task.spawned")
         .unwrap()
-        .payload
+        .metadata
         .to_string();
     assert!(!payload.contains("abc123"));
     assert!(!payload.contains("eyJhbGciOi.fake.sig"));
@@ -143,7 +141,7 @@ fn durable_events_redact_common_secret_shapes() {
 
 #[cfg(unix)]
 #[test]
-fn rollback_rejects_symlink_parent_escape() {
+fn canonical_snapshot_rejects_symlink_parent_escape() {
     use std::os::unix::fs::symlink;
 
     let (dir, app) = setup();
@@ -152,42 +150,8 @@ fn rollback_rejects_symlink_parent_escape() {
     symlink(outside.path(), dir.path().join("safe/link")).unwrap();
     std::fs::write(dir.path().join("safe/link/file.txt"), "outside\n").unwrap();
 
-    let mut snapshot = app.checkpoint(dir.path(), "base").unwrap();
-    let mut snap: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(
-            dir.path()
-                .join(".draft/snapshots")
-                .join(format!("{}.json", snapshot.snapshot_id)),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    snap["files"]
-        .as_array_mut()
-        .unwrap()
-        .push(serde_json::json!({
-            "path": "safe/link/escape.txt",
-            "file_kind": "text",
-            "content_hash": null,
-            "size_bytes": 0,
-            "modified_time": null,
-            "executable": null
-        }));
-    snapshot.snapshot_id = "chk_escape".to_string();
-    snap["id"] = serde_json::json!(snapshot.snapshot_id);
-    std::fs::write(
-        dir.path()
-            .join(".draft/snapshots")
-            .join(format!("{}.json", snapshot.snapshot_id)),
-        serde_json::to_string_pretty(&snap).unwrap(),
-    )
-    .unwrap();
-
-    let err = app
-        .rollback(dir.path(), &snapshot.snapshot_id, true)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("escapes workspace") || err.contains("unsafe workspace path"));
+    let err = app.checkpoint(dir.path(), "base").unwrap_err().to_string();
+    assert!(err.contains("symlink target") || err.contains("absolute paths are not allowed"));
 }
 
 #[test]
@@ -198,11 +162,12 @@ fn proto_contract_files_are_present_and_parseable() {
         .to_path_buf();
     let proto = repo.join("proto");
     for rel in [
-        "specs/changepack.md",
+        "specs/pack.md",
         "specs/receipt.md",
         "specs/event-ledger.md",
         "specs/signing.md",
         "specs/canonicalization.md",
+        "specs/compatibility.md",
         "specs/composition.md",
         "specs/project-state.md",
         "specs/stability.md",
@@ -212,8 +177,7 @@ fn proto_contract_files_are_present_and_parseable() {
         "specs/gc.md",
         "specs/import-export.md",
         "specs/path-safety.md",
-        "specs/compatibility.md",
-        "specs/future-drafthub-readiness.md",
+        "specs/future-readiness.md",
     ] {
         let path = proto.join(rel);
         let text = std::fs::read_to_string(&path)
@@ -230,79 +194,77 @@ fn proto_contract_files_are_present_and_parseable() {
         );
     }
 
-    for rel in [
-        "schemas/changepack.schema.json",
-        "schemas/receipt.schema.json",
-        "schemas/event.schema.json",
-        "schemas/project-state.schema.json",
-        "schemas/stable-head.schema.json",
-        "schemas/composition.schema.json",
-        "schemas/verification.schema.json",
-        "schemas/config.schema.json",
-        "schemas/task.schema.json",
-        "schemas/task-template.schema.json",
-        "schemas/execution.schema.json",
-        "schemas/candidate-profile.schema.json",
-        "schemas/decision-record.schema.json",
-        "schemas/waiver.schema.json",
-        "schemas/evidence-state.schema.json",
-        "schemas/inbox-item.schema.json",
-        "schemas/project-registry-entry.schema.json",
-        "schemas/ownership-record.schema.json",
-        "schemas/protected-file-rule.schema.json",
-        "schemas/doctor-operation.schema.json",
-        "schemas/editor-session.schema.json",
-        "schemas/activity-event.schema.json",
-    ] {
-        let path = proto.join(rel);
+    let mut schema_paths = std::fs::read_dir(proto.join("schemas"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".schema.json"))
+        })
+        .collect::<Vec<_>>();
+    schema_paths.sort();
+    assert!(
+        !schema_paths.is_empty(),
+        "at least one schema must be committed"
+    );
+    let registered_schemas = draft_core::contracts::ContractId::ALL
+        .iter()
+        .filter_map(|contract| contract.metadata().schema)
+        .collect::<std::collections::BTreeSet<_>>();
+    let committed_schemas = schema_paths
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    for schema in &committed_schemas {
+        assert!(
+            registered_schemas.contains(schema.as_str()),
+            "schema {schema} has no closed ContractId registry entry"
+        );
+    }
+    for schema in registered_schemas {
+        assert!(
+            committed_schemas.contains(schema),
+            "registered schema {schema} is not committed"
+        );
+    }
+    for path in schema_paths {
         let value: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("missing/readable schema {}: {e}", path.display())),
         )
         .unwrap_or_else(|e| panic!("schema {} must be valid JSON: {e}", path.display()));
+        let filename = path.file_name().unwrap().to_string_lossy();
         assert_eq!(
-            value["type"],
-            "object",
-            "{} must define an object",
+            value["$id"],
+            format!("https://draft.dev/schemas/{filename}"),
+            "{} must have a stable unversioned id",
             path.display()
         );
+        assert!(value["title"]
+            .as_str()
+            .is_some_and(|title| !title.is_empty()));
+        assert_local_refs_resolve(&value, &value, &path);
         assert!(
-            value.get("properties").is_some(),
-            "{} must declare schema properties",
+            schema_has_literal_version(&value),
+            "{} must declare literal numeric schema_version 1",
             path.display()
         );
     }
 
-    for name in [
-        "valid-pack",
-        "invalid-signature",
-        "tampered-receipt",
-        "conflicting-packs",
-        "independent-packs",
-        "dependent-packs",
-        "stable-composition",
-        "unstable-composition",
-        "submit-merge-and-dispose",
-        "submit-dispose-only",
-        "close-clean-repo",
-        "close-with-pending-pack",
-        "gc-disposed-pack-cleanup",
-        "task",
-        "task-template",
-        "execution",
-        "candidate-profile",
-        "decision-record",
-        "waiver",
-        "evidence-state",
-        "inbox-item",
-        "project-registry-entry",
-        "ownership-record",
-        "protected-file-rule",
-        "doctor-operation",
-        "editor-session",
-        "activity-event",
-    ] {
-        let path = proto.join("test-vectors").join(name).join("vector.json");
+    let mut vector_paths = std::fs::read_dir(proto.join("test-vectors"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path().join("vector.json"))
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    vector_paths.sort();
+    for path in vector_paths {
+        let name = path
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
         let value: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("missing/readable vector {}: {e}", path.display())),
@@ -310,7 +272,7 @@ fn proto_contract_files_are_present_and_parseable() {
         .unwrap_or_else(|e| panic!("vector {} must be valid JSON: {e}", path.display()));
         assert_eq!(
             value["name"],
-            name,
+            name.as_ref(),
             "{} has wrong vector name",
             path.display()
         );
@@ -349,89 +311,162 @@ fn proto_contract_files_are_present_and_parseable() {
     }
 }
 
-/// Minimal JSON-Schema validator covering the subset used by proto/schemas:
-/// `type` (incl. union with null), `required`, `const`, `enum`, `pattern`,
-/// and `additionalProperties: false`. Enough to keep vectors honest without
-/// pulling in a schema engine.
-fn validate_against_schema(schema: &serde_json::Value, value: &serde_json::Value) -> Vec<String> {
-    use serde_json::Value;
-    let mut errors = Vec::new();
-    if schema["type"] == "object" && !value.is_object() {
-        return vec!["expected an object".to_string()];
-    }
-    let obj = match value.as_object() {
-        Some(map) => map,
-        None => return errors,
-    };
-    if let Some(required) = schema["required"].as_array() {
-        for key in required.iter().filter_map(Value::as_str) {
-            if !obj.contains_key(key) {
-                errors.push(format!("missing required field '{key}'"));
-            }
-        }
-    }
-    let props = schema["properties"].as_object();
-    if schema["additionalProperties"] == false {
-        if let Some(props) = props {
-            for key in obj.keys() {
-                if !props.contains_key(key) {
-                    errors.push(format!("unexpected field '{key}'"));
-                }
-            }
-        }
-    }
-    let Some(props) = props else {
-        return errors;
-    };
-    for (key, rule) in props {
-        let Some(actual) = obj.get(key) else {
-            continue;
-        };
-        if let Some(expected) = rule.get("const") {
-            if actual != expected {
-                errors.push(format!("field '{key}' must equal {expected}"));
-            }
-        }
-        if let Some(allowed) = rule.get("enum").and_then(Value::as_array) {
-            if !allowed.contains(actual) {
-                errors.push(format!("field '{key}' value {actual} not in enum"));
-            }
-        }
-        if let Some(types) = rule.get("type") {
-            let names: Vec<&str> = match types {
-                Value::String(s) => vec![s.as_str()],
-                Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
-                _ => Vec::new(),
-            };
-            if !names.is_empty() {
-                let matches = names.iter().any(|t| match *t {
-                    "string" => actual.is_string(),
-                    "object" => actual.is_object(),
-                    "array" => actual.is_array(),
-                    "number" => actual.is_number(),
-                    "integer" => actual.is_i64() || actual.is_u64(),
-                    "boolean" => actual.is_boolean(),
-                    "null" => actual.is_null(),
-                    _ => true,
+fn assert_local_refs_resolve(root: &serde_json::Value, node: &serde_json::Value, path: &Path) {
+    match node {
+        serde_json::Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(serde_json::Value::as_str) {
+                let pointer = reference.strip_prefix('#').unwrap_or_else(|| {
+                    panic!(
+                        "{} contains non-local reference {reference}",
+                        path.display()
+                    )
                 });
-                if !matches {
-                    errors.push(format!("field '{key}' has wrong type"));
+                assert!(
+                    root.pointer(pointer).is_some(),
+                    "{} contains unresolved reference {reference}",
+                    path.display()
+                );
+            }
+            for value in object.values() {
+                assert_local_refs_resolve(root, value, path);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                assert_local_refs_resolve(root, value, path);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Validate the recursive schema subset used by Draft's committed vectors,
+/// including local references, objects, arrays, and tagged alternatives.
+fn validate_against_schema(schema: &serde_json::Value, value: &serde_json::Value) -> Vec<String> {
+    validate_schema_node(schema, schema, value)
+}
+
+fn validate_schema_node(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Vec<String> {
+    use serde_json::Value;
+
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let Some(pointer) = reference.strip_prefix('#') else {
+            return vec![format!("external reference is not supported: {reference}")];
+        };
+        let Some(resolved) = root.pointer(pointer) else {
+            return vec![format!("unresolved local reference: {reference}")];
+        };
+        return validate_schema_node(root, resolved, value);
+    }
+
+    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
+        let successes = branches
+            .iter()
+            .filter(|branch| validate_schema_node(root, branch, value).is_empty())
+            .count();
+        return if successes == 1 {
+            Vec::new()
+        } else {
+            vec![format!(
+                "expected exactly one matching schema branch, got {successes}"
+            )]
+        };
+    }
+
+    let mut errors = Vec::new();
+    if let Some(expected) = schema.get("const") {
+        if value != expected {
+            errors.push(format!("must equal {expected}"));
+        }
+    }
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array) {
+        if !allowed.contains(value) {
+            errors.push(format!("value {value} is not in enum"));
+        }
+    }
+    if let Some(types) = schema.get("type") {
+        let names: Vec<&str> = match types {
+            Value::String(name) => vec![name],
+            Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        let matches = names.iter().any(|name| match *name {
+            "string" => value.is_string(),
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "number" => value.is_number(),
+            "integer" => value.is_i64() || value.is_u64(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            _ => false,
+        });
+        if !names.is_empty() && !matches {
+            return vec![format!("wrong type; expected {}", names.join(" or "))];
+        }
+    }
+    if let (Some(pattern), Some(text)) = (
+        schema.get("pattern").and_then(Value::as_str),
+        value.as_str(),
+    ) {
+        if !simple_pattern_matches(pattern, text) {
+            errors.push(format!("does not match pattern {pattern}"));
+        }
+    }
+
+    if let Some(items) = value.as_array() {
+        if let Some(item_schema) = schema.get("items") {
+            for (index, item) in items.iter().enumerate() {
+                for error in validate_schema_node(root, item_schema, item) {
+                    errors.push(format!("[{index}].{error}"));
                 }
             }
         }
-        if let (Some(pattern), Some(text)) = (rule["pattern"].as_str(), actual.as_str()) {
-            if !simple_pattern_matches(pattern, text) {
-                errors.push(format!("field '{key}' does not match pattern {pattern}"));
+    }
+
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for key in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(key) {
+                    errors.push(format!("missing required field '{key}'"));
+                }
             }
         }
-        // Recurse into nested object rules (e.g. config.schema.json's [submit]).
-        if rule.get("properties").is_some() && actual.is_object() {
-            for nested in validate_against_schema(rule, actual) {
-                errors.push(format!("{key}.{nested}"));
+        let properties = schema.get("properties").and_then(Value::as_object);
+        for (key, actual) in object {
+            if let Some(rule) = properties.and_then(|rules| rules.get(key)) {
+                for error in validate_schema_node(root, rule, actual) {
+                    errors.push(format!("{key}.{error}"));
+                }
+            } else if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                errors.push(format!("unexpected field '{key}'"));
+            } else if let Some(rule) = schema
+                .get("additionalProperties")
+                .filter(|rule| rule.is_object())
+            {
+                for error in validate_schema_node(root, rule, actual) {
+                    errors.push(format!("{key}.{error}"));
+                }
             }
         }
     }
     errors
+}
+
+fn schema_has_literal_version(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object
+                .get("schema_version")
+                .is_some_and(|schema| schema.get("const") == Some(&serde_json::json!(1)))
+                || object.values().any(schema_has_literal_version)
+        }
+        serde_json::Value::Array(items) => items.iter().any(schema_has_literal_version),
+        _ => false,
+    }
 }
 
 /// Match the two anchored pattern shapes proto/schemas use

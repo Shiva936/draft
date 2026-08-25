@@ -7,6 +7,6 @@ fuzz_target!(|data: &[u8]| {
     let path = dir.path().join("fuzz.draftpack");
     if std::fs::write(&path, data).is_ok() {
         // Must never panic and must fail closed on malformed input.
-        let _ = draft_core::importexport::read_archive(&path);
+        let _ = draft_core::pack::archive::read_archive(&path);
     }
 });

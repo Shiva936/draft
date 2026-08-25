@@ -2,16 +2,64 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Draft Composition",
   "type": "object",
-  "required": ["id", "base_stable_head", "pack_ids", "composition_hash", "dependency_order", "status", "affected_paths"],
+  "required": [
+    "schema_version",
+    "id",
+    "base_stable_head",
+    "pack_ids",
+    "composition_hash",
+    "dependency_order",
+    "status",
+    "affected_paths"
+  ],
   "properties": {
-    "id": { "type": "string", "pattern": "^cmp_[A-Za-z0-9_-]+$" },
-    "base_stable_head": { "type": "string" },
-    "pack_ids": { "type": "array", "items": { "type": "string", "pattern": "^pck_[A-Za-z0-9_-]+$" } },
-    "composition_hash": { "type": "string" },
-    "dependency_order": { "type": "array", "items": { "type": "string" } },
-    "status": { "enum": ["created", "verified", "failed"] },
-    "affected_paths": { "type": "array", "items": { "type": "string" } },
-    "conflicts": { "type": "array", "items": { "type": "string" } }
+    "id": {
+      "type": "string",
+      "pattern": "^cmp_[A-Za-z0-9_-]+$"
+    },
+    "base_stable_head": {
+      "type": "string"
+    },
+    "pack_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^pck_[A-Za-z0-9_-]+$"
+      }
+    },
+    "composition_hash": {
+      "type": "string"
+    },
+    "dependency_order": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "enum": [
+        "created",
+        "verified",
+        "failed"
+      ]
+    },
+    "affected_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/composition.schema.json"
 }

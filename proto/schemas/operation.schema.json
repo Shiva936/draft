@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Durable Operation",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "operation_id",
+    "request_hash",
+    "method",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^op_"
+    },
+    "request_hash": {
+      "type": "string"
+    },
+    "method": {
+      "type": "string"
+    },
+    "workspace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result": {},
+    "error": {}
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/operation.schema.json"
+}

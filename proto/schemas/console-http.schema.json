@@ -1,0 +1,833 @@
+{
+  "$id": "https://draft.dev/schemas/console-http.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ApiErrorBodyDto": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "details": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ApiFailureDto": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ApiErrorBodyDto"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "error",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "AssigneeRefDto": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ConsoleSessionDto": {
+      "properties": {
+        "authenticated": {
+          "type": "boolean"
+        },
+        "csrf_token": {
+          "type": "string"
+        },
+        "preselected_workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "authenticated",
+        "csrf_token",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "DiscoveredExtensionDto": {
+      "properties": {
+        "catalog_id": {
+          "type": "string"
+        },
+        "freshness": {
+          "$ref": "#/definitions/ExtensionCatalogUsabilityDto"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/ExtensionCatalogTargetDto"
+        }
+      },
+      "required": [
+        "catalog_id",
+        "freshness",
+        "source_id",
+        "target"
+      ],
+      "type": "object"
+    },
+    "EditorFileDto": {
+      "properties": {
+        "bytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "protected": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "bytes",
+        "kind",
+        "path",
+        "protected"
+      ],
+      "type": "object"
+    },
+    "EditorFileViewDto": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "workspace_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "content",
+        "path",
+        "protected"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogLocationDto": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "local_directory"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "https"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExtensionCatalogSourceDto": {
+      "properties": {
+        "catalog_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "configured_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_refreshed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "$ref": "#/definitions/ExtensionCatalogLocationDto"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "configured_at",
+        "id",
+        "location",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogSourceStatusDto": {
+      "properties": {
+        "cached_package_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_version": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/ExtensionCatalogSourceDto"
+        },
+        "trusted": {
+          "type": "boolean"
+        },
+        "usability": {
+          "$ref": "#/definitions/ExtensionCatalogUsabilityDto"
+        }
+      },
+      "required": [
+        "cached_package_count",
+        "configured",
+        "source",
+        "trusted",
+        "usability"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogTargetDto": {
+      "properties": {
+        "artifact_path": {
+          "type": "string"
+        },
+        "draft_api": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "length": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_path",
+        "draft_api",
+        "id",
+        "length",
+        "publisher",
+        "sha256",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogUsabilityDto": {
+      "enum": [
+        "untrusted",
+        "usable",
+        "expired",
+        "invalid",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "InboxItemDto": {
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "next_action": {
+          "type": "string"
+        },
+        "severity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "subject_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "next_action",
+        "status",
+        "subject_id"
+      ],
+      "type": "object"
+    },
+    "PackSummaryDto": {
+      "properties": {
+        "import_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pack_id": {
+          "type": "string"
+        },
+        "revision": true,
+        "submit_state": {
+          "type": "string"
+        },
+        "valid_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "intent",
+        "name",
+        "pack_id",
+        "submit_state",
+        "valid_actions"
+      ],
+      "type": "object"
+    },
+    "ProjectSummaryDto": {
+      "properties": {
+        "inbox": {
+          "items": {
+            "$ref": "#/definitions/InboxItemDto"
+          },
+          "type": "array"
+        },
+        "packs": {
+          "items": {
+            "$ref": "#/definitions/PackSummaryDto"
+          },
+          "type": "array"
+        },
+        "project": {
+          "$ref": "#/definitions/RegistryProjectDto"
+        },
+        "revision": {
+          "$ref": "#/definitions/WorkspaceRevisionDto"
+        },
+        "status": true,
+        "tasks": {
+          "items": {
+            "$ref": "#/definitions/TaskDefinitionDto"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "inbox",
+        "packs",
+        "project",
+        "revision",
+        "status",
+        "tasks"
+      ],
+      "type": "object"
+    },
+    "RegistryProjectDto": {
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "draft_version": {
+          "type": "string"
+        },
+        "health": {
+          "type": "string"
+        },
+        "last_seen_at": {
+          "type": "string"
+        },
+        "last_workspace_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location_revision": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "repository_path": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "storage_path": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "created_at",
+        "draft_version",
+        "health",
+        "last_seen_at",
+        "location_revision",
+        "name",
+        "repository_path",
+        "schema_version",
+        "storage_path",
+        "workspace_id"
+      ],
+      "type": "object"
+    },
+    "SearchResultDto": {
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "pack_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subtitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "title"
+      ],
+      "type": "object"
+    },
+    "ServiceJobDto": {
+      "properties": {
+        "attempt": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "cancellation_requested": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "type": "string"
+        },
+        "progress_completed": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "progress_total": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "recovered_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": true,
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "submitted_at": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "cancellation_requested",
+        "correlation_id",
+        "id",
+        "kind",
+        "phase",
+        "progress_completed",
+        "schema_version",
+        "status",
+        "submitted_at",
+        "workspace_path"
+      ],
+      "type": "object"
+    },
+    "TaskDefinitionDto": {
+      "properties": {
+        "assignee_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AssigneeRefDto"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "goal": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "next_actions": {
+          "items": {
+            "$ref": "#/definitions/TaskNextActionDto"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "risk": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal",
+        "id",
+        "mode",
+        "name",
+        "next_actions",
+        "risk",
+        "schema_version",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "TaskNextActionDto": {
+      "properties": {
+        "completed": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "completed",
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "TaskViewDto": {
+      "properties": {
+        "evidence_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "execution_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "health": {
+          "type": "string"
+        },
+        "produced_packs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "recommended_action": {
+          "type": "string"
+        },
+        "review_status": {
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/definitions/TaskDefinitionDto"
+        }
+      },
+      "required": [
+        "evidence_count",
+        "execution_count",
+        "health",
+        "produced_packs",
+        "recommended_action",
+        "review_status",
+        "task"
+      ],
+      "type": "object"
+    },
+    "WorkspaceRevisionDto": {
+      "properties": {
+        "content_digest": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content_digest",
+        "schema_version",
+        "workspace_id"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "discovered_extension": {
+      "$ref": "#/definitions/DiscoveredExtensionDto"
+    },
+    "editor_file": {
+      "$ref": "#/definitions/EditorFileDto"
+    },
+    "editor_file_view": {
+      "$ref": "#/definitions/EditorFileViewDto"
+    },
+    "extension_source": {
+      "$ref": "#/definitions/ExtensionCatalogSourceStatusDto"
+    },
+    "failure": {
+      "$ref": "#/definitions/ApiFailureDto"
+    },
+    "job": {
+      "$ref": "#/definitions/ServiceJobDto"
+    },
+    "project": {
+      "$ref": "#/definitions/ProjectSummaryDto"
+    },
+    "schema_version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "search_result": {
+      "$ref": "#/definitions/SearchResultDto"
+    },
+    "session": {
+      "$ref": "#/definitions/ConsoleSessionDto"
+    },
+    "task_view": {
+      "$ref": "#/definitions/TaskViewDto"
+    }
+  },
+  "required": [
+    "discovered_extension",
+    "editor_file",
+    "editor_file_view",
+    "extension_source",
+    "failure",
+    "job",
+    "project",
+    "schema_version",
+    "search_result",
+    "session",
+    "task_view"
+  ],
+  "title": "Draft Console HTTP",
+  "type": "object"
+}

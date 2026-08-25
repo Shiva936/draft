@@ -1,15 +1,16 @@
 mod output;
+mod service;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use draft_core::error::{DraftError, DraftErrorKind};
-use draft_core::App;
+use draft_core::app::App;
+use draft_core::support::error::{DraftError, DraftErrorKind};
 
 #[derive(Parser)]
-#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft v0.3.4 - Task-centered verified change review")]
+#[command(name = "draft", version = draft_core::DRAFT_VERSION, about = "Draft - Human control for agent-scale change")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -17,6 +18,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage the long-lived local Draft daemon.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+    },
+    /// Manage registered Draft projects.
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
     #[command(flatten)]
     Workspace(WorkspaceCommand),
     #[command(flatten)]
@@ -53,16 +64,20 @@ enum WorkspaceCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Inspect Draft identity.
-    Identity {
-        #[command(subcommand)]
-        action: IdentityAction,
-    },
     /// Launch the local Draft Console in a browser.
     Console {
         /// Port to bind (loopback only).
         #[arg(long, default_value_t = 4317)]
         port: u16,
+        /// Preselect a registered project by workspace id or explicit path.
+        #[arg(long)]
+        project: Option<String>,
+        /// Print the bootstrap URL without opening a browser.
+        #[arg(long)]
+        no_open: bool,
+        /// Start at the system overview even when launched inside a project.
+        #[arg(long)]
+        no_preselect: bool,
     },
     /// Manage Draft extensions.
     Extension {
@@ -145,7 +160,7 @@ enum PackCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Create a ChangePack.
+    /// Create a Pack.
     Create {
         name: String,
         #[arg(short = 'p')]
@@ -153,7 +168,7 @@ enum PackCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Inspect/compose packs, or switch/delete/export/import a ChangePack.
+    /// Inspect/compose packs, or switch/delete/export/import a Pack.
     Pack {
         /// Pack algebra subcommand (inspect/depends/conflicts/compose).
         #[command(subcommand)]
@@ -180,7 +195,7 @@ enum PackCommand {
         #[arg(long)]
         json: bool,
     },
-    /// List available ChangePacks.
+    /// List available Packs.
     List {
         #[arg(long)]
         json: bool,
@@ -196,7 +211,7 @@ enum PackCommand {
 enum ReviewCommand {
     /// Verify a pack: risk + evidence-based test/fuzz selection.
     Verify {
-        /// Pack to verify (pck_id or name); enables v0.3.3 evidence verification.
+        /// Pack to verify (pck_id or name).
         target: Option<String>,
         #[arg(short = 'p')]
         pack: Option<String>,
@@ -223,7 +238,7 @@ enum ReviewCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Review a changepack or launch the TUI.
+    /// Review a pack or launch the TUI.
     Review {
         #[arg(short = 'p')]
         pack: Option<String>,
@@ -234,7 +249,7 @@ enum ReviewCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Approve a changepack.
+    /// Approve a pack.
     Approve {
         #[arg(short = 'p')]
         pack: Option<String>,
@@ -243,7 +258,7 @@ enum ReviewCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Reject a changepack.
+    /// Reject a pack.
     Reject {
         #[arg(short = 'p')]
         pack: Option<String>,
@@ -256,7 +271,7 @@ enum ReviewCommand {
 
 #[derive(Subcommand)]
 enum IntegrationCommand {
-    /// Compare changepacks.
+    /// Compare packs.
     Compare {
         left: String,
         right: String,
@@ -265,7 +280,7 @@ enum IntegrationCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Compose non-overlapping changepacks.
+    /// Compose non-overlapping packs.
     Compose {
         left: String,
         right: String,
@@ -276,7 +291,7 @@ enum IntegrationCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Split a ChangePack into two output ChangePacks.
+    /// Split a Pack into two output Packs.
     Disperse {
         pack: String,
         #[arg(long, num_args = 2)]
@@ -286,7 +301,7 @@ enum IntegrationCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Submit an approved changepack into stable_head and optionally run hooks.submit.
+    /// Submit an approved pack into stable_head and optionally run hooks.submit.
     Submit {
         #[arg(short = 'p')]
         pack: Option<String>,
@@ -392,12 +407,6 @@ enum DoctorAction {
         #[arg(long)]
         json: bool,
     },
-    Migrate {
-        #[arg(long)]
-        check: bool,
-        #[arg(long)]
-        json: bool,
-    },
 }
 
 #[derive(Subcommand)]
@@ -430,11 +439,19 @@ enum PackAlgebra {
         #[arg(long)]
         json: bool,
     },
+    /// Reopen a verified/reviewed pack as a new mutable revision.
+    Reopen {
+        pack_id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
-enum IdentityAction {
-    /// Show the active actor and signing-key availability.
+enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
     Status {
         #[arg(long)]
         json: bool,
@@ -442,7 +459,51 @@ enum IdentityAction {
 }
 
 #[derive(Subcommand)]
+enum ProjectAction {
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Register {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Init {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Relocate {
+        workspace_id: String,
+        destination: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    Unregister {
+        workspace_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    AdoptCopy {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ExtensionAction {
+    Source {
+        #[command(subcommand)]
+        action: ExtensionSourceAction,
+    },
+    Search {
+        #[arg(default_value = "")]
+        query: String,
+        #[arg(long)]
+        json: bool,
+    },
     List {
         #[arg(long)]
         json: bool,
@@ -453,7 +514,22 @@ enum ExtensionAction {
         json: bool,
     },
     Install {
-        path: String,
+        target: String,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Update {
+        id: Option<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        all: bool,
         #[arg(long)]
         json: bool,
     },
@@ -468,6 +544,41 @@ enum ExtensionAction {
         json: bool,
     },
     Disable {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ExtensionSourceAction {
+    Add {
+        id: String,
+        location: String,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Remove {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Trust {
+        id: String,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        fingerprint: String,
+        #[arg(long)]
+        reset: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Refresh {
         id: String,
         #[arg(long)]
         json: bool,
@@ -546,6 +657,32 @@ enum TaskDefinitionAction {
         #[arg(long)]
         json: bool,
     },
+    /// Update canonical task lifecycle metadata.
+    Update {
+        task: String,
+        #[arg(long, value_parser = ["open", "in-progress", "blocked", "completed", "cancelled"])]
+        status: Option<String>,
+        #[arg(long, value_parser = ["low", "normal", "high", "urgent"])]
+        priority: Option<String>,
+        #[arg(long)]
+        due: Option<String>,
+        #[arg(long)]
+        clear_due: bool,
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long, value_parser = ["actor", "candidate"])]
+        assignee_kind: Option<String>,
+        #[arg(long)]
+        clear_assignee: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add or complete a checklist-style next action.
+    NextAction {
+        task: String,
+        #[command(subcommand)]
+        action: NextActionCommand,
+    },
     /// Create a task through deterministic stdin prompts.
     Wizard {
         #[arg(long)]
@@ -600,6 +737,22 @@ enum TaskDefinitionAction {
         decompose: bool,
         #[arg(long = "diff-stable")]
         diff_stable: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum NextActionCommand {
+    Add {
+        label: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Complete {
+        action_id: String,
+        #[arg(long)]
+        reopen: bool,
         #[arg(long)]
         json: bool,
     },
@@ -743,6 +896,8 @@ fn run(cli: Cli) -> Result<(), DraftError> {
     ensure_project_scope(&cli.command, cwd.as_path())?;
     let app = App::new();
     match cli.command {
+        Command::Service { action } => service::handle(action, cwd.as_path()),
+        Command::Project { action } => run_project(&app, cwd.as_path(), action),
         Command::Workspace(command) => run_workspace(&app, cwd.as_path(), command),
         Command::Tasks(command) => run_tasks(&app, cwd.as_path(), command),
         Command::Packs(command) => run_packs(&app, cwd.as_path(), command),
@@ -768,7 +923,7 @@ fn run_workspace(app: &App, cwd: &Path, command: WorkspaceCommand) -> Result<(),
             action: Some(DoctorAction::Sync { fix, json }),
             ..
         } => {
-            let registry = draft_core::registry::ProjectRegistry::global()?;
+            let registry = draft_core::workspace::registry::ProjectRegistry::global()?;
             let report = if fix {
                 serde_json::to_value(registry.fix_stale()?)
             } else {
@@ -818,10 +973,6 @@ fn run_workspace(app: &App, cwd: &Path, command: WorkspaceCommand) -> Result<(),
             render_json_or_text(report, json, "Index status")
         }
         WorkspaceCommand::Doctor {
-            action: Some(DoctorAction::Migrate { check, json }),
-            ..
-        } => render_json_or_text(app.doctor_migrate(cwd, check)?, json, "Migration status"),
-        WorkspaceCommand::Doctor {
             action: None,
             global,
             json,
@@ -833,27 +984,139 @@ fn run_workspace(app: &App, cwd: &Path, command: WorkspaceCommand) -> Result<(),
             };
             render_doctor(report, json)
         }
-        WorkspaceCommand::Identity { action } => match action {
-            IdentityAction::Status { json } => render_identity(app.identity_status()?, json),
-        },
-        WorkspaceCommand::Console { port } => {
-            // Ensure we are inside a workspace before starting the server.
-            app.status(cwd)?;
-            draft_agui::serve(cwd.to_path_buf(), "127.0.0.1", port)
-                .map_err(|e| DraftError::new(DraftErrorKind::Internal, e))
+        WorkspaceCommand::Console {
+            port,
+            project,
+            no_open,
+            no_preselect,
+        } => {
+            service::ensure_daemon()?;
+            let preselected_workspace_id = if no_preselect {
+                None
+            } else if let Some(project) = project {
+                Some(resolve_console_project(app, &project)?)
+            } else if let Some(root) = find_workspace_root(cwd) {
+                let workspace = app.open(&root)?;
+                let _ = draft_core::workspace::registry::ProjectRegistry::global()?.upsert(
+                    workspace.workspace_id.as_str(),
+                    &workspace.root,
+                    None,
+                )?;
+                Some(workspace.workspace_id.to_string())
+            } else {
+                None
+            };
+            draft_console::serve_console(draft_console::ConsoleLaunchOptions {
+                bind: "127.0.0.1".into(),
+                port,
+                preselected_workspace_id,
+                open_browser: !no_open,
+            })
+            .map_err(|e| DraftError::new(DraftErrorKind::Internal, e))
         }
         WorkspaceCommand::Extension { action } => match action {
+            ExtensionAction::Source { action } => match action {
+                ExtensionSourceAction::Add { id, location, json } => render_json_or_text(
+                    draft_adapters::catalog::source_add(&id, &location)?,
+                    json,
+                    "Extension source configured (not trusted)",
+                ),
+                ExtensionSourceAction::List { json } => render_json_or_text(
+                    draft_adapters::catalog::source_list()?,
+                    json,
+                    "Extension sources",
+                ),
+                ExtensionSourceAction::Remove { id, json } => render_json_or_text(
+                    draft_adapters::catalog::source_remove(&id)?,
+                    json,
+                    "Extension source removed",
+                ),
+                ExtensionSourceAction::Trust {
+                    id,
+                    root,
+                    fingerprint,
+                    reset,
+                    json,
+                } => render_json_or_text(
+                    draft_adapters::catalog::trust_source(&id, &root, &fingerprint, reset)?,
+                    json,
+                    "Extension source trust accepted",
+                ),
+                ExtensionSourceAction::Refresh { id, json } => render_json_or_text(
+                    draft_adapters::catalog::source_refresh(&id)?,
+                    json,
+                    "Extension source refreshed",
+                ),
+            },
+            ExtensionAction::Search { query, json } => render_json_or_text(
+                draft_adapters::catalog::discover(Some(&query))?,
+                json,
+                "Extension discovery",
+            ),
             ExtensionAction::List { json } => {
                 render_json_or_text(draft_adapters::extension::list()?, json, "Extensions")
             }
             ExtensionAction::Show { id, json } => {
                 render_json_or_text(draft_adapters::extension::show(&id)?, json, "Extension")
             }
-            ExtensionAction::Install { path, json } => render_json_or_text(
-                draft_adapters::extension::install(Path::new(&path))?,
+            ExtensionAction::Install {
+                target,
+                source,
+                version,
                 json,
-                "Extension installed",
-            ),
+            } => {
+                let installed = if let Some(source) = source {
+                    draft_adapters::catalog::install_from_source(
+                        &source,
+                        &target,
+                        version.as_deref(),
+                    )?
+                } else {
+                    if version.is_some() {
+                        return Err(DraftError::invalid_config(
+                            "--version requires --source for a catalog install",
+                        ));
+                    }
+                    draft_adapters::extension::install(Path::new(&target))?
+                };
+                render_json_or_text(installed, json, "Extension installed")
+            }
+            ExtensionAction::Update {
+                id,
+                source,
+                version,
+                all,
+                json,
+            } => {
+                if all {
+                    if id.is_some() || source.is_some() || version.is_some() {
+                        return Err(DraftError::invalid_config(
+                            "--all cannot be combined with an id, --source, or --version",
+                        ));
+                    }
+                    render_json_or_text(
+                        draft_adapters::catalog::update_all()?,
+                        json,
+                        "Extensions updated",
+                    )
+                } else {
+                    let id = id.ok_or_else(|| {
+                        DraftError::invalid_config("extension update requires <id> or --all")
+                    })?;
+                    let source = source.ok_or_else(|| {
+                        DraftError::invalid_config("extension update requires --source")
+                    })?;
+                    render_json_or_text(
+                        draft_adapters::catalog::update_from_source(
+                            &source,
+                            &id,
+                            version.as_deref(),
+                        )?,
+                        json,
+                        "Extension updated",
+                    )
+                }
+            }
             ExtensionAction::Uninstall { id, json } => render_json_or_text(
                 draft_adapters::extension::uninstall(&id)?,
                 json,
@@ -944,12 +1207,12 @@ fn run_workspace(app: &App, cwd: &Path, command: WorkspaceCommand) -> Result<(),
             if pack.is_some() || component.is_some() || full {
                 let component = component
                     .as_deref()
-                    .map(draft_core::StatusComponent::parse)
+                    .map(draft_core::app::StatusComponent::parse)
                     .transpose()?;
                 render_status_report(
                     app.status_with_options(
                         cwd,
-                        draft_core::StatusOptions {
+                        draft_core::app::StatusOptions {
                             pack,
                             component,
                             full,
@@ -974,6 +1237,92 @@ fn run_workspace(app: &App, cwd: &Path, command: WorkspaceCommand) -> Result<(),
     }
 }
 
+fn run_project(app: &App, cwd: &Path, action: ProjectAction) -> Result<(), DraftError> {
+    let registry = draft_core::workspace::registry::ProjectRegistry::global()?;
+    match action {
+        ProjectAction::List { json } => render_json_or_text(registry.list()?, json, "Projects"),
+        ProjectAction::Register { path, json } => {
+            let workspace = app.open(&path)?;
+            render_json_or_text(
+                registry.upsert(workspace.workspace_id.as_str(), &workspace.root, None)?,
+                json,
+                "Project registered",
+            )
+        }
+        ProjectAction::Init { path, json } => {
+            let path = path.unwrap_or_else(|| cwd.to_path_buf());
+            if !path.exists() {
+                std::fs::create_dir_all(&path).map_err(DraftError::from)?;
+            }
+            let initialized = app.init(&path)?;
+            registry.upsert(&initialized.workspace_id, &path, None)?;
+            render_json_or_text(initialized, json, "Project initialized")
+        }
+        ProjectAction::Relocate {
+            workspace_id,
+            destination,
+            json,
+        } => render_json_or_text(
+            registry.relocate(&workspace_id, &destination)?,
+            json,
+            "Project relocated",
+        ),
+        ProjectAction::Unregister { workspace_id, json } => render_json_or_text(
+            serde_json::json!({
+                "workspace_id": workspace_id,
+                "unregistered": registry.remove(&workspace_id)?,
+            }),
+            json,
+            "Project unregistered",
+        ),
+        ProjectAction::AdoptCopy { path, json } => render_json_or_text(
+            draft_core::app::adoption::adopt_copy(&path)?,
+            json,
+            "Project copy adopted",
+        ),
+    }
+}
+
+fn resolve_console_project(app: &App, id_or_path: &str) -> Result<String, DraftError> {
+    let path = Path::new(id_or_path);
+    if path.exists() {
+        let workspace = app.open(path)?;
+        draft_core::workspace::registry::ProjectRegistry::global()?.upsert(
+            workspace.workspace_id.as_str(),
+            &workspace.root,
+            None,
+        )?;
+        Ok(workspace.workspace_id.to_string())
+    } else {
+        Ok(draft_core::workspace::registry::ProjectRegistry::global()?
+            .resolve(id_or_path)?
+            .workspace_id)
+    }
+}
+
+fn parse_task_status(value: &str) -> Result<draft_core::task::TaskLifecycleStatus, DraftError> {
+    use draft_core::task::TaskLifecycleStatus;
+    match value {
+        "open" => Ok(TaskLifecycleStatus::Open),
+        "in-progress" => Ok(TaskLifecycleStatus::InProgress),
+        "blocked" => Ok(TaskLifecycleStatus::Blocked),
+        "completed" => Ok(TaskLifecycleStatus::Completed),
+        "cancelled" => Ok(TaskLifecycleStatus::Cancelled),
+        _ => Err(DraftError::invalid_config("invalid task status")),
+    }
+}
+
+fn parse_task_priority(value: &str) -> Result<draft_core::task::TaskPriority, DraftError> {
+    use draft_core::task::TaskPriority;
+    match value {
+        "low" => Ok(TaskPriority::Low),
+        "normal" => Ok(TaskPriority::Normal),
+        "high" => Ok(TaskPriority::High),
+        "urgent" => Ok(TaskPriority::Urgent),
+        _ => Err(DraftError::invalid_config("invalid task priority")),
+    }
+}
+
 fn run_tasks(app: &App, cwd: &Path, command: TaskCommand) -> Result<(), DraftError> {
     match command {
         TaskCommand::Task { action } => match action {
@@ -989,7 +1338,7 @@ fn run_tasks(app: &App, cwd: &Path, command: TaskCommand) -> Result<(), DraftErr
                 mode,
                 json,
             })) => render_json_or_text(
-                app.task_define(
+                app.task_create(
                     cwd,
                     &name,
                     &goal,
@@ -1004,6 +1353,79 @@ fn run_tasks(app: &App, cwd: &Path, command: TaskCommand) -> Result<(), DraftErr
                 json,
                 "Task created",
             ),
+            Some(TaskAction::Definition(TaskDefinitionAction::Update {
+                task,
+                status,
+                priority,
+                due,
+                clear_due,
+                assignee,
+                assignee_kind,
+                clear_assignee,
+                json,
+            })) => {
+                if clear_due && due.is_some() {
+                    return Err(DraftError::invalid_config(
+                        "--due and --clear-due cannot be used together",
+                    ));
+                }
+                if clear_assignee && assignee.is_some() {
+                    return Err(DraftError::invalid_config(
+                        "--assignee and --clear-assignee cannot be used together",
+                    ));
+                }
+                let due_at = if clear_due {
+                    Some(None)
+                } else if let Some(due) = due {
+                    Some(Some(
+                        chrono::DateTime::parse_from_rfc3339(&due)
+                            .map_err(|_| DraftError::invalid_config("--due must be RFC 3339"))?
+                            .with_timezone(&chrono::Utc),
+                    ))
+                } else {
+                    None
+                };
+                let assignee_ref = if clear_assignee {
+                    Some(None)
+                } else {
+                    assignee.map(|id| {
+                        Some(draft_core::task::AssigneeRef {
+                            kind: assignee_kind.unwrap_or_else(|| "actor".into()),
+                            id,
+                        })
+                    })
+                };
+                render_json_or_text(
+                    app.task_update(
+                        cwd,
+                        &task,
+                        status.as_deref().map(parse_task_status).transpose()?,
+                        priority.as_deref().map(parse_task_priority).transpose()?,
+                        due_at,
+                        assignee_ref,
+                    )?,
+                    json,
+                    "Task updated",
+                )
+            }
+            Some(TaskAction::Definition(TaskDefinitionAction::NextAction { task, action })) => {
+                match action {
+                    NextActionCommand::Add { label, json } => render_json_or_text(
+                        app.task_add_next_action(cwd, &task, &label)?,
+                        json,
+                        "Next action added",
+                    ),
+                    NextActionCommand::Complete {
+                        action_id,
+                        reopen,
+                        json,
+                    } => render_json_or_text(
+                        app.task_set_next_action(cwd, &task, &action_id, !reopen)?,
+                        json,
+                        "Next action updated",
+                    ),
+                }
+            }
             Some(TaskAction::Execution(TaskExecutionAction::Spawn {
                 name,
                 pack,
@@ -1070,7 +1492,7 @@ fn run_tasks(app: &App, cwd: &Path, command: TaskCommand) -> Result<(), DraftErr
                 render_json_or_text(app.task_import(cwd, &path, name)?, json, "Task imported")
             }
             Some(TaskAction::Definition(TaskDefinitionAction::List { json })) => {
-                render_json_or_text(app.task_definitions(cwd)?, json, "Tasks")
+                render_json_or_text(app.task_list(cwd)?, json, "Tasks")
             }
             Some(TaskAction::Definition(TaskDefinitionAction::Show {
                 task,
@@ -1086,7 +1508,7 @@ fn run_tasks(app: &App, cwd: &Path, command: TaskCommand) -> Result<(), DraftErr
                 diff_stable,
                 json,
             })) => {
-                let options = draft_core::TaskViewOptions {
+                let options = draft_core::app::TaskViewOptions {
                     full,
                     executions,
                     packs,
@@ -1153,7 +1575,7 @@ fn run_packs(app: &App, cwd: &Path, command: PackCommand) -> Result<(), DraftErr
         } => render_json_or_text(
             app.pack_create_from_base(cwd, name, base_pack)?,
             json,
-            "ChangePack created",
+            "Pack created",
         ),
         PackCommand::Pack {
             algebra: Some(action),
@@ -1190,6 +1612,18 @@ fn run_packs(app: &App, cwd: &Path, command: PackCommand) -> Result<(), DraftErr
                 app.pack_compose(cwd, &pack_a, &pack_b, &name)?,
                 json,
                 "Pack composed (re-verify required)",
+            ),
+            PackAlgebra::Reopen { pack_id, json } => render_json_or_text(
+                app.pack_reopen(
+                    cwd,
+                    &pack_id,
+                    &format!(
+                        "op_cli_reopen_{:x}",
+                        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+                    ),
+                )?,
+                json,
+                "Pack reopened as a new revision",
             ),
         },
         PackCommand::Pack {
@@ -1234,26 +1668,18 @@ fn run_packs(app: &App, cwd: &Path, command: PackCommand) -> Result<(), DraftErr
                     },
                 )
             } else if let Some(reference) = select {
-                render_json_or_text(
-                    app.pack_select_ref(cwd, &reference)?,
-                    json,
-                    "ChangePack selected",
-                )
+                render_json_or_text(app.pack_select_ref(cwd, &reference)?, json, "Pack selected")
             } else if let Some(reference) = delete {
                 let report = app.pack_show(cwd, &reference)?;
                 if !confirm_pack_delete(&report.pack)? {
-                    return Err(DraftError::invalid_config("ChangePack deletion aborted"));
+                    return Err(DraftError::invalid_config("Pack deletion aborted"));
                 }
-                render_json_or_text(
-                    app.pack_delete_ref(cwd, &reference)?,
-                    json,
-                    "ChangePack deleted",
-                )
+                render_json_or_text(app.pack_delete_ref(cwd, &reference)?, json, "Pack deleted")
             } else {
-                render_json_or_text(app.pack_show_selected(cwd)?, json, "ChangePack")
+                render_json_or_text(app.pack_show_selected(cwd)?, json, "Pack")
             }
         }
-        PackCommand::List { json } => render_json_or_text(app.pack_list(cwd)?, json, "ChangePacks"),
+        PackCommand::List { json } => render_json_or_text(app.pack_list(cwd)?, json, "Packs"),
         PackCommand::Candidate { action } => match action {
             CandidateAction::List { json } => {
                 render_json_or_text(app.candidate_list(cwd)?, json, "Candidates")
@@ -1313,31 +1739,12 @@ fn run_review(app: &App, cwd: &Path, command: ReviewCommand) -> Result<(), Draft
             fuzz,
             json,
         } => {
-            // v0.3.3 evidence verification triggers on a positional target or an
-            // evidence flag; legacy `verify -p <pack>` stays on the legacy path.
-            if target.is_some() || explain || full || fuzz {
-                let reference = target.or(pack);
-                let refstr = reference.as_deref().unwrap_or("selected");
-                // Legacy changepacks also need the legacy verification receipt
-                // so the legacy submit gate passes (same as `verify -p`).
-                // Imported packs are canonical-only and skip it.
-                if app.is_legacy_pack_ref(cwd, refstr) {
-                    app.verify_selected(cwd, Some(refstr))?;
-                }
-                let report = app.verify_pack_v2(cwd, refstr, full, fuzz)?;
-                render_verify(report, explain, json)
-            } else {
-                let reference = app.resolve_pack_arg(cwd, pack.as_deref())?;
-                render_json_or_text(
-                    {
-                        let report = app.verify_selected(cwd, Some(&reference))?;
-                        app.verify_pack_v2(cwd, &reference, false, false)?;
-                        report
-                    },
-                    json,
-                    "Verification complete",
-                )
-            }
+            let reference = target.or(pack);
+            let reference = match reference.as_deref() {
+                Some(value) => value.to_string(),
+                None => app.resolve_pack_arg(cwd, None)?,
+            };
+            render_verify(app.verify_pack(cwd, &reference, full, fuzz)?, explain, json)
         }
         ReviewCommand::Risk {
             pack,
@@ -1373,7 +1780,7 @@ fn run_review(app: &App, cwd: &Path, command: ReviewCommand) -> Result<(), Draft
                 reason,
             )?,
             json,
-            "ChangePack approved",
+            "Pack approved",
         ),
         ReviewCommand::Reject { pack, reason, json } => render_json_or_text(
             app.decide_pack(
@@ -1383,7 +1790,7 @@ fn run_review(app: &App, cwd: &Path, command: ReviewCommand) -> Result<(), Draft
                 reason,
             )?,
             json,
-            "ChangePack rejected",
+            "Pack rejected",
         ),
     }
 }
@@ -1444,11 +1851,11 @@ fn run_integration(app: &App, cwd: &Path, command: IntegrationCommand) -> Result
             if dry_run {
                 render_dry_run(app.submit_dry_run(cwd, pack.as_deref())?, json)
             } else {
-                let vars = draft_core::parse_hook_vars(vars)?;
+                let vars = draft_core::app::parse_hook_vars(vars)?;
                 render_json_or_text(
                     app.submit_selected(cwd, pack.as_deref(), vars)?,
                     json,
-                    "ChangePack submitted",
+                    "Pack submitted",
                 )
             }
         }
@@ -1533,6 +1940,7 @@ fn ensure_project_scope(command: &Command, cwd: &Path) -> Result<(), DraftError>
 
 fn requires_project_scope(command: &Command) -> bool {
     match command {
+        Command::Service { .. } | Command::Project { .. } => false,
         Command::Workspace(command) => requires_workspace_scope(command),
         Command::Maintenance(MaintenanceCommand::Storage {
             action: StorageAction::Doctor { .. },
@@ -1550,7 +1958,7 @@ fn requires_workspace_scope(command: &WorkspaceCommand) -> bool {
         }
         | WorkspaceCommand::Doctor { global: true, .. } => false,
         WorkspaceCommand::Doctor { .. } => true,
-        WorkspaceCommand::Identity { .. } => false,
+        WorkspaceCommand::Console { .. } => false,
         WorkspaceCommand::Extension { .. } => false,
         WorkspaceCommand::Config {
             action:
@@ -1578,7 +1986,7 @@ fn find_workspace_root(cwd: &Path) -> Option<PathBuf> {
     }
 }
 
-fn render_init(report: draft_core::InitReport, json: bool) -> Result<(), DraftError> {
+fn render_init(report: draft_core::app::InitReport, json: bool) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
@@ -1607,7 +2015,10 @@ fn render_init(report: draft_core::InitReport, json: bool) -> Result<(), DraftEr
     Ok(())
 }
 
-fn render_init_global(report: draft_core::InitGlobalReport, json: bool) -> Result<(), DraftError> {
+fn render_init_global(
+    report: draft_core::app::InitGlobalReport,
+    json: bool,
+) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
@@ -1624,7 +2035,7 @@ fn render_init_global(report: draft_core::InitGlobalReport, json: bool) -> Resul
     Ok(())
 }
 
-fn render_doctor(report: draft_core::DoctorReport, json: bool) -> Result<(), DraftError> {
+fn render_doctor(report: draft_core::app::DoctorReport, json: bool) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
     } else {
@@ -1643,19 +2054,24 @@ fn render_doctor(report: draft_core::DoctorReport, json: bool) -> Result<(), Dra
     }
 }
 
-fn print_doctor_scope(scope: &draft_core::DoctorScope) {
+fn print_doctor_scope(scope: &draft_core::app::DoctorScope) {
     output::header(&format!("{} store", scope.label));
     output::field("Root", &scope.root);
     output::field("Exists", &scope.exists.to_string());
     output::field("Hidden", &scope.hidden.to_string());
     for c in &scope.checks {
         let mark = if c.ok { "ok " } else { "FAIL" };
-        println!("  [{mark}] {:<18} {}", c.name, c.detail);
+        let category = c
+            .category
+            .as_deref()
+            .map(|value| format!(" [{value}]"))
+            .unwrap_or_default();
+        println!("  [{mark}] {:<18}{category} {}", c.name, c.detail);
     }
 }
 
 fn render_verify(
-    report: draft_core::VerifyReport,
+    report: draft_core::app::VerifyReport,
     explain: bool,
     json: bool,
 ) -> Result<(), DraftError> {
@@ -1701,7 +2117,7 @@ fn render_verify(
     Ok(())
 }
 
-fn render_dry_run(report: draft_core::DryRunReport, json: bool) -> Result<(), DraftError> {
+fn render_dry_run(report: draft_core::app::DryRunReport, json: bool) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
@@ -1733,7 +2149,7 @@ fn render_receipt_show(value: serde_json::Value, json: bool) -> Result<(), Draft
     if let Some(event_type) = json_string(&value, &["event_type", "kind"]) {
         output::bullet(&format!("Event: {event_type}"));
     }
-    if let Some(subject) = json_string(&value, &["subject_id", "changepack_id", "pack_id"]) {
+    if let Some(subject) = json_string(&value, &["subject_id", "pack_id", "pack_id"]) {
         output::bullet(&format!("Subject: {subject}"));
     }
     if let Some(actor) = json_string(&value, &["actor_id", "actor"]) {
@@ -1764,7 +2180,7 @@ fn json_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a st
 }
 
 fn render_receipt_verification(
-    v: draft_core::receipt::ReceiptVerification,
+    v: draft_core::trust::receipt::ReceiptVerification,
     json: bool,
 ) -> Result<(), DraftError> {
     if json {
@@ -1787,7 +2203,7 @@ fn render_receipt_verification(
 }
 
 fn render_ledger_verification(
-    v: draft_core::ledger::LedgerVerification,
+    v: draft_core::trust::ledger::LedgerVerification,
     json: bool,
 ) -> Result<(), DraftError> {
     if json {
@@ -1822,7 +2238,7 @@ fn render_ledger_verification(
     }
 }
 
-fn render_close(report: draft_core::CloseReport) -> Result<(), DraftError> {
+fn render_close(report: draft_core::app::CloseReport) -> Result<(), DraftError> {
     output::success("Draft closed");
     output::field(".draft removed", &report.draft_dir);
     output::field("Forced", &report.forced.to_string());
@@ -1830,7 +2246,7 @@ fn render_close(report: draft_core::CloseReport) -> Result<(), DraftError> {
     Ok(())
 }
 
-fn render_gc(report: draft_core::gc::GcReport) -> Result<(), DraftError> {
+fn render_gc(report: draft_core::app::maintenance::GcReport) -> Result<(), DraftError> {
     output::success("Draft GC complete");
     output::field("Removed entries", &report.removed_entries.to_string());
     output::field("Stable head valid", &report.stable_head_valid.to_string());
@@ -1849,28 +2265,7 @@ fn ok_word(ok: bool) -> &'static str {
     }
 }
 
-fn render_identity(
-    status: draft_core::identity::IdentityStatus,
-    json: bool,
-) -> Result<(), DraftError> {
-    if json {
-        output::print_json(&status);
-        return Ok(());
-    }
-    match &status.actor {
-        Some(a) => {
-            output::field("Actor", &a.actor_id);
-            output::field("Name", &a.display_name);
-            output::field("Public key", &a.public_key_id);
-        }
-        None => output::warn("No actor; run `draft init --global`."),
-    }
-    output::field("Signing key", &status.signing_key_available.to_string());
-    output::field("Candidates", &status.candidate_count.to_string());
-    Ok(())
-}
-
-fn render_config(report: draft_core::ConfigReport, json: bool) -> Result<(), DraftError> {
+fn render_config(report: draft_core::app::ConfigReport, json: bool) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
@@ -1881,7 +2276,7 @@ fn render_config(report: draft_core::ConfigReport, json: bool) -> Result<(), Dra
     Ok(())
 }
 
-fn render_ignore(report: draft_core::IgnoreReport, json: bool) -> Result<(), DraftError> {
+fn render_ignore(report: draft_core::app::IgnoreReport, json: bool) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
@@ -1892,7 +2287,10 @@ fn render_ignore(report: draft_core::IgnoreReport, json: bool) -> Result<(), Dra
     Ok(())
 }
 
-fn render_status(report: draft_core::WorkspaceStatus, json: bool) -> Result<(), DraftError> {
+fn render_status(
+    report: draft_core::workspace::state::WorkspaceStatus,
+    json: bool,
+) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
@@ -1906,7 +2304,10 @@ fn render_status(report: draft_core::WorkspaceStatus, json: bool) -> Result<(), 
     Ok(())
 }
 
-fn render_status_report(report: draft_core::StatusReport, json: bool) -> Result<(), DraftError> {
+fn render_status_report(
+    report: draft_core::app::StatusReport,
+    json: bool,
+) -> Result<(), DraftError> {
     if json {
         output::print_json(&report);
         return Ok(());
@@ -1928,7 +2329,7 @@ fn render_status_report(report: draft_core::StatusReport, json: bool) -> Result<
 }
 
 fn render_events(
-    events: Vec<draft_core::EventEnvelope>,
+    events: Vec<draft_core::trust::event::EventRecord>,
     json: bool,
     raw: bool,
 ) -> Result<(), DraftError> {
@@ -1945,7 +2346,7 @@ fn render_events(
     for e in events {
         println!(
             "{} {} {}",
-            e.time.to_rfc3339(),
+            e.time,
             e.event_type,
             e.subject_id.unwrap_or_default()
         );
@@ -1995,7 +2396,7 @@ fn run_task_wizard(
     let risk = (!risk.trim().is_empty()).then(|| risk.trim().to_string());
     let candidate_preset =
         (!candidate_preset.trim().is_empty()).then(|| candidate_preset.trim().to_string());
-    app.task_define(
+    app.task_create(
         cwd,
         name.trim(),
         goal.trim(),
@@ -2043,9 +2444,11 @@ fn render_json_or_text<T: serde::Serialize>(
     Ok(())
 }
 
-fn confirm_pack_delete(pack: &draft_core::Changepack) -> Result<bool, DraftError> {
+fn confirm_pack_delete(
+    pack: &draft_core::pack::staging::PackWorkspace,
+) -> Result<bool, DraftError> {
     let name = pack.name.as_deref().unwrap_or("<unnamed>");
-    print!("Delete ChangePack {name} ({})? [y/N]: ", pack.id);
+    print!("Delete Pack {name} ({})? [y/N]: ", pack.id);
     io::stdout().flush().map_err(DraftError::from)?;
     let mut input = String::new();
     io::stdin()

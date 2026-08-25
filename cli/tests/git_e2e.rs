@@ -16,11 +16,11 @@ fn plain_directory_end_to_end_with_rollback() {
 
     draft(dir).args(["init"]).assert().success();
     draft(dir)
-        .args(["config", "set", "identity.username", "E2E"])
+        .args(["config", "set", "user.name", "E2E"])
         .assert()
         .success();
     draft(dir)
-        .args(["config", "set", "identity.email", "e2e@example.com"])
+        .args(["config", "set", "user.email", "e2e@example.com"])
         .assert()
         .success();
 
@@ -50,11 +50,11 @@ fn plain_directory_end_to_end_with_rollback() {
 
     draft(dir).args(["risk", "-p", pack_id]).assert().success();
     draft(dir)
-        .args(["review", "-p", pack_id, "--comment", "looks fine"])
+        .args(["verify", "-p", pack_id])
         .assert()
         .success();
     draft(dir)
-        .args(["verify", "-p", pack_id])
+        .args(["review", "-p", pack_id, "--comment", "looks fine"])
         .assert()
         .success();
     draft(dir)

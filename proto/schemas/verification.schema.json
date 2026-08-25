@@ -1,13 +1,62 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Draft Verification",
+  "$id": "https://draft.dev/schemas/verification.schema.json",
+  "title": "Draft Verification Evidence",
   "type": "object",
-  "required": ["verification_key", "status", "workspace_hash"],
+  "required": [
+    "schema_version", "pack_id", "revision_id", "revision_digest",
+    "dependency_digests", "selected_tests", "selected_fuzz_targets",
+    "selection_reason", "coverage_basis", "commands_run", "exit_codes",
+    "duration_ms", "stdout_digest", "stderr_digest", "result_hash",
+    "verification_key"
+  ],
   "properties": {
-    "verification_key": { "type": "string" },
-    "status": { "enum": ["verified", "failed"] },
-    "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "checks": { "type": "array" }
+    "schema_version": { "const": 1 },
+    "pack_id": { "type": "string", "pattern": "^pck_[A-Za-z0-9_-]+$" },
+    "revision_id": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]+$" },
+    "revision_digest": { "$ref": "#/$defs/digest" },
+    "dependency_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" } },
+    "selected_tests": { "type": "array", "items": { "$ref": "#/$defs/selection" } },
+    "selected_fuzz_targets": { "type": "array", "items": { "$ref": "#/$defs/selection" } },
+    "selection_reason": { "type": "string" },
+    "coverage_basis": { "type": "string" },
+    "commands_run": { "type": "array", "items": { "type": "string" } },
+    "exit_codes": { "type": "array", "items": { "type": "integer" } },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "stdout_digest": { "$ref": "#/$defs/digest" },
+    "stderr_digest": { "$ref": "#/$defs/digest" },
+    "result_hash": { "$ref": "#/$defs/digest" },
+    "verification_key": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["workspace_hash", "config_hash", "toolchain_hash", "verification_command_hash", "environment_hash", "key"],
+          "properties": {
+            "workspace_hash": { "$ref": "#/$defs/digest" },
+            "config_hash": { "$ref": "#/$defs/digest" },
+            "toolchain_hash": { "$ref": "#/$defs/digest" },
+            "verification_command_hash": { "$ref": "#/$defs/digest" },
+            "environment_hash": { "$ref": "#/$defs/digest" },
+            "key": { "$ref": "#/$defs/digest" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
   },
-  "additionalProperties": true
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "selection": {
+      "type": "object",
+      "required": ["name", "command", "reason"],
+      "properties": {
+        "name": { "type": "string" },
+        "command": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
 }

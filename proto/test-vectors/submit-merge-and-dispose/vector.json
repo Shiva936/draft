@@ -5,7 +5,7 @@
   "submit_mode": "merge_and_dispose",
   "payload_schema": "stable-head.schema.json",
   "payload": {
-    "schema_version": "0.3.4",
+    "schema_version": 1,
     "id": "rcp_9f8e7d6c5b4a",
     "receipt_id": "rcp_9f8e7d6c5b4a",
     "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -19,7 +19,7 @@
     "stable_head_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "invalid_payload": {
-    "schema_version": "0.3.4",
+    "schema_version": 1,
     "id": "rcp_9f8e7d6c5b4a",
     "receipt_id": "rcp_9f8e7d6c5b4a",
     "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

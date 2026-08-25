@@ -1,23 +1,229 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/config.schema.json",
   "title": "Draft Config",
   "type": "object",
+  "required": ["schema_version"],
   "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "user": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$" },
+        "email": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F]+$" }
+      },
+      "additionalProperties": false
+    },
     "submit": {
       "type": "object",
       "properties": {
         "pack_disposal": { "enum": ["merge_and_dispose", "dispose_only"] },
         "message_template": { "type": "string" }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "hooks": {
       "type": "object",
       "properties": {
-        "submit": { "type": "object" }
+        "submit": { "$ref": "#/$defs/submit_hook" },
+        "verify": { "$ref": "#/$defs/hook" }
       },
-      "additionalProperties": true
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "properties": {
+        "default_profile": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "properties": {
+        "require_verification": { "type": "boolean" },
+        "require_approval": { "type": "boolean" },
+        "require_human_approval_for_high_risk": { "type": "boolean" },
+        "block_if_tests_fail": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "protected": {
+      "type": "object",
+      "properties": {
+        "protected_files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/protected_rule" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "owners": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "candidates": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/candidate" }
+    },
+    "tasks": {
+      "type": "object",
+      "properties": {
+        "presets": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/task_preset" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "risk": {
+      "type": "object",
+      "properties": {
+        "block_on_critical": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "import": {
+      "type": "object",
+      "properties": {
+        "require_local_verify": { "type": "boolean" },
+        "max_artifact_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "console": {
+      "type": "object",
+      "properties": {
+        "bind": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      },
+      "additionalProperties": false
     }
   },
-  "additionalProperties": true
+  "additionalProperties": false,
+  "$defs": {
+    "hook_entry": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "enabled": { "type": "boolean" },
+        "phase": { "type": "string" },
+        "shell": { "type": "string" },
+        "cwd": { "type": "string" },
+        "timeout_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "continue_on_error": { "type": "boolean" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "hook": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "command"],
+          "properties": {
+            "kind": { "const": "raw" },
+            "command": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "entry"],
+          "properties": {
+            "kind": { "const": "entry" },
+            "entry": { "$ref": "#/$defs/hook_entry" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "submit_hook": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "command"],
+          "properties": {
+            "kind": { "const": "raw" },
+            "command": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "entry"],
+          "properties": {
+            "kind": { "const": "entry" },
+            "entry": { "$ref": "#/$defs/hook_entry" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "phases" },
+            "before": { "type": "array", "items": { "$ref": "#/$defs/hook" } },
+            "after": { "type": "array", "items": { "$ref": "#/$defs/hook" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "protected_rule": {
+      "type": "object",
+      "required": ["pattern"],
+      "properties": {
+        "pattern": { "type": "string", "minLength": 1 },
+        "reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "properties": {
+        "kind": { "enum": ["agent", "command", "manual", "human"] },
+        "command": { "type": "string" },
+        "can_plan": { "type": "boolean" },
+        "can_edit": { "type": "boolean" },
+        "can_run_tests": { "type": "boolean" },
+        "can_read_index": { "type": "boolean" },
+        "can_accept_task_contract": { "type": "boolean" },
+        "supports_resume": { "type": "boolean" },
+        "supports_streaming_logs": { "type": "boolean" },
+        "supports_patch_output": { "type": "boolean" },
+        "supports_pack_output": { "type": "boolean" },
+        "requires_shell": { "type": "boolean" },
+        "requires_network": { "type": "boolean" },
+        "max_runtime_seconds": { "type": "integer", "minimum": 0 },
+        "max_files_changed": { "type": "integer", "minimum": 0 },
+        "max_changed_lines": { "type": "integer", "minimum": 0 },
+        "max_processes": { "type": "integer", "minimum": 0 },
+        "max_output_bytes": { "type": "integer", "minimum": 0 },
+        "network": { "enum": ["denied", "local", "full"] },
+        "isolation": { "enum": ["isolated", "in_place"] },
+        "allowed_paths": { "type": "array", "items": { "type": "string" } },
+        "forbidden_paths": { "type": "array", "items": { "type": "string" } },
+        "env_allowlist": { "type": "array", "items": { "type": "string" } },
+        "command_allowlist": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "task_preset": {
+      "type": "object",
+      "properties": {
+        "candidates": { "type": "array", "items": { "type": "string" } },
+        "plan_first": { "type": "boolean" },
+        "require_full_evidence": { "type": "boolean" },
+        "prefer_smallest_valid_pack": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
 }

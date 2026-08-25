@@ -8,7 +8,7 @@ members = [
     "services/sync",
     "services/watcher",
     "services/draftd",
-    "services/agui",
+    "console",
     "services/adapters",
     "cli",
     "tui"

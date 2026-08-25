@@ -5,20 +5,19 @@
 //! >15% slowdown warrants investigation; >25% blocks release unless accepted.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use draft_core::composition;
-use draft_core::event::{EventKind, EventLog, NewEvent};
-use draft_core::gc;
-use draft_core::hashing;
-use draft_core::index::AffectedPathIndex;
-use draft_core::layout::ProjectPaths;
-use draft_core::lsif::LsifIndex;
-use draft_core::pack::{
-    ApprovalState, ImportState, PackIntent, PackLockfile, PackManifest, SubmitState,
-};
-use draft_core::pathguard;
-use draft_core::risk;
-use draft_core::signing::{self, Keypair};
-use draft_core::verification::{self, SelectionInput};
+use draft_core::app::maintenance;
+use draft_core::pack::composition;
+use draft_core::pack::{PackIntent, PackLockfile, PackManifest};
+use draft_core::review::index::AffectedPathIndex;
+use draft_core::review::lsif::LsifIndex;
+use draft_core::review::risk;
+use draft_core::review::verification::{self, SelectionInput};
+use draft_core::support::hashing;
+use draft_core::support::pathguard;
+use draft_core::trust::event::{EventKind, EventLog, NewEvent};
+use draft_core::trust::signing::{self, Keypair};
+use draft_core::workspace::layout::DraftLayout;
+use draft_core::workspace::source_view;
 use std::collections::BTreeSet;
 
 /// Materialize a temp repo of `n` files for scan/hash benchmarks.
@@ -42,7 +41,7 @@ fn bench_workspace_hash(c: &mut Criterion) {
     for &n in &[100usize, 1000, 5000, 10000] {
         let repo = make_repo(n);
         g.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| hashing::workspace_hash(black_box(repo.path())).unwrap())
+            b.iter(|| source_view::workspace_hash(black_box(repo.path())).unwrap())
         });
     }
     g.finish();
@@ -53,10 +52,11 @@ fn bench_workspace_hash(c: &mut Criterion) {
         let repo = make_repo(n);
         let cache = repo.path().join(".draft/cache/hashes/workspace-hash.json");
         std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
-        hashing::workspace_hash_cached(repo.path(), &cache).unwrap();
+        source_view::workspace_hash_cached(repo.path(), &cache).unwrap();
         g.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
             b.iter(|| {
-                hashing::workspace_hash_cached(black_box(repo.path()), black_box(&cache)).unwrap()
+                source_view::workspace_hash_cached(black_box(repo.path()), black_box(&cache))
+                    .unwrap()
             })
         });
     }
@@ -76,7 +76,7 @@ fn bench_hashing(c: &mut Criterion) {
 
 fn bench_events(c: &mut Criterion) {
     let dir = tempfile::tempdir().unwrap();
-    let log = EventLog::new(ProjectPaths::for_root(dir.path()));
+    let log = EventLog::workspace(DraftLayout::for_root(dir.path()), "ws");
     c.bench_function("event_append", |b| {
         b.iter(|| {
             log.append(NewEvent {
@@ -84,7 +84,6 @@ fn bench_events(c: &mut Criterion) {
                 subject_id: Some("pck_x".into()),
                 actor_id: "act".into(),
                 candidate_id: None,
-                workspace_id: "ws".into(),
                 receipt_id: Some("rcp_bench".into()),
                 metadata: serde_json::json!({}),
             })
@@ -133,6 +132,10 @@ fn bench_risk(c: &mut Criterion) {
 
 fn bench_verify_plan(c: &mut Criterion) {
     let input = SelectionInput {
+        pack_id: "pck_bench".into(),
+        revision_id: "rev_bench".into(),
+        revision_digest: "sha256:bench".into(),
+        dependency_digests: Vec::new(),
         changed_files: (0..20).map(|i| format!("src/f{i}.rs")).collect(),
         changed_symbols: (0..20).map(|i| format!("sym{i}")).collect(),
         test_files: (0..10).map(|i| format!("tests/t{i}.rs")).collect(),
@@ -179,25 +182,19 @@ fn make_packs(n: usize) -> (Vec<PackManifest>, Vec<PackLockfile>) {
     for i in 0..n {
         let id = format!("pck_{i:05}");
         manifests.push(PackManifest {
-            schema_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            schema_version: draft_core::contracts::current_version(
+                draft_core::contracts::ContractId::PackManifest,
+            ),
             pack_id: id.clone(),
+            manifest_digest: String::new(),
             name: id.clone(),
             description: String::new(),
             intent: PackIntent::Feature,
-            origin: "local".to_string(),
-            actor: "bench".to_string(),
-            candidate: None,
+            provenance: serde_json::json!({"origin": "benchmark"}),
+            author_id: "act_bench".to_string(),
+            candidate_id: None,
+            declared_dependencies: Vec::new(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
-            base_workspace_hash: String::new(),
-            target_workspace_hash: String::new(),
-            changes_hash: String::new(),
-            risk_hash: String::new(),
-            verify_hash: String::new(),
-            lsif_hash: String::new(),
-            receipt_hashes: Vec::new(),
-            import_state: ImportState::None,
-            approval_state: ApprovalState::Pending,
-            submit_state: SubmitState::Unsubmitted,
         });
         let deps = if i % 4 == 3 {
             vec![format!("pck_{:05}", i - 1)]
@@ -205,7 +202,9 @@ fn make_packs(n: usize) -> (Vec<PackManifest>, Vec<PackLockfile>) {
             Vec::new()
         };
         locks.push(PackLockfile {
-            schema_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            schema_version: draft_core::contracts::current_version(
+                draft_core::contracts::ContractId::PackLock,
+            ),
             pack_id: id.clone(),
             workspace_hash: hashing::sha256_hex(id.as_bytes()),
             file_hashes: [(
@@ -214,14 +213,14 @@ fn make_packs(n: usize) -> (Vec<PackManifest>, Vec<PackLockfile>) {
             )]
             .into_iter()
             .collect(),
-            policy_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
-            risk_engine_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            policy_version: draft_core::DRAFT_VERSION.to_string(),
+            risk_engine_version: draft_core::DRAFT_VERSION.to_string(),
             verification_commands: Vec::new(),
-            lsif_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
-            test_selector_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
-            fuzz_selector_version: draft_core::DRAFT_SCHEMA_VERSION.to_string(),
+            lsif_version: draft_core::DRAFT_VERSION.to_string(),
+            test_selector_version: draft_core::DRAFT_VERSION.to_string(),
+            fuzz_selector_version: draft_core::DRAFT_VERSION.to_string(),
             dependency_pack_hashes: deps,
-            receipt_hashes: Vec::new(),
+            receipt_digests: Vec::new(),
         });
     }
     (manifests, locks)
@@ -287,21 +286,28 @@ fn bench_gc(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let dir = tempfile::tempdir().unwrap();
-                let paths = ProjectPaths::for_root(dir.path());
+                let paths = DraftLayout::for_root(dir.path());
                 paths.create_all().unwrap();
-                let (mut manifests, _) = make_packs(100);
-                for m in &mut manifests {
-                    m.submit_state = SubmitState::Submitted;
-                    std::fs::create_dir_all(paths.pack_dir(&m.pack_id)).unwrap();
-                    draft_core::fsutil::write_json(&paths.pack_manifest(&m.pack_id), m).unwrap();
-                }
+                draft_core::support::fsutil::write_json(
+                    &paths.workspace_json(),
+                    &serde_json::json!({
+                        "schema_version": 1,
+                        "workspace_id": "ws_bench",
+                        "draft_version": draft_core::DRAFT_VERSION,
+                        "created_at": chrono::Utc::now(),
+                    }),
+                )
+                .unwrap();
+                draft_core::workspace::stable::StableHeadStore::new(paths.clone())
+                    .initialize(dir.path(), "rcp_bench_genesis".into())
+                    .unwrap();
                 for i in 0..50 {
                     std::fs::write(paths.tmp_dir().join(format!("orphan{i}")), "x").unwrap();
                 }
                 (dir, paths)
             },
             |(dir, paths)| {
-                let report = gc::run(black_box(&paths)).unwrap();
+                let report = maintenance::run(black_box(&paths)).unwrap();
                 drop(dir);
                 report
             },

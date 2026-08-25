@@ -1,18 +1,18 @@
 # Review, Verification, And Policy
 
-Draft separates evidence collection, risk analysis, review, and final approval so users can inspect why a ChangePack is or is not ready to submit.
+Draft separates evidence collection, risk analysis, review, and final approval so users can inspect why a Pack is or is not ready to submit.
 
 ## Review And Approval
 
 ### Review
 
 ```bash
-draft review -p <ChangePack>
-draft review -p <ChangePack> --comment "looks good"
-draft review -p <ChangePack> --tui
+draft review -p <Pack>
+draft review -p <Pack> --comment "looks good"
+draft review -p <Pack> --tui
 ```
 
-Review records that the ChangePack entered the human review boundary. Inspect:
+Review records that the Pack entered the human review boundary. Inspect:
 
 - changed files and patch content;
 - verification output and evidence;
@@ -22,8 +22,8 @@ Review records that the ChangePack entered the human review boundary. Inspect:
 ### Approval And Rejection
 
 ```bash
-draft approve -p <ChangePack> --reason "verified locally"
-draft reject -p <ChangePack> --reason "needs changes"
+draft approve -p <Pack> --reason "verified locally"
+draft reject -p <Pack> --reason "needs changes"
 ```
 
 Default policy requires approval before submit, and high-risk changes require human approval when that policy is enabled. Approval is local Draft metadata, not a hosted code-review approval.
@@ -37,7 +37,7 @@ The first view is summary-first: overview, hotspots, evidence gaps, provenance, 
 Console sections cover:
 
 - workspace status and latest scan time;
-- ChangePack list, selection, file changes, and overlap indicators;
+- Pack list, selection, file changes, and overlap indicators;
 - verification and submit-readiness counts;
 - risk findings, evidence gaps, and policy blockers;
 - decisions and approve or reject actions;
@@ -52,18 +52,18 @@ The TUI uses the same core state and human-final checks as the CLI. It works wit
 Verification runs local commands and records their results as Draft evidence.
 
 ```bash
-draft verify -p <ChangePack-id-or-name>
+draft verify -p <Pack-id-or-name>
 ```
 
 Draft loads the selected local profile, runs checks from the workspace root, and captures stdout, stderr, exit code, and timing in a verification receipt. Results can be passed, failed, skipped, or errored. Policy can block submit when verification is missing or failed.
 
-Verification commands are opaque local shell commands. Good checks are deterministic, local, scoped to the change, non-zero on failure, and concise enough to review. Results attach to the ChangePack, and submit receipts retain the references needed to reconstruct why it was allowed or blocked.
+Verification commands are opaque local shell commands. Good checks are deterministic, local, scoped to the change, non-zero on failure, and concise enough to review. Results attach to the Pack, and submit receipts retain the references needed to reconstruct why it was allowed or blocked.
 
 When verification fails:
 
 1. Inspect the receipt and its stdout and stderr objects.
 2. Fix the workspace.
-3. Create or update the ChangePack.
+3. Create or update the Pack.
 4. Run verification again.
 
 ## Risk Engine
@@ -76,7 +76,7 @@ Default rules cover sensitive paths, authentication and security files, payments
 
 ## Policy
 
-Policy controls whether a ChangePack can be verified, approved, and submitted.
+Policy controls whether a Pack can be verified, approved, and submitted.
 
 ### Resolution And Precedence
 
@@ -100,11 +100,11 @@ A key in a higher layer overrides only that key; unspecified keys fall through. 
 | `require_full_verify_intents` | `["security", "migration"]` | `draft verify`; escalates to `--full` |
 | `require_fuzz_intents` | `["security"]` | `draft verify`; escalates to `--fuzz` |
 
-Legacy `[submit]`, `[approval]`, and `[agent]` tables in the same policy file are still honored by legacy submit gates; canonical keys are top-level.
+Only the canonical top-level policy keys are accepted. Unknown or malformed policy shapes fail closed and are never reinterpreted through another reader.
 
 ### Default Gates
 
-The default v0.3.4 policy requires:
+The default policy requires:
 
 - verification and approval before submit;
 - no unresolved critical risk and a canonical risk report;
