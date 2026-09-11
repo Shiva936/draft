@@ -41,6 +41,36 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> DraftResult<()> {
         let _ = fs::remove_file(&tmp);
         DraftError::storage(format!("failed to rename into {}: {e}", path.display()))
     })?;
+    // Syncing the file is not enough: after `rename` the *directory entry* is
+    // still only in the page cache, so a crash here can leave the old contents
+    // behind with the new file's bytes safely on disk and unreachable. Journal
+    // recovery depends on the order of these writes actually surviving a crash,
+    // so the directory is synced too.
+    if let Some(parent) = path.parent() {
+        sync_directory(parent)?;
+    }
+    Ok(())
+}
+
+/// Flush a directory entry to disk.
+///
+/// Unix only. Windows offers no portable equivalent — a directory cannot be
+/// opened as a file — and its rename is already ordered against the metadata
+/// log, so there is nothing to add there.
+pub fn sync_directory(path: &Path) -> DraftResult<()> {
+    #[cfg(unix)]
+    {
+        let directory = fs::File::open(path).map_err(|e| {
+            DraftError::storage(format!("failed to open {} to sync: {e}", path.display()))
+        })?;
+        directory
+            .sync_all()
+            .map_err(|e| DraftError::storage(format!("failed to sync {}: {e}", path.display())))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
     Ok(())
 }
 

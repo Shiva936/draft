@@ -12,7 +12,7 @@ documents=(
   "$root_dir/proto/specs"
 )
 
-if rg -n 'services/agui|draft config (get|set|unset) identity\.|draft identity (status|set)|draft hook get|settings/identity' \
+if rg -n 'services/agui|draft config (get|set|unset) identity\.|draft identity (status|set)|settings/identity' \
   "${documents[@]}" --glob '*.md'; then
   echo "Documentation contains an obsolete path, command, or configuration example." >&2
   exit 1

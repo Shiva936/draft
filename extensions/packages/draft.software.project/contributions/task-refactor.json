@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/refactor",
+  "display_name": "Refactor",
+  "description": "Restructure without changing observable behaviour.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Refactor"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

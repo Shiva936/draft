@@ -4,8 +4,8 @@ Draft project configuration is private metadata stored under `.draft/`. The cano
 
 ## Files
 
-- `.draft/config.toml`: user display metadata, submit behavior, hooks, and verification defaults.
-- `.draft/policy.toml`: submit, review, risk, and verification gates.
+- `.draft/config.toml`: user display metadata, hooks, and verification defaults.
+- `.draft/policy.toml`: gate, review, risk, and verification policy.
 - `.draft/verify.toml`: local verification command configuration.
 - `.draft/.ignore`: Draft-specific scan exclusions.
 
@@ -22,10 +22,10 @@ draft config unset user.email
 Hook shortcuts use the same config store:
 
 ```bash
-draft hook
-draft hook set submit "printf %s \"{{message}}\" > .last-draft-submit"
-draft hook unset submit
-draft hook run <hook-name>
+draft config hook
+draft config hook set verify "cargo test"
+draft config hook unset verify
+draft config hook run <hook-name>
 ```
 
 Read a hook value with `draft config get hooks.<name>`.
@@ -39,28 +39,11 @@ Both values are trimmed, bounded, non-empty, and reject control data. Email is i
 
 Resolution is project `user.name`, then global `user.name`, then the built-in `unknown` fallback. The fallback is in-memory only and is never written to a configuration file. Email resolves project then global, with no built-in value.
 
-These values are strictly non-authoritative. They do not affect actor IDs, signing or public keys, authorization, trust, receipt identity or verification, candidate attribution, workspace/source/Pack digests, event hashes, or ownership. A newly rendered presentation may include a non-authoritative display snapshot beside the stable actor ID.
+These values are strictly non-authoritative. They do not affect actor IDs, signing or public keys, authorization, trust, receipt identity or verification, candidate attribution, workspace/source/Change digests, event hashes, or ownership. A newly rendered presentation may include a non-authoritative display snapshot beside the stable actor ID.
 
 Profile/config audit events record the stable actor ID, scope, changed key names, operation/correlation metadata when applicable, and resulting config digest. They do not copy profile values into immutable global/system logs.
 
-There is no `draft identity` command and no `identity.*` compatibility alias. `.draft/identity.json`, retired XDG profile files, `[identity]`, `identity.*`, and former combined actor/profile fields are unsupported pre-release state. Normal operations fail closed without interpreting or migrating their values. `draft doctor`, relevant inspection/status paths, and `draft close` may identify the condition or safely remove an unsupported workspace, but never consume the retired profile as configuration.
-
-## Submit Behavior
-
-```toml
-[submit]
-pack_disposal = "merge_and_dispose"
-message_template = "{{title}}"
-```
-
-Allowed `pack_disposal` values are:
-
-```text
-merge_and_dispose   (default) merge into Draft's stable base, then dispose
-dispose_only        delegate permanence externally, then dispose
-```
-
-A missing value uses the default. An invalid value fails clearly at load time and through `draft config set`.
+There is no `draft identity` command and no `identity.*` compatibility alias. `.draft/identity.json`, retired XDG profile files, `[identity]`, `identity.*`, and former combined actor/profile fields are unsupported pre-release state. Normal operations fail closed without interpreting or migrating their values. `draft doctor`, relevant inspection/status paths, and `draft maintenance remove-project` may identify the condition or safely remove an unsupported workspace, but never consume the retired profile as configuration.
 
 ## Hooks
 
@@ -68,44 +51,35 @@ Draft supports generic, user-configured shell hooks under `hooks.*`. Draft treat
 
 ### Configuration Shapes
 
-A raw submit hook is one before-submit command:
+A raw hook is one command:
 
 ```toml
-[hooks.submit]
+[hooks.verify]
 kind = "raw"
-command = "printf %s \"{{message}}\" > .last-draft-submit"
+command = "cargo test"
 ```
 
 A rich entry adds execution controls:
 
 ```toml
-[hooks.submit]
+[hooks.verify]
 kind = "entry"
 
-[hooks.submit.entry]
-command = "./scripts/before-draft-submit.sh \"{{message}}\""
+[hooks.verify.entry]
+command = "./scripts/verify.sh"
 enabled = true
 shell = "default"
 cwd = "workspace"
 timeout_ms = 300000
 continue_on_error = false
 
-[hooks.submit.entry.env]
+[hooks.verify.entry.env]
 CI = "1"
 ```
 
-The phased form supports multiple before and after commands:
+A required non-zero exit fails the hook and is reported as a `HOOK_FAILED` refusal; `continue_on_error = true` records the failure and continues.
 
-```toml
-[hooks.submit]
-kind = "phases"
-before = [{ kind = "raw", command = "cargo fmt --check" }]
-after  = [{ kind = "raw", command = "git add -A && git commit -m \"{{message}}\"" }]
-```
-
-Before hooks run before final project-state verification and finalization. After hooks run after `stable_head` advancement in `merge_and_dispose` mode but before pack disposal. A required non-zero exit fails submit and preserves the pack; `continue_on_error = true` allows finalization to continue and records a submitted-with-hook-failure result.
-
-`hooks.verify` uses the same raw or rich entry model for verification commands. Future command-specific hooks use the same `hooks.<command>` namespace; hook names do not introduce native VCS, publication, remote, or marketplace concepts.
+A hook is never a promotion. Nothing a hook does changes what the project accepts: that is Promotion's sole authority, and it happens only on an approving Decision citing a satisfied Gate. Future command-specific hooks use the same `hooks.<command>` namespace; hook names introduce no native VCS, publication, remote, or marketplace concepts.
 
 ### Placeholders
 
@@ -119,7 +93,7 @@ Built-in placeholders are:
 {{description}}
 {{task_id}}
 {{execution_id}}
-{{pack_id}}
+{{change_id}}
 {{receipt_id}}
 {{actor_name}}
 {{timestamp}}
@@ -140,7 +114,7 @@ Missing placeholders fail before execution and obey `continue_on_error`.
 Hook-capable commands accept `--var` as a tail marker:
 
 ```bash
-draft submit auth-refactor --var ticket="AUTH-123" release="v0.3.4"
+draft config hook run verify --var ticket="AUTH-123" release="v0.3.4"
 ```
 
 Every token after `--var` must be `key=value`; Draft flags are not allowed after the marker. Variable names must match `[a-zA-Z_][a-zA-Z0-9_]*` and cannot override built-ins.
@@ -158,30 +132,28 @@ DRAFT_VAR_RELEASE=v0.3.4
 
 Draft exports built-ins using names such as `DRAFT_HOOK_NAME`, `DRAFT_HOOK_PHASE`, `DRAFT_WORKSPACE_ROOT`, and `DRAFT_RECEIPT_ID`. Dynamic variables use `DRAFT_VAR_<UPPERCASE_NAME>`. Values from `[hooks.<name>.env]` are added without removing or renaming Draft-provided metadata.
 
-Draft interpolates placeholders before execution and records the command hash, stdout, stderr, exit code, timestamps, executor, working directory, and receipt references. Submit receipts distinguish:
+Draft interpolates placeholders before execution and records the command hash, stdout, stderr, exit code, timestamps, executor and working directory as an `OperationExecuted` Activity event. A hook result reports its own outcome:
 
 ```text
-native_submit_status = "submitted" | "failed"
-hook_status          = "not_configured" | "skipped" | "succeeded" | "failed"
-overall_status       = "submitted" | "failed" | "submitted_with_hook_failure"
+exit_code    the process's exit status
+stdout_ref   the object holding captured output
+stderr_ref   the object holding captured error output
 ```
 
-Example commands include:
+An example:
 
 ```toml
-[hooks.submit]
-kind = "phases"
-before = [
-  { kind = "raw", command = "./scripts/check-before-submit.sh" },
-]
-after = [
-  { kind = "entry", entry = { command = "./scripts/publish-after-review.sh \"{{message}}\" \"{{ticket}}\"", timeout_ms = 120000 } },
-]
+[hooks.verify]
+kind = "entry"
+
+[hooks.verify.entry]
+command = "./scripts/check.sh \"{{ticket}}\""
+timeout_ms = 120000
 ```
 
 This remains user-scripted hook execution. Draft v0.3.4 has no native push, forge, pull-request, hosted-review, marketplace, cloud-sync, or GitHub feature.
 
-Hooks are not sandboxed. Configure them as carefully as any local shell command. Draft never runs submit hooks when `.draft/` appears in the submit candidate.
+Hooks are not sandboxed. Configure them as carefully as any local shell command. Draft never runs a hook when `.draft/` appears in the change candidate.
 
 ## Verification Configuration
 
@@ -189,7 +161,15 @@ Hooks are not sandboxed. Configure them as carefully as any local shell command.
 
 ## Policy Configuration
 
-Policy values live in `.draft/policy.toml`. Defaults require verification and approval before submit. The `.draft/` submit-candidate block is not configurable. See [Review, Verification, And Policy](review-and-policy.md#policy).
+Policy values live in `.draft/policy.toml`. Defaults require verification and an approving Decision before a promotion. The `.draft/` change-candidate block is not configurable. See [Review, Verification, And Policy](review-and-policy.md#policy).
+
+## Protections
+
+`[protected].protected_resources` in `.draft/config.toml` lists the resources this project refuses to let a change touch. Each rule carries a predicate and a reason, and a refusal names the rule that caused it.
+
+Protections compose as a union across four sources — Draft itself, the user's global configuration, this project's configuration, and any installed `control_policy` — and no layer can relax one another layer added. Draft's own contribution is exactly one rule, `.draft/**`, applied structurally ahead of every list: the control plane is unreachable regardless of what any configuration or contribution says.
+
+The name is deliberate. A protection applies to a _resource_, identified by an opaque locator, and only the `file` scheme's bodies happen to be paths — so a rule written as a path glob matches nothing under another scheme rather than matching the wrong thing. A refused write reports `PROTECTED_RESOURCE_ACCESS`.
 
 ## Resolution And Precedence
 
@@ -210,11 +190,27 @@ Changing configuration deterministically invalidates prior verification results.
 Draft uses `.draft/.ignore` for Draft-specific scan exclusions. Draft does not import ignore rules from other tools; it scans the workspace directly and applies only Draft rules plus the hard `.draft/` exclusion.
 
 ```bash
-draft ignore add "notes/"
-draft ignore remove "notes/"
-draft ignore list
+draft config ignore add "notes/"
+draft config ignore remove "notes/"
+draft config ignore list
 ```
 
 Rules are stored as plain lines. Blank lines and comments are ignored. Draft supports path-prefix and file-pattern matching, and negated rules can re-include a path unless it is below `.draft/`, which can never be re-included. Use forward slashes; Draft normalizes platform path separators before matching.
 
-Keep ignore rules narrow. Broad rules can hide files from Packs, verification, and rollback planning. When in doubt, leave files visible for review or policy to decide.
+Keep ignore rules narrow. Broad rules can hide files from Changes, verification, and rollback planning. When in doubt, leave files visible for review or policy to decide.
+
+## Extension state
+
+Extension state lives in the global Draft home, not in a project:
+
+- `extensions/registry.json` — installed packages, their content hashes and enabled state.
+- `extensions/authorizations.json` — capability grants, each bound to one exact artifact, plus the superseded grants kept for audit.
+- `extensions/sources.json` — configured catalog sources, including whether each is enabled and whether it is built into this Draft build.
+- `extensions/packages/<id>/` — the installed package contents.
+- `extensions/removed/` — packages retained after uninstall or replacement.
+
+None of these are edited by hand. Grants in particular are created only by `draft extension authorize` (or `--grant` on install and update) and are invalidated automatically whenever the artifact they name changes.
+
+A project's own `verify.toml` is unaffected by extensions: an installed package can neither add to nor remove from the checks a project configured for itself. Contributed checks are added alongside, keyed by their own namespaced ids, and the two sets aggregate through the same five-state lattice.
+
+The same is true of `risk.toml`. A rule a project writes for itself is evaluated by exactly the same path as one an extension contributes, so expressing a domain judgement never requires publishing a package. Where a contributed rule reuses a code the project already configured, the project's rule wins and the contributed one is dropped — configuration is the project's own voice.

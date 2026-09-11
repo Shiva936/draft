@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/migrate-data",
+  "display_name": "Migrate data",
+  "description": "Move state to a new shape reversibly.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Migrate data"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

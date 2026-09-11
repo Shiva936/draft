@@ -26,7 +26,7 @@ export function StatusBadge({
   );
 }
 
-/** Risk level from canonical task/pack risk state. */
+/** Risk level from canonical task/change risk state. */
 export function RiskBadge({ value }: { value: string | null | undefined }) {
   const level = riskLevel(value);
   if (!level) return <span className="empty-cell">—</span>;

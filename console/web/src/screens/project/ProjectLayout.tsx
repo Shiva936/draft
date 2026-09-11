@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet, useNavigate, useParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api";
 import type { ProjectSummary } from "../../contracts";
+import { CONSOLE_NAVIGATION } from "../../contracts";
 import { Icon, type IconName } from "../../icons";
 import { PageHeader } from "../../components/layout";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -9,14 +10,30 @@ import { Menu } from "../../components/Menu";
 import { ErrorState, Skeleton } from "../../components/states";
 import { useStarredProjects } from "../../lib/preferences";
 
-/** Project navigation is fixed; see docs/guides/console.md. */
-const projectTabs: { to: string; label: string; icon: IconName; end?: boolean }[] = [
-  { to: ".", label: "Overview", icon: "home", end: true },
-  { to: "tasks", label: "Tasks", icon: "list-checks" },
-  { to: "editor", label: "Editor / Files", icon: "file-text" },
-  { to: "events", label: "Events", icon: "activity" },
-  { to: "packs", label: "Packs", icon: "layers" },
-];
+/**
+ * Project navigation is §8.3's, and it is not written here.
+ *
+ * `CONSOLE_NAVIGATION` is generated from the same Rust definition `draftd`
+ * serves, so the sections the browser shows cannot drift from the sections the
+ * authority offers. This file supplies only presentation — a route and an icon
+ * per section — and a section appearing here that the authority does not serve
+ * would fail the generated-contract check rather than ship.
+ */
+const SECTION_PRESENTATION: Record<string, { to: string; icon: IconName; end?: boolean }> = {
+  Overview: { to: ".", icon: "home", end: true },
+  Work: { to: "work", icon: "list-checks" },
+  Resources: { to: "resources", icon: "file-text" },
+  Baselines: { to: "baselines", icon: "scale" },
+  Activity: { to: "activity", icon: "activity" },
+  Providers: { to: "providers", icon: "plug" },
+  Extensions: { to: "extensions", icon: "puzzle" },
+};
+
+const projectTabs = CONSOLE_NAVIGATION.PROJECT.map((section) => {
+  const presentation = SECTION_PRESENTATION[section.label];
+  if (!presentation) throw new Error(`no route for the authoritative section '${section.label}'`);
+  return { label: section.label, ...presentation };
+});
 
 export function ProjectLayout() {
   const { workspaceId = "" } = useParams();

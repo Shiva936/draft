@@ -1,12 +1,12 @@
-//! Security fixture suite (NFRD §10, PRD §12) — runs on stable `cargo test` so
+//! Security fixture suite — runs on stable `cargo test` so
 //! CI always exercises it. Every malicious fixture must fail closed: the parser
 //! rejects it and nothing is mutated. The `fuzz/` crate provides libFuzzer
 //! targets over the same parsers for deeper, nightly fuzzing.
 
-use draft_core::pack::archive::read_archive;
-use draft_core::pack::PackManifest;
+use draft_core::dcg::change_store::ChangeManifest;
+use draft_core::draftpack::read_archive;
 use draft_core::support::pathguard::{self, PathViolation};
-use draft_core::trust::receipt::ReceiptRecord;
+use draft_dcg_contract::receipt::ReceiptEnvelope;
 
 /// Build a raw ustar archive with an arbitrary (possibly malicious) entry.
 fn raw_tar(entries: &[(&str, &[u8], u8)]) -> Vec<u8> {
@@ -179,15 +179,31 @@ fn import_rejects_invalid_utf8_entry_name() {
 #[test]
 fn manifest_parser_rejects_corrupt_and_wrong_schema() {
     // Corrupt JSON.
-    assert!(serde_json::from_str::<PackManifest>("{ not json ").is_err());
-    // Wrong schema version fails the support check.
-    let m: PackManifest = serde_json::from_value(serde_json::json!({
-        "schema_version": 2,
-        "pack_id": "pck_x",
+    assert!(serde_json::from_str::<ChangeManifest>("{ not json ").is_err());
+    // An unowned intent is refused at decode: an identifier nobody owns is
+    // exactly what lets two publishers collide.
+    assert!(serde_json::from_value::<ChangeManifest>(serde_json::json!({
+        "schema_version": 1,
+        "change_id": "chg_x",
         "manifest_digest": "sha256:manifest",
         "name": "n",
         "description": "",
         "intent": "feature",
+        "provenance": {"origin": "local"},
+        "author_id": "actor_a",
+        "candidate_id": null,
+        "declared_dependencies": [],
+        "created_at": "2026-01-01T00:00:00Z"
+    }))
+    .is_err());
+    // Wrong schema version fails the support check.
+    let m: ChangeManifest = serde_json::from_value(serde_json::json!({
+        "schema_version": 2,
+        "change_id": "chg_x",
+        "manifest_digest": "sha256:manifest",
+        "name": "n",
+        "description": "",
+        "intent": "draft.software.project/feature",
         "provenance": {"origin": "local"},
         "author_id": "actor_a",
         "candidate_id": null,
@@ -200,14 +216,14 @@ fn manifest_parser_rejects_corrupt_and_wrong_schema() {
 
 #[test]
 fn receipt_parser_rejects_corrupt() {
-    assert!(serde_json::from_str::<ReceiptRecord>("").is_err());
-    assert!(serde_json::from_str::<ReceiptRecord>(r#"{"receipt_id":"rcp_x"}"#).is_err());
+    assert!(serde_json::from_str::<ReceiptEnvelope>("").is_err());
+    assert!(serde_json::from_str::<ReceiptEnvelope>(r#"{"receipt_id":"rcp_x"}"#).is_err());
 }
 
-// ---- Event log parser fixtures ------------------------------------------
+// ---- Activity Ledger parser fixtures ------------------------------------
 
 #[test]
-fn event_parser_rejects_corrupt_line() {
-    use draft_core::trust::event::EventRecord;
-    assert!(serde_json::from_str::<EventRecord>("{ garbage").is_err());
+fn activity_parser_rejects_a_corrupt_record() {
+    use draft_core::activity::LedgerRecord;
+    assert!(serde_json::from_str::<LedgerRecord>("{ garbage").is_err());
 }

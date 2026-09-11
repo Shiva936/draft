@@ -4,13 +4,13 @@
   "title": "Draft Risk Evidence",
   "type": "object",
   "required": [
-    "schema_version", "pack_id", "revision_id", "revision_digest",
+    "schema_version", "change_id", "revision_id", "revision_digest",
     "dependency_digests", "risk_level", "risk_score", "explanations",
     "required_actions", "feature_vector"
   ],
   "properties": {
     "schema_version": { "const": 1 },
-    "pack_id": { "type": "string", "pattern": "^pck_[A-Za-z0-9_-]+$" },
+    "change_id": { "type": "string", "pattern": "^chg_[A-Za-z0-9_-]+$" },
     "revision_id": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]+$" },
     "revision_digest": { "$ref": "#/$defs/digest" },
     "dependency_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" } },

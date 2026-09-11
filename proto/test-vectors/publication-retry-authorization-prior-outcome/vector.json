@@ -1,0 +1,93 @@
+{
+  "expect": "the prior outcome must belong to an attempt of this exact Publication",
+  "name": "publication-retry-authorization-prior-outcome",
+  "payload": {
+    "actor": "act_a1",
+    "authority": {
+      "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+      "kind": "draft.security/authority-grant.v1",
+      "logical_id": "auth_1"
+    },
+    "authority_decision": {
+      "considered": [
+        {
+          "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+          "kind": "draft.security/authority-grant.v1",
+          "logical_id": "auth_1"
+        }
+      ],
+      "decided_at": 1000,
+      "evaluator": {
+        "producer": "draft.core/publication",
+        "version": "0.3.4"
+      },
+      "outcome": {
+        "outcome": "permitted"
+      },
+      "scope": {
+        "capability": "draft.publish/v1",
+        "subject": "pub_a1"
+      }
+    },
+    "authorized_at": 4000,
+    "authorizes_one_attempt": true,
+    "duplicate_risk_acknowledged": true,
+    "expires_at": 9000,
+    "global_registry_revisions_at_authorization": {
+      "draft.trust/publishers": 412
+    },
+    "policy_digest_at_authorization": "sha256:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "prior_outcome": "sha256:c4dfffd0a4daebafd04abd8f859a6f4bb2f41d852e4e1125a3deb12c4fd4657b",
+    "project_security_state_at_authorization": "sha256:add93534eeb463800fe0ed0946048d33636dd2a014fab92e8a37f77ce98c740b",
+    "publication": {
+      "digest": "sha256:fd1efc8e0ab570a1442e5c15bd15b8660e6360b3975ccf2e786023e1fdfbe3c7",
+      "id": "pub_000000000001"
+    },
+    "rationale": "operator accepts the duplicate risk"
+  },
+  "payload_schema": "publication-retry-authorization.schema.json",
+  "self_consistency_violation": {
+    "actor": "act_a1",
+    "authority": {
+      "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+      "kind": "draft.security/authority-grant.v1",
+      "logical_id": "auth_1"
+    },
+    "authority_decision": {
+      "considered": [
+        {
+          "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+          "kind": "draft.security/authority-grant.v1",
+          "logical_id": "auth_1"
+        }
+      ],
+      "decided_at": 1000,
+      "evaluator": {
+        "producer": "draft.core/publication",
+        "version": "0.3.4"
+      },
+      "outcome": {
+        "outcome": "permitted"
+      },
+      "scope": {
+        "capability": "draft.publish/v1",
+        "subject": "pub_a1"
+      }
+    },
+    "authorized_at": 4000,
+    "authorizes_one_attempt": true,
+    "duplicate_risk_acknowledged": true,
+    "expires_at": 9000,
+    "global_registry_revisions_at_authorization": {
+      "draft.trust/publishers": 412
+    },
+    "policy_digest_at_authorization": "sha256:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "prior_outcome": "sha256:044d55b6a2fe396babc81430d77f5f1ead819f2e2158939a07163c2dd939a7e1",
+    "project_security_state_at_authorization": "sha256:add93534eeb463800fe0ed0946048d33636dd2a014fab92e8a37f77ce98c740b",
+    "publication": {
+      "digest": "sha256:fd1efc8e0ab570a1442e5c15bd15b8660e6360b3975ccf2e786023e1fdfbe3c7",
+      "id": "pub_000000000001"
+    },
+    "rationale": "operator accepts the duplicate risk"
+  }
+}

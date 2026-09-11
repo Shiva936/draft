@@ -11,6 +11,8 @@ import { EmptyState, QueryState } from "../../../components/states";
 import { NONE, daysUntil, formatDate, humanize, isOverdue } from "../../../lib/format";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { TaskDrawer } from "./TaskDrawer";
+import { SectionNav } from "../SectionNav";
+import { WORK_ROUTES } from "../work/routes";
 
 const STATUSES = ["open", "in_progress", "blocked", "completed", "cancelled"];
 const PRIORITIES = ["low", "normal", "high", "urgent"];
@@ -56,6 +58,7 @@ export function Tasks() {
 
   return (
     <>
+      <SectionNav section="Work" routes={WORK_ROUTES} />
       <Toolbar>
         <SearchField label="Search tasks" placeholder="Search tasks…" value={search} onChange={setSearch} />
         <FilterSelect
@@ -201,8 +204,8 @@ export function Tasks() {
               <span className="result-count">
                 Showing {filtered.length} of {tasks.length} tasks
               </span>
-              <Link className="panel-link" to="../packs">
-                View packs
+              <Link className="panel-link" to="../changes">
+                View changes
                 <Icon name="chevron-right" size={14} />
               </Link>
             </div>

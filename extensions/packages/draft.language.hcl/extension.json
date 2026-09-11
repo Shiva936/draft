@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "draft.language.hcl",
+  "name": "HCL",
+  "version": "1.0.0",
+  "publisher": "draft",
+  "draft_api": "^0.3.4",
+  "contributions": [
+    {
+      "id": "classification",
+      "kind": "resource_classification",
+      "path": "contributions/classification.json"
+    },
+    {
+      "id": "verification",
+      "kind": "verification",
+      "path": "contributions/verification.json"
+    },
+    {
+      "id": "risk-rules",
+      "kind": "risk_rule",
+      "path": "contributions/risk-rules.json"
+    },
+    {
+      "id": "presentation",
+      "kind": "presentation",
+      "path": "contributions/presentation.json"
+    }
+  ],
+  "documentation": [
+    "docs/readme.md"
+  ],
+  "licenses": [
+    "LICENSE.txt"
+  ],
+  "assets": [],
+  "schemas": [],
+  "permissions": [
+    "process.execute"
+  ],
+  "description": "Classification, verification and presentation for HCL sources.",
+  "keywords": [
+    "hcl",
+    "terraform",
+    "infrastructure"
+  ]
+}

@@ -114,6 +114,40 @@ jobs:
         shell: bash
         run: scripts/check-core-architecture.sh
 
+      - name: Lock discipline
+        shell: bash
+        run: scripts/check-lock-discipline.sh
+
+      - name: Lock order
+        shell: bash
+        run: scripts/check-lock-order.sh
+
+      - name: Activity event ownership
+        shell: bash
+        run: scripts/check-activity-event-ownership.sh
+
+      - name: Extension boundary contracts
+        shell: bash
+        run: scripts/check-extension-architecture.sh
+
+      - name: Retired architecture stays retired
+        shell: bash
+        run: python3 scripts/check-retired-architecture.py
+
+      - name: Telemetry completeness
+        shell: bash
+        run: scripts/check-telemetry-completeness.sh
+
+      - name: Portable DCG contract closure
+        if: runner.os == 'Linux'
+        shell: bash
+        run: scripts/check-portable-contract-closure.sh
+
+      - name: Packaged SDK contracts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: scripts/check-sdk-contract-packages.sh
+
       - name: Canonical contract names
         shell: bash
         run: scripts/check-draft-contract-names.sh
@@ -157,3 +191,13 @@ jobs:
 
       - name: Release build
         run: cargo build --workspace --release
+
+      - name: Platform builds and tests without /extensions/
+        if: runner.os == 'Linux'
+        shell: bash
+        run: scripts/check-platform-without-extensions.sh
+
+      - name: Extensions validate, package and sign standalone
+        if: runner.os == 'Linux'
+        shell: bash
+        run: extensions/scripts/check-standalone.sh

@@ -238,7 +238,7 @@ export function Doctor() {
                           <Icon name="package" size={16} />
                           <div className="row-main">
                             <strong>{project.name}</strong>
-                            <small>{project.repository_path}</small>
+                            <small>{project.project_path}</small>
                           </div>
                           <StatusBadge value={project.health} />
                         </Link>

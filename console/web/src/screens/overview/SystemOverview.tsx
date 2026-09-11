@@ -150,7 +150,7 @@ export function SystemOverview() {
                         <Icon name="package" size={18} />
                         <div className="row-main">
                           <strong>{entry.project.name}</strong>
-                          <small>{entry.project.repository_path}</small>
+                          <small>{entry.project.project_path}</small>
                         </div>
                         <StatusBadge value={entry.summary?.freshness ?? entry.project.health} />
                         <Icon name="chevron-right" size={16} />

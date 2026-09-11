@@ -1,4 +1,4 @@
-//! `draft service` subcommands + service-aware routing helpers.
+//! `draft daemon` subcommands + service-aware routing helpers.
 //!
 //! The daemon (`draftd`) is optional (NFR-006). Safe commands always fall back
 //! to embedded mode when it is not running (FR-CLI-003).

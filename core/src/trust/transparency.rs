@@ -1,15 +1,17 @@
-//! Local transparency log (PRD §9.10, TDD §16).
+//! Local transparency log.
+//!
+//! See `docs/internals/storage-and-events.md`.
 //!
 //! An append-only, hash-chained, signed log of receipts at
 //! `.draft/transparency/chain.log`. Each entry links a receipt into a chain
 //! (`previous_entry_hash` → `entry_hash`) and is signed by the acting key, so
 //! removing or reordering receipts is detectable independently of the event log.
 
+use crate::project::layout::DraftLayout;
 use crate::support::error::{DraftError, DraftResult};
 use crate::support::fsutil;
 use crate::support::hashing;
 use crate::trust::signing::Keypair;
-use crate::workspace::layout::DraftLayout;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

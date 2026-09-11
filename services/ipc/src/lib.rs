@@ -1,7 +1,8 @@
-//! Local-only IPC for `draftd` (TDD §8.3). Newline-delimited JSON over a Unix
+//! Local-only IPC for `draftd`. Newline-delimited JSON over a Unix
 //! domain socket (Linux/macOS); a localhost-loopback fallback is used on other
 //! platforms. Blocking std sockets + a thread per connection — no async runtime.
 
+pub mod console_application;
 pub mod console_contracts;
 pub mod protocol;
 
@@ -10,6 +11,7 @@ pub mod protocol;
 pub mod contract_versions {
     use draft_core::contracts::{current_version, ContractId};
 
+    pub const IPC_HANDSHAKE_REQUEST: u32 = current_version(ContractId::IpcHandshakeRequest);
     pub const CONSOLE_API_ENVELOPE: u32 = current_version(ContractId::ConsoleApiEnvelope);
     pub const CONSOLE_API_FAILURE: u32 = current_version(ContractId::ConsoleApiFailure);
     pub const CONSOLE_SESSION: u32 = current_version(ContractId::ConsoleSession);

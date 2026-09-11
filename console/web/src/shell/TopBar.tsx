@@ -41,7 +41,7 @@ export function TopBar({
 
       <button className="search-trigger" onClick={onOpenPalette}>
         <Icon name="search" size={16} />
-        <span>Search projects, tasks, packs, files…</span>
+        <span>Search projects, tasks, changes, files…</span>
         <kbd>⌘K</kbd>
       </button>
 
@@ -169,14 +169,14 @@ function CreateMenu({ projects }: { projects: RegistryProject[] }) {
       onSelect: () => projectPath && navigate(`${projectPath}/tasks?create=1`),
     },
     {
-      label: "Create pack",
+      label: "Create change",
       icon: "package" as const,
       disabled: !projectPath,
       reason: noProject,
-      onSelect: () => projectPath && navigate(`${projectPath}/packs?create=1`),
+      onSelect: () => projectPath && navigate(`${projectPath}/changes?create=1`),
     },
     {
-      label: "New file",
+      label: "New resource",
       icon: "file" as const,
       disabled: !projectPath,
       reason: noProject,

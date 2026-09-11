@@ -6,9 +6,19 @@ schema_version = 1
 name = "Ada"
 email = "ada@example.com"
 
-[submit]
-message_template = "{{title}}\n\n{{description}}\n\nDraft-Task: {{task_id}}\nDraft-Execution: {{execution_id}}\nDraft-Pack: {{pack_id}}\nDraft-Verified: {{verified}}\nDraft-Risk: {{risk_level}}\nDraft-Receipt: {{receipt_id}}\nDraft-Actor: {{actor_name}}"
-pack_disposal = "merge_and_dispose"
+# A hook is an opaque local command. Draft renders its placeholders, runs it
+# directly with a cleared environment and an enforced time limit, and records
+# what it did. It is never a promotion: what the project accepts changes only
+# through `draft promote`, on an approving Decision citing a satisfied Gate.
+[hooks.verify]
+kind = "entry"
+
+[hooks.verify.entry]
+command = "cargo test"
+enabled = true
+cwd = "workspace"
+timeout_ms = 300000
+continue_on_error = false
 
 [verification]
 default_profile = "standard"
@@ -17,4 +27,4 @@ default_profile = "standard"
 require_verification = true
 require_approval = true
 require_human_approval_for_high_risk = true
-block_if_tests_fail = true
+block_on_failed_verification = true

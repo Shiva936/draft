@@ -11,7 +11,7 @@ import { useDaemonConnection } from "../../lib/hooks";
 import {
   ACCENTS,
   useAccent,
-  useRestorePacks,
+  useRestoreChanges,
   useStartupView,
   useTheme,
   type AccentName,
@@ -255,7 +255,7 @@ function ThemePanel() {
 
 function ConsolePanel() {
   const [startup, setStartup] = useStartupView();
-  const [restore, setRestore] = useRestorePacks();
+  const [restore, setRestore] = useRestoreChanges();
 
   return (
     <Panel className="padded stack tight">
@@ -281,14 +281,14 @@ function ConsolePanel() {
 
       <div className="setting-row">
         <div>
-          <strong>Restore open packs</strong>
-          <p>Reopen the pack that was selected during the last session.</p>
+          <strong>Restore open changes</strong>
+          <p>Reopen the change that was selected during the last session.</p>
         </div>
         <button
           className="switch"
           role="switch"
           aria-checked={restore}
-          aria-label="Restore open packs"
+          aria-label="Restore open changes"
           onClick={() => setRestore(!restore)}
         />
       </div>

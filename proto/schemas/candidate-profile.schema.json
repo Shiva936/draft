@@ -31,13 +31,13 @@
       "properties": {
         "can_plan": { "type": "boolean" },
         "can_edit": { "type": "boolean" },
-        "can_run_tests": { "type": "boolean" },
+        "can_verify": { "type": "boolean" },
         "can_read_index": { "type": "boolean" },
         "can_accept_task_contract": { "type": "boolean" },
         "supports_resume": { "type": "boolean" },
         "supports_streaming_logs": { "type": "boolean" },
-        "supports_patch_output": { "type": "boolean" },
-        "supports_pack_output": { "type": "boolean" },
+        "proposes_mutations": { "type": "boolean" },
+        "supports_change_output": { "type": "boolean" },
         "requires_shell": { "type": "boolean" },
         "requires_network": { "type": "boolean" }
       },
@@ -48,7 +48,7 @@
       "properties": {
         "max_runtime_seconds": { "type": ["integer", "null"], "minimum": 0 },
         "max_files_changed": { "type": ["integer", "null"], "minimum": 0 },
-        "max_changed_lines": { "type": ["integer", "null"], "minimum": 0 },
+        "max_output_bytes_changed": { "type": ["integer", "null"], "minimum": 0 },
         "max_processes": { "type": ["integer", "null"], "minimum": 0 },
         "max_output_bytes": { "type": ["integer", "null"], "minimum": 0 },
         "network": { "enum": ["denied", "local", "full"] },

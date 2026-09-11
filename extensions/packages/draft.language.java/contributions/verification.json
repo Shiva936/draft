@@ -1,0 +1,34 @@
+{
+  "checks": [
+    {
+      "check_id": "draft.language.java/toolchain",
+      "display_name": "Toolchain probe",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.java/source"
+      },
+      "requirement": "optional",
+      "selection": "environment_probe",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "java",
+            "args": [
+              "-version"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

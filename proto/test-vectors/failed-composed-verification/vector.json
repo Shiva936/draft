@@ -1,0 +1,73 @@
+{
+  "name": "failed-composed-verification",
+  "expect": "verification_failed",
+  "object": "verification-evidence",
+  "notes": "failed verification evidence remains bound to the exact composed revision, and names the producer and the decision that permitted the run",
+  "payload_schema": "verification.schema.json",
+  "payload": {
+    "schema_version": 1,
+    "change_id": "chg_composed",
+    "revision_id": "rev_composed",
+    "revision_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dependency_digests": [],
+    "aggregator_revision": 1,
+    "check_results": [
+      {
+        "check_id": "example.publisher/suite",
+        "display_name": "Example suite",
+        "requirement": "required",
+        "selection": "whole",
+        "reason": "contributed by example.publisher for res_src/lib.rs",
+        "outcome": {
+          "outcome": "failed",
+          "detail": "'example-test --all' exited 1"
+        },
+        "producer": {
+          "extension_id": "example.publisher",
+          "extension_version": "1.0.0",
+          "package_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "attestation_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "authorization_decision": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "executable_identity": "example-test --all",
+        "exit_code": 1,
+        "duration_ms": 1
+      }
+    ],
+    "state": {
+      "state": "failed"
+    },
+    "selection_reason": "checks applicable to the changed resources",
+    "duration_ms": 1,
+    "stdout_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stderr_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "result_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "verification_key": {
+      "snapshot_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "config_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "environment_probe_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "check_selection_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "producer_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "platform_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "key": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "invalid_payload": {
+    "schema_version": 1,
+    "change_id": "chg_composed",
+    "revision_id": "invalid",
+    "revision_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "dependency_digests": [],
+    "aggregator_revision": 1,
+    "check_results": [],
+    "state": {
+      "state": "not_applicable"
+    },
+    "selection_reason": "invalid",
+    "duration_ms": 0,
+    "stdout_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stderr_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "result_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "verification_key": null
+  }
+}

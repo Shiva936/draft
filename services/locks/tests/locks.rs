@@ -8,15 +8,28 @@ use draft_locks::{LockManager, LockType};
 fn acquire_and_release() {
     let dir = tempfile::tempdir().unwrap();
     let lm = LockManager::new(dir.path());
+    let sidecar = dir.path().join("locks/promotion.lock");
     {
         let _g = lm
-            .acquire(LockType::Submit, Duration::from_secs(1))
+            .acquire(LockType::Promotion, Duration::from_secs(1))
             .unwrap();
-        // Lock file should exist while held.
-        assert!(dir.path().join("locks/submit.lock").exists());
+        assert!(sidecar.exists(), "the sidecar is created on acquisition");
     }
-    // Released on drop.
-    assert!(!dir.path().join("locks/submit.lock").exists());
+
+    // The sidecar deliberately survives release. The lock belongs to the open
+    // descriptor, not to the file's existence, and the path has to stay stable:
+    // if releasing deleted it, a later acquirer would create a *new inode* and
+    // lock that, while anyone still holding the old one believed they had
+    // exclusion. Deleting it would reintroduce exactly the race the
+    // descriptor-owned lock removes.
+    assert!(
+        sidecar.exists(),
+        "the lock sidecar must be stable across acquisitions"
+    );
+
+    // What release actually means: the lock is grantable again.
+    lm.acquire(LockType::Promotion, Duration::from_millis(200))
+        .expect("the lock must be free once its guard is dropped");
 }
 
 #[test]
@@ -24,11 +37,11 @@ fn second_acquire_times_out_while_held() {
     let dir = tempfile::tempdir().unwrap();
     let lm = LockManager::new(dir.path());
     let _g = lm
-        .acquire(LockType::Submit, Duration::from_secs(1))
+        .acquire(LockType::Promotion, Duration::from_secs(1))
         .unwrap();
-    // A concurrent submit lock must not be grantable.
+    // A concurrent promotion lock must not be grantable.
     let err = lm
-        .acquire(LockType::Submit, Duration::from_millis(200))
+        .acquire(LockType::Promotion, Duration::from_millis(200))
         .unwrap_err();
     assert_eq!(
         err.kind,
@@ -41,7 +54,7 @@ fn different_lock_types_are_independent() {
     let dir = tempfile::tempdir().unwrap();
     let lm = LockManager::new(dir.path());
     let _a = lm
-        .acquire(LockType::Submit, Duration::from_secs(1))
+        .acquire(LockType::Promotion, Duration::from_secs(1))
         .unwrap();
     // A different lock type is unaffected.
     let _b = lm

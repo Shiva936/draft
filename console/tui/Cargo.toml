@@ -1,0 +1,11 @@
+[package]
+name = "draft-console-tui"
+version = "0.3.4"
+edition = "2021"
+
+[dependencies]
+draft-console-application = { path = "../application" }
+draft-ipc = { path = "../../services/ipc" }
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
+crossterm = "0.29"
+serde_json = "1.0"

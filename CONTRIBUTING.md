@@ -23,7 +23,8 @@ The workspace is split into:
 
 - `core/`: Draft-native data model and local store behavior;
 - `cli/`: command-line interface that works without a daemon;
-- `tui/`: terminal review rendering and interaction layer;
+- `console/application/`: typed Rust client for the Console application protocol;
+- `console/tui/`: reducer-driven terminal frontend with no direct core or project-filesystem access;
 - `console/`: browser Console gateway, `web/` source, and embedded `dist/` assets;
 - `services/`: optional local background services;
 - `docs/`: public user and maintainer documentation.

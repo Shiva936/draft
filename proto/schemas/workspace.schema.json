@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/workspace.schema.json",
+  "title": "Draft Workspace",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "project",
+    "base_revision",
+    "attribution",
+    "state",
+    "staged_edits",
+    "operation_journal",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^wsp_[A-Za-z0-9_]+$"
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_revision": {
+      "$ref": "#/$defs/workspace_revision"
+    },
+    "attribution": {
+      "type": "object",
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "task",
+            "change",
+            "candidate_execution",
+            "review"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "state": {
+      "enum": [
+        "open",
+        "committed",
+        "abandoned"
+      ]
+    },
+    "staged_edits": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "path",
+              "content"
+            ],
+            "properties": {
+              "kind": {
+                "const": "write_file"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "path"
+            ],
+            "properties": {
+              "kind": {
+                "const": "create_directory"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "from",
+              "to"
+            ],
+            "properties": {
+              "kind": {
+                "const": "rename"
+              },
+              "from": {
+                "type": "string",
+                "minLength": 1
+              },
+              "to": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind",
+              "path",
+              "recursive"
+            ],
+            "properties": {
+              "kind": {
+                "const": "delete"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "recursive": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "operation_journal": {
+      "type": "array"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resulting_revision": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/workspace_revision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "workspace_revision": {
+      "type": "object",
+      "required": ["schema_version", "workspace_id", "content_digest"],
+      "properties": {
+        "schema_version": { "type": "integer", "const": 1 },
+        "workspace_id": { "type": "string", "minLength": 1 },
+        "content_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

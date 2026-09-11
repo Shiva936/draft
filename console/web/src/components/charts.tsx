@@ -131,7 +131,7 @@ export function Meter({ segments }: { segments: Segment[] }) {
   );
 }
 
-/** Added/removed proportion bar used by the pack change overview. */
+/** Added/removed proportion bar used by the change change overview. */
 export function DiffBar({ added, removed, width = 70 }: { added: number; removed: number; width?: number }) {
   const total = added + removed;
   if (total <= 0) return null;

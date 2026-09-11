@@ -4,11 +4,11 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .editor-workbench {
+  .resource-workbench {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 
-  .editor-workbench > .file-inspector {
+  .resource-workbench > .file-inspector {
     grid-column: 1 / -1;
   }
 
@@ -174,7 +174,7 @@
   .grid-4,
   .grid-5,
   .settings-layout,
-  .editor-workbench,
+  .resource-workbench,
   .pack-workbench,
   .theme-options {
     grid-template-columns: minmax(0, 1fr);

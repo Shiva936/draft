@@ -1,0 +1,65 @@
+{
+  "view_rules": {
+    "exclusions": []
+  },
+  "control_policy": {
+    "protections": [
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/.env"
+        },
+        "reason": "environment files usually hold credentials"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/.env.*"
+        },
+        "reason": "environment files usually hold credentials"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/*.pem"
+        },
+        "reason": "private key material"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/*.key"
+        },
+        "reason": "private key material"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/id_rsa"
+        },
+        "reason": "private key material"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/*.p12"
+        },
+        "reason": "key store"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/*.pfx"
+        },
+        "reason": "key store"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/.aws/credentials"
+        },
+        "reason": "cloud credentials"
+      }
+    ]
+  }
+}

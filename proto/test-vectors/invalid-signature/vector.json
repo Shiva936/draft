@@ -2,42 +2,38 @@
   "name": "invalid-signature",
   "expect": "invalid",
   "object": "receipt",
-  "notes": "signature bytes do not match canonical receipt payload",
+  "notes": "the signature does not cover this payload and binding; the envelope is well-formed, which is exactly why structure and signature are reported separately",
   "payload_schema": "receipt.schema.json",
   "payload": {
-    "schema_version": 1,
-    "receipt_id": "rcp_0a1b2c3d4e5f",
-    "event_type": "ProjectStateVerified",
-    "subject_id": "pck_demo",
-    "actor_id": "act_demo",
-    "candidate_id": null,
-    "workspace_id": "ws_demo",
-    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "timestamp": "2026-07-01T00:00:00Z",
-    "policy_version": "0.3.4",
-    "draft_version": "0.3.4",
-    "signature_algorithm": "Ed25519",
-    "public_key_id": "key_untrusted",
+    "payload": {
+      "receipt_id": "rcp_0a1b2c3d4e5f",
+      "subject": {
+        "kind": "promotion",
+        "promotion": "pro_0a1b2c3d4e5f",
+        "baseline": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "issued_by": "act_demo",
+      "issued_at": 1751328000000000000
+    },
+    "signer": {
+      "signer_identity": "act_demo",
+      "signing_key_id": "key_untrusted",
+      "signature_algorithm": "ed25519"
+    },
     "signature": "AAAA-not-a-valid-signature-over-canonical-bytes"
   },
   "invalid_payload": {
-    "schema_version": 1,
-    "receipt_id": "receipt-without-prefix",
-    "event_type": "ProjectStateVerified",
-    "subject_id": "pck_demo",
-    "actor_id": "act_demo",
-    "candidate_id": null,
-    "workspace_id": "ws_demo",
-    "workspace_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "event_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "previous_event_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "timestamp": "2026-07-01T00:00:00Z",
-    "policy_version": "0.3.4",
-    "draft_version": "0.3.4",
-    "signature_algorithm": "Ed25519",
-    "public_key_id": "key_untrusted",
-    "signature": "AAAA"
+    "payload": {
+      "receipt_id": "rcp_0a1b2c3d4e5f",
+      "subject": { "kind": "promotion", "promotion": "pro_0a1b2c3d4e5f" },
+      "issued_by": "act_demo",
+      "issued_at": 1751328000000000000
+    },
+    "signer": {
+      "signer_identity": "act_demo",
+      "signing_key_id": "key_untrusted",
+      "signature_algorithm": "rsa"
+    },
+    "signature": ""
   }
 }

@@ -2,8 +2,8 @@
 //!
 //! Holds daemon runtime caches and resumable job records. This is **not** the
 //! source of portable project truth — that lives in each workspace's `.draft/`
-//! (FR-SVC-007). The canonical cross-project registry is owned by
-//! `draft_core::workspace::registry`.
+//! The canonical cross-project registry is owned by
+//! `draft_core::project::registry`.
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +11,7 @@ use draft_core::support::error::{DraftError, DraftErrorKind, DraftResult};
 use serde::{Deserialize, Serialize};
 
 pub fn state_dir() -> DraftResult<PathBuf> {
-    Ok(draft_core::workspace::home::DraftGlobalStore::locate()?.runtime_dir())
+    Ok(draft_core::project::home::DraftGlobalStore::locate()?.runtime_dir())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,7 +138,7 @@ pub struct ServiceStore {
 
 impl ServiceStore {
     pub fn open_default() -> DraftResult<Self> {
-        let global = draft_core::workspace::home::DraftGlobalStore::locate()?;
+        let global = draft_core::project::home::DraftGlobalStore::locate()?;
         Self::open_with_namespaces(global.runtime_dir(), global.operations_dir())
     }
 

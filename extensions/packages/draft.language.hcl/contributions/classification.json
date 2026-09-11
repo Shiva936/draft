@@ -1,0 +1,18 @@
+{
+  "class_id": "draft.language.hcl/source",
+  "display_name": "HCL source",
+  "applies_to": {
+    "predicate": "any",
+    "of": [
+      {
+        "predicate": "path_suffix",
+        "suffix": ".tf"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".hcl"
+      }
+    ]
+  },
+  "attributes": []
+}

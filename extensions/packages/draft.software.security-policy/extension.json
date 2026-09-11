@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "draft.software.security-policy",
+  "name": "Software security policy",
+  "version": "1.0.0",
+  "publisher": "draft",
+  "draft_api": "^0.3.4",
+  "contributions": [
+    {
+      "id": "risk-rules",
+      "kind": "risk_rule",
+      "path": "contributions/risk-rules.json"
+    }
+  ],
+  "documentation": [
+    "docs/readme.md"
+  ],
+  "licenses": [
+    "LICENSE.txt"
+  ],
+  "assets": [],
+  "schemas": [],
+  "permissions": [],
+  "description": "Application-domain security risk rules.",
+  "keywords": [
+    "security",
+    "risk",
+    "policy"
+  ]
+}

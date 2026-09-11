@@ -1,31 +1,140 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://draft.dev/schemas/receipt.schema.json",
-  "title": "Draft Signed Receipt",
+  "title": "Draft Receipt Envelope",
+  "x-draft-format-revision": 1,
+  "description": "An immutable, signed attestation that one exact fact happened. v1 receipts attest exactly three things: a Promotion that accepted a Baseline, a publication attempt's primary outcome, or an authorized Resolution of one.",
   "type": "object",
   "required": [
-    "schema_version", "receipt_id", "event_type", "subject_id", "actor_id",
-    "candidate_id", "workspace_id", "workspace_hash", "event_hash",
-    "previous_event_hash", "timestamp", "policy_version", "draft_version",
-    "signature_algorithm", "public_key_id", "signature"
+    "payload",
+    "signer",
+    "signature"
   ],
+  "additionalProperties": false,
   "properties": {
-    "schema_version": { "const": 1 },
-    "receipt_id": { "type": "string", "pattern": "^rcp_[A-Za-z0-9_-]+$" },
-    "event_type": { "type": "string", "minLength": 1 },
-    "subject_id": { "type": ["string", "null"] },
-    "actor_id": { "type": "string", "minLength": 1 },
-    "candidate_id": { "type": ["string", "null"] },
-    "workspace_id": { "type": "string", "minLength": 1 },
-    "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "event_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "previous_event_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "timestamp": { "type": "string", "format": "date-time" },
-    "policy_version": { "type": "string" },
-    "draft_version": { "type": "string", "minLength": 1 },
-    "signature_algorithm": { "const": "Ed25519" },
-    "public_key_id": { "type": "string", "minLength": 1 },
-    "signature": { "type": "string", "minLength": 1 }
+    "payload": {
+      "$ref": "#/$defs/payload"
+    },
+    "signer": {
+      "$ref": "#/$defs/signer_binding"
+    },
+    "signature": {
+      "description": "Detached base64 signature over the canonical signing message: the payload and the signer binding together, framed under the frozen domain separator.",
+      "type": "string",
+      "minLength": 1
+    }
   },
-  "additionalProperties": false
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "required": [
+        "receipt_id",
+        "subject",
+        "issued_by",
+        "issued_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "receipt_id": {
+          "description": "Inside the payload, so the signature covers it: a signed payload cannot be re-filed under a different id.",
+          "type": "string",
+          "pattern": "^rcp_[A-Za-z0-9_-]+$"
+        },
+        "subject": {
+          "$ref": "#/$defs/subject"
+        },
+        "issued_by": {
+          "type": "string",
+          "pattern": "^act_[A-Za-z0-9_-]+$"
+        },
+        "issued_at": {
+          "description": "Nanoseconds since the epoch. An integer, not a formatted string, so canonical bytes cannot vary by formatting.",
+          "type": "integer"
+        }
+      }
+    },
+    "subject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "promotion",
+            "baseline"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "promotion"
+            },
+            "promotion": {
+              "type": "string",
+              "pattern": "^pro_[A-Za-z0-9_-]+$"
+            },
+            "baseline": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "outcome"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "publication_outcome"
+            },
+            "outcome": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "resolution"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "publication_resolution"
+            },
+            "resolution": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        }
+      ]
+    },
+    "signer_binding": {
+      "description": "Non-secret throughout: an identity, a key identifier and an algorithm name. Inside the signed bytes, so a valid signature cannot be rewritten to claim a different signer.",
+      "type": "object",
+      "required": [
+        "signer_identity",
+        "signing_key_id",
+        "signature_algorithm"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "signer_identity": {
+          "type": "string",
+          "pattern": "^act_[A-Za-z0-9_-]+$"
+        },
+        "signing_key_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature_algorithm": {
+          "const": "ed25519"
+        }
+      }
+    }
+  }
 }

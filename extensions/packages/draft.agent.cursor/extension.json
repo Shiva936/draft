@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "draft.agent.cursor",
+  "name": "Cursor",
+  "version": "1.0.0",
+  "publisher": "draft",
+  "draft_api": "^0.3.4",
+  "contributions": [
+    {
+      "id": "tool-action",
+      "kind": "tool_action",
+      "path": "contributions/tool-action.json"
+    },
+    {
+      "id": "candidate-preset",
+      "kind": "candidate_preset",
+      "path": "contributions/candidate-preset.json"
+    }
+  ],
+  "documentation": [
+    "docs/readme.md"
+  ],
+  "licenses": [
+    "LICENSE.txt"
+  ],
+  "assets": [],
+  "schemas": [],
+  "permissions": [
+    "process.execute"
+  ],
+  "description": "Runs Cursor as a Draft candidate and converts what it proposes.",
+  "keywords": [
+    "agent",
+    "candidate",
+    "cursor"
+  ]
+}

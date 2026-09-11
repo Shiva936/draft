@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft CoverageEvidence",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "claims",
+    "coverage_evidence_root"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "provider_binding",
+          "provider_semantic_definition",
+          "domain",
+          "status",
+          "attempted",
+          "committed"
+        ],
+        "properties": {
+          "provider_binding": {
+            "type": "string",
+            "pattern": "^pbd_[A-Za-z0-9_-]+$"
+          },
+          "provider_semantic_definition": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "complete",
+              "incomplete",
+              "not_observed"
+            ]
+          },
+          "observation_run": {
+            "type": "object",
+            "required": [
+              "id",
+              "digest"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^run_[A-Za-z0-9_-]+$"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          },
+          "attempted": {
+            "type": "boolean"
+          },
+          "committed": {
+            "type": "boolean"
+          },
+          "known_gaps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "coverage_evidence_root": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/coverage-evidence.schema.json"
+}

@@ -1,0 +1,21 @@
+[package]
+name = "draft-extension-contract"
+version = "0.3.4"
+edition = "2021"
+description = "Draft's portable public extension contract: manifests, packages, catalogs, canonicalization, digests, compatibility, and signature verification."
+license = "Apache-2.0"
+repository = "https://github.com/Shiva936/draft"
+readme = "README.md"
+
+[dependencies]
+# The portable DCG contract owns the identifier grammar, canonical JSON and the
+# Ed25519 verification primitive. Depending on it is what keeps those
+# definitions singular: a second copy here could drift, and a canonical value
+# whose meaning differs between two crates is not canonical.
+draft-dcg-contract = { version = "0.3.4", path = "../dcg-contract" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ed25519-dalek = "2.1"
+base64 = "0.22"
+sha2 = "0.10"
+semver = "1"

@@ -41,6 +41,43 @@
         "cancelled"
       ]
     },
+    "phase": {
+      "enum": [
+        "prepared",
+        "running",
+        "finalizing",
+        "completed",
+        "failed_before_finalization",
+        "cancelled_before_finalization",
+        "safely_retryable",
+        "reconciliation_required"
+      ]
+    },
+    "finalization_started_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "target_identity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "known_result_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recovery_guidance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "created_at": {
       "type": "string",
       "format": "date-time"

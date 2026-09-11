@@ -74,7 +74,7 @@ export function Projects() {
   const filtered = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const matching = rows.filter((row) => {
-      const haystack = `${row.project.name} ${row.project.repository_path} ${row.project.workspace_id}`.toLowerCase();
+      const haystack = `${row.project.name} ${row.project.project_path} ${row.project.workspace_id}`.toLowerCase();
       if (needle && !haystack.includes(needle)) return false;
       if (health === "healthy" && statusTone(row.freshness) !== "success") return false;
       if (health === "attention" && statusTone(row.freshness) === "success") return false;
@@ -221,7 +221,7 @@ export function Projects() {
                             <Icon name="package" size={18} />
                             <div className="cell-text">
                               <strong>{project.name}</strong>
-                              <small>{project.repository_path}</small>
+                              <small>{project.project_path}</small>
                             </div>
                             {starred.has(project.workspace_id) && (
                               <Icon name="star" size={14} className="warning" label="Starred" />
@@ -339,7 +339,7 @@ function ProjectDetail({
   return (
     <DetailDrawer
       title={query.data?.project.name ?? workspaceId}
-      subtitle={query.data?.project.repository_path}
+      subtitle={query.data?.project.project_path}
       badges={query.data ? <StatusBadge value={query.data.project.health} /> : undefined}
       headerActions={
         <button
@@ -361,20 +361,20 @@ function ProjectDetail({
     >
       <QueryState query={query} empty={<EmptyState inline icon="package" label="Project state is unavailable." />}>
         {(project: ProjectSummary) => {
-          const activePack = project.packs.find((pack) => pack.submit_state !== "submitted") ?? project.packs[0];
+          const activeChange = project.changes.find((change) => change.submit_state !== "submitted") ?? project.changes[0];
           const openTasks = project.tasks.filter((task) => !["completed", "cancelled"].includes(task.status ?? "open"));
           const changes = Array.isArray((project.status as any)?.changes) ? (project.status as any).changes.length : null;
 
           return (
             <>
               <div className="grid-2">
-                <button className="button" onClick={() => navigate(`/projects/${encodeURIComponent(workspaceId)}/tasks`)}>
+                <button className="button" onClick={() => navigate(`/projects/${encodeURIComponent(workspaceId)}/work`)}>
                   <Icon name="list-checks" size={16} />
                   Tasks
                 </button>
-                <button className="button" onClick={() => navigate(`/projects/${encodeURIComponent(workspaceId)}/packs`)}>
+                <button className="button" onClick={() => navigate(`/projects/${encodeURIComponent(workspaceId)}/work/changes`)}>
                   <Icon name="layers" size={16} />
-                  Packs
+                  Changes
                 </button>
               </div>
 
@@ -383,8 +383,8 @@ function ProjectDetail({
                 <Definitions rows>
                   <dt>Open tasks</dt>
                   <dd>{formatCount(openTasks.length)}</dd>
-                  <dt>Packs</dt>
-                  <dd>{formatCount(project.packs.length)}</dd>
+                  <dt>Changes</dt>
+                  <dd>{formatCount(project.changes.length)}</dd>
                   <dt>Needs attention</dt>
                   <dd>{formatCount(project.inbox.length)}</dd>
                   <dt>Uncommitted changes</dt>
@@ -393,21 +393,21 @@ function ProjectDetail({
               </section>
 
               <section className="stack tight">
-                <h3>Active pack</h3>
-                {activePack ? (
+                <h3>Active change</h3>
+                {activeChange ? (
                   <Link
                     className="row-item"
-                    to={`/projects/${encodeURIComponent(workspaceId)}/packs/${encodeURIComponent(activePack.pack_id)}/summary`}
+                    to={`/projects/${encodeURIComponent(workspaceId)}/graph`}
                   >
                     <Icon name="layers" size={16} />
                     <div className="row-main">
-                      <strong className="mono">{activePack.pack_id}</strong>
-                      <small>{activePack.name}</small>
+                      <strong className="mono">{activeChange.change_id}</strong>
+                      <small>{activeChange.name}</small>
                     </div>
-                    <StatusBadge value={activePack.submit_state} />
+                    <StatusBadge value={activeChange.submit_state} />
                   </Link>
                 ) : (
-                  <p className="muted">No active pack.</p>
+                  <p className="muted">No active change.</p>
                 )}
               </section>
 

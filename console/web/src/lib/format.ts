@@ -62,8 +62,8 @@ export function initials(name: string | null | undefined): string | null {
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
 
-export function relative(value: string | null | undefined): string {
-  if (!value) return NONE;
+export function relative(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return NONE;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return NONE;
   const seconds = Math.round((Date.now() - date.getTime()) / 1000);
@@ -103,8 +103,8 @@ export function formatDate(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? NONE : dateFormat.format(date);
 }
 
-export function formatDateTime(value: string | null | undefined): string {
-  if (!value) return NONE;
+export function formatDateTime(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === "") return NONE;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? NONE : dateTimeFormat.format(date);
 }
@@ -127,10 +127,10 @@ export function formatCount(value: number | null | undefined): string {
 }
 
 /**
- * A pack's revision is a canonical revision id, not a version number, so it is
+ * A change's revision is a canonical revision id, not a version number, so it is
  * rendered as a shortened identifier rather than a `v1`-style label.
  */
-export function packRevisionLabel(revision: number | string | null | undefined): string | null {
+export function changeRevisionLabel(revision: number | string | null | undefined): string | null {
   if (revision == null) return null;
   if (typeof revision === "number") return `v${revision}`;
   const trimmed = revision.trim();
@@ -152,6 +152,13 @@ export function numberFrom(value: Record<string, unknown> | undefined, ...keys: 
   return null;
 }
 
+/**
+ * The last segment of a `file`-scheme locator body, for display.
+ *
+ * Only meaningful for that scheme, and only for display. Another adapter's body
+ * has no segments, so callers pass the whole body through
+ * [`resourceLabel`] instead of splitting it.
+ */
 export function basename(path: string): string {
   const parts = path.split("/").filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -163,46 +170,56 @@ export function dirname(path: string): string {
   return parts.join("/");
 }
 
-const languageByExtension: Record<string, string> = {
-  ts: "TypeScript",
-  tsx: "TypeScript",
-  js: "JavaScript",
-  jsx: "JavaScript",
-  mjs: "JavaScript",
-  cjs: "JavaScript",
-  json: "JSON",
-  rs: "Rust",
-  py: "Python",
-  go: "Go",
-  java: "Java",
-  c: "C",
-  h: "C",
-  cc: "C++",
-  cpp: "C++",
-  hpp: "C++",
-  css: "CSS",
-  scss: "CSS",
-  html: "HTML",
-  htm: "HTML",
-  xml: "XML",
-  md: "Markdown",
-  markdown: "Markdown",
-  sql: "SQL",
-  yml: "YAML",
-  yaml: "YAML",
-  toml: "TOML",
-  sh: "Shell",
-  bash: "Shell",
+/** The locator scheme Draft's built-in filesystem adapter owns. */
+export const FILE_SCHEME = "file";
+
+/**
+ * How to label a resource in a list.
+ *
+ * The body as given for any scheme but `file`, and the trailing segment for
+ * `file` — because that adapter's bodies genuinely are paths and users read
+ * them that way. The Console never splits a body it does not own.
+ */
+export function resourceLabel(locator: { scheme: string; body: string } | undefined): string {
+  if (!locator) return "";
+  return locator.scheme === FILE_SCHEME ? basename(locator.body) : locator.body;
+}
+
+/**
+ * How to label a resource's classification.
+ *
+ * Returns a **list**, because a resource genuinely carries several classes at
+ * once — a text document *and* a language source — and picking one would
+ * discard a correct assignment. Empty means nothing installed recognizes it,
+ * which is not an error and must not read as one.
+ */
+export type ResourceClassification = {
+  classes?: string[];
+  class_collisions?: string[];
 };
+
+export function resourceClassLabels(resource: ResourceClassification | undefined): string[] {
+  return resource?.classes ?? [];
+}
+
+/**
+ * A single-line summary of a resource's classes, for narrow surfaces.
+ *
+ * Says plainly when installed extensions disagree, rather than silently showing
+ * fewer classes than were assigned.
+ */
+export function classificationSummary(resource: ResourceClassification | undefined): string {
+  const classes = resourceClassLabels(resource);
+  const collisions = resource?.class_collisions ?? [];
+  if (classes.length === 0 && collisions.length === 0) return "Unclassified";
+  const parts = classes.length > 0 ? classes.join(", ") : "Unclassified";
+  return collisions.length > 0 ? `${parts} (${collisions.length} disputed)` : parts;
+}
 
 export function extensionOf(path: string): string {
   const name = basename(path);
   const index = name.lastIndexOf(".");
   return index > 0 ? name.slice(index + 1).toLowerCase() : "";
-}
-
-export function languageOf(path: string): string {
-  return languageByExtension[extensionOf(path)] ?? "Plain text";
 }
 
 /** Detects the newline convention of a file so the editor status bar can report it. */

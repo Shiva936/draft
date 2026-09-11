@@ -11,9 +11,9 @@
     "attempt",
     "previous_attempt",
     "command",
-    "base_stable_head",
-    "parent_pack",
-    "produced_pack",
+    "base_baseline",
+    "parent_change",
+    "produced_change",
     "evidence_ids",
     "receipt_ids",
     "started_at",
@@ -68,16 +68,16 @@
     "command": {
       "type": "array"
     },
-    "base_stable_head": {
+    "base_baseline": {
       "type": "string"
     },
-    "parent_pack": {
+    "parent_change": {
       "type": [
         "string",
         "null"
       ]
     },
-    "produced_pack": {
+    "produced_change": {
       "type": [
         "string",
         "null"

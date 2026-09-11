@@ -1,0 +1,34 @@
+{
+  "class_id": "draft.language.javascript-typescript/source",
+  "display_name": "JavaScript and TypeScript source",
+  "applies_to": {
+    "predicate": "any",
+    "of": [
+      {
+        "predicate": "path_suffix",
+        "suffix": ".js"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".jsx"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".ts"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".tsx"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".mjs"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".cjs"
+      }
+    ]
+  },
+  "attributes": []
+}

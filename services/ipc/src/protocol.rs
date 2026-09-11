@@ -15,6 +15,7 @@ pub const IPC_CAPABILITIES: &[&str] = &[
     "workspace_revisions",
     "fenced_leases",
     "console_http",
+    "console_application",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

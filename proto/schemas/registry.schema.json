@@ -14,7 +14,7 @@
     "entry": {
       "type": "object",
       "required": [
-        "schema_version", "workspace_id", "name", "repository_path",
+        "schema_version", "workspace_id", "name", "project_path",
         "storage_path", "created_at", "last_seen_at", "draft_version",
         "health", "location_revision", "path_history", "last_workspace_revision"
       ],
@@ -22,11 +22,11 @@
         "schema_version": { "const": 1 },
         "workspace_id": { "type": "string", "minLength": 1 },
         "name": { "type": "string" },
-        "repository_path": { "type": "string" },
+        "project_path": { "type": "string" },
         "storage_path": { "type": "string" },
         "created_at": { "type": "string", "format": "date-time" },
         "last_seen_at": { "type": "string", "format": "date-time" },
-        "last_stable_head": { "type": ["string", "null"] },
+        "last_accepted_baseline": { "type": ["string", "null"] },
         "draft_version": { "type": "string", "minLength": 1 },
         "health": { "type": "string" },
         "location_revision": { "type": "integer", "minimum": 1 },

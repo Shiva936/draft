@@ -1,10 +1,12 @@
-//! Centralized path-safety guard (PRD §9.2, TDD §9, NFRD §4.4).
+//! Centralized path-safety guard.
 //!
-//! Every path that enters Draft from an untrusted source — pack content,
-//! diffs, imported `.draftpack` entries, export selection, submit, and rollback
-//! targets, risk/test source scanning — must pass through this module. There
-//! is exactly one implementation of "is this path safe?" so the invariant
-//! cannot drift between callers.
+//! See `docs/internals/security.md`.
+//!
+//! Every path that enters Draft from an untrusted source — Change content,
+//! representations, imported `.draftpack` entries, export selection, promotion
+//! and recovery targets, risk/test source scanning — must pass through this
+//! module. There is exactly one implementation of "is this path safe?" so the
+//! invariant cannot drift between callers.
 //!
 //! The guard rejects, uniformly:
 //! - absolute paths (`/etc/passwd`, `C:\...`, `\\server\share`)
@@ -71,7 +73,7 @@ pub fn is_draft_path(rel: &str) -> bool {
 }
 
 /// Validate a workspace-relative path string for use as *content* (a file that
-/// belongs to a pack, diff, import payload, or submit/rollback plan).
+/// belongs to a Change, representation, import payload, or promotion/recovery plan).
 ///
 /// On success returns the slash-normalized relative path. On failure returns
 /// the specific [`PathViolation`].

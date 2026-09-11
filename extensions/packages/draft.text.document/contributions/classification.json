@@ -1,0 +1,126 @@
+{
+  "class_id": "draft.text.document/document",
+  "display_name": "Text document",
+  "applies_to": {
+    "predicate": "any",
+    "of": [
+      {
+        "predicate": "media_type",
+        "equals": "text/plain"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".txt"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".md"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".rst"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".json"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".yaml"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".yml"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".toml"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".ini"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".cfg"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".csv"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".xml"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".html"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".css"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".rs"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".go"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".py"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".js"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".jsx"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".ts"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".tsx"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".c"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".h"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".cc"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".cpp"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".hpp"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".java"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".sh"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".tf"
+      }
+    ]
+  },
+  "attributes": []
+}

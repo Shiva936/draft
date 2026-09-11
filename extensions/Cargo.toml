@@ -1,0 +1,15 @@
+# The official Draft extensions.
+#
+# This is a standalone workspace on purpose: it is shaped like the
+# `draft-extensions` repository it will become, and the Draft platform never
+# builds it. Its only Draft dependency is the published, portable
+# `draft-extension-contract` crate — the public boundary an extension author or
+# publisher consumes.
+[workspace]
+members = ["tools/packager", "tests"]
+resolver = "2"
+
+[workspace.dependencies]
+draft-extension-contract = { version = "0.3.4", path = "../sdk/extension-contract" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

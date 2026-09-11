@@ -1,0 +1,25 @@
+{
+  "expect": "a control record's in-flight attempt and consumed authorizations belong to its own Publication",
+  "name": "publication-control-membership",
+  "payload": {
+    "consumed_retry_authorizations": [
+      "sha256:db81c84aa23b8a28ada7e28fd51199d3bf14c04459b84334e238c8c142080c02"
+    ],
+    "generation": 3,
+    "in_flight_attempt": "pat_000000000001",
+    "next_attempt_number": 2,
+    "publication": "pub_000000000001",
+    "schema_version": 1
+  },
+  "payload_schema": "publication-control.schema.json",
+  "self_consistency_violation": {
+    "consumed_retry_authorizations": [
+      "sha256:db81c84aa23b8a28ada7e28fd51199d3bf14c04459b84334e238c8c142080c02"
+    ],
+    "generation": 3,
+    "in_flight_attempt": "pat_000000000001",
+    "next_attempt_number": 2,
+    "publication": "pub_000000000002",
+    "schema_version": 1
+  }
+}

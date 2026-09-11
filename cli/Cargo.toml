@@ -11,9 +11,9 @@ path = "src/main.rs"
 [dependencies]
 draft-core = { path = "../core" }
 draft-ipc = { path = "../services/ipc" }
-draft-tui = { path = "../tui" }
+draft-console-tui = { path = "../console/tui" }
 draft-console = { path = "../console" }
-draft-adapters = { path = "../services/adapters" }
+draft-extension-service = { path = "../services/extension-service" }
 clap = { version = "4.0", features = ["derive"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }

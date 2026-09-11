@@ -1,14 +1,16 @@
-//! Global identity, candidate registry, and signing-key lifecycle (TDD §11).
+//! Global identity, candidate registry, and signing-key lifecycle.
+//!
+//! See `docs/internals/security.md`.
 //!
 //! The global store owns a single **actor** (the human/device operating Draft)
 //! and a registry of **candidates** (the humans/AIs/tools/services that produce
 //! changes). The actor's Ed25519 private key lives only under `~/.draft/keys`;
 //! its public half and a stable `public_key_id` are what receipts reference.
 
+use crate::project::home::DraftGlobalStore;
 use crate::support::error::{DraftError, DraftResult};
 use crate::support::fsutil::write_json;
 use crate::trust::signing::Keypair;
-use crate::workspace::home::DraftGlobalStore;
 use serde::{Deserialize, Serialize};
 
 /// Stable security actor state stored at `~/.draft/identity/actor.json`.

@@ -4,16 +4,26 @@
 //! current/supported policies are all v1. Public APIs live under their owning
 //! domain namespace.
 
+pub mod activity;
 pub mod app;
+pub mod authority;
 pub mod contracts;
-pub mod operation;
-pub mod pack;
+pub mod dcg;
+pub mod draftpack;
+pub mod evidence;
+pub mod execution;
+pub mod extension;
+pub mod gate;
+pub mod project;
+pub mod promotion;
+pub mod provenance;
+pub mod publication;
 pub mod read_model;
-pub mod review;
+pub mod receipt;
+pub mod recovery;
 pub mod support;
 pub mod task;
 pub mod trust;
-pub mod workspace;
 
 /// Product/package version. Contract compatibility is declared independently
 /// by the typed metadata in [`contracts`].

@@ -1,4 +1,3 @@
-plans/
 target/
 node_modules/
 console/web/.playwright-*.json

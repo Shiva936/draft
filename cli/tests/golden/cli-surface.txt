@@ -1,0 +1,1355 @@
+draft
+  usage: draft <COMMAND>
+  flag: --help
+  flag: --version
+  flag: -V
+  flag: -h
+
+draft daemon
+  usage: draft daemon <COMMAND>
+  flag: --help
+  flag: -h
+
+draft daemon start
+  usage: draft daemon start
+  flag: --help
+  flag: -h
+
+draft daemon stop
+  usage: draft daemon stop
+  flag: --help
+  flag: -h
+
+draft daemon restart
+  usage: draft daemon restart
+  flag: --help
+  flag: -h
+
+draft daemon status
+  usage: draft daemon status [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project
+  usage: draft project <COMMAND>
+  flag: --help
+  flag: -h
+
+draft project list
+  usage: draft project list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project register
+  usage: draft project register [OPTIONS] <PATH>
+  arg: <PATH>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project init
+  usage: draft project init [OPTIONS] [PATH]
+  arg: [PATH]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project relocate
+  usage: draft project relocate [OPTIONS] <WORKSPACE_ID> <DESTINATION>
+  arg: <WORKSPACE_ID>
+  arg: <DESTINATION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project unregister
+  usage: draft project unregister [OPTIONS] <WORKSPACE_ID>
+  arg: <WORKSPACE_ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project adopt-copy
+  usage: draft project adopt-copy [OPTIONS] <PATH>
+  arg: <PATH>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project control
+  usage: draft project control [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project close
+  usage: draft project close [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project provider
+  usage: draft project provider <COMMAND>
+  flag: --help
+  flag: -h
+
+draft project provider list
+  usage: draft project provider list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project provider show
+  usage: draft project provider show [OPTIONS] <BINDING>
+  arg: <BINDING>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project provider bind
+  usage: draft project provider bind [OPTIONS] --semantics <SEMANTICS> --definition <DEFINITION> --profile <PROFILE> <NAME>
+  arg: <NAME>
+  flag: --definition
+  flag: --help
+  flag: --json
+  flag: --profile
+  flag: --semantics
+  flag: -h
+
+draft project provider redefine
+  usage: draft project provider redefine [OPTIONS] --semantics <SEMANTICS> --definition <DEFINITION> <BINDING>
+  arg: <BINDING>
+  flag: --definition
+  flag: --help
+  flag: --json
+  flag: --semantics
+  flag: -h
+
+draft project provider profile
+  usage: draft project provider profile [OPTIONS] --profile <PROFILE> <BINDING>
+  arg: <BINDING>
+  flag: --help
+  flag: --json
+  flag: --profile
+  flag: -h
+
+draft project provider unbind
+  usage: draft project provider unbind [OPTIONS] <BINDING>
+  arg: <BINDING>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft project provider rebind
+  usage: draft project provider rebind [OPTIONS] <BINDING>
+  arg: <BINDING>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change
+  usage: draft change <COMMAND>
+  flag: --help
+  flag: -h
+
+draft change new
+  usage: draft change new [OPTIONS] <INTENT>
+  arg: <INTENT>
+  flag: --help
+  flag: --json
+  flag: --scope
+  flag: -h
+
+draft change list
+  usage: draft change list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change show
+  usage: draft change show [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change intent
+  usage: draft change intent <COMMAND>
+  flag: --help
+  flag: -h
+
+draft change intent show
+  usage: draft change intent show [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change intent set
+  usage: draft change intent set [OPTIONS] <CHANGE> <INTENT>
+  arg: <CHANGE>
+  arg: <INTENT>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change intent amend
+  usage: draft change intent amend [OPTIONS] <CHANGE> <INTENT>
+  arg: <CHANGE>
+  arg: <INTENT>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change select
+  usage: draft change select [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change inspect
+  usage: draft change inspect [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change depends
+  usage: draft change depends [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change conflicts
+  usage: draft change conflicts [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change compose
+  usage: draft change compose [OPTIONS] [CHANGES] [CHANGES]...
+  arg: [CHANGES] [CHANGES]...
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change disperse
+  usage: draft change disperse [OPTIONS] [CHANGES] [CHANGES]...
+  arg: [CHANGES] [CHANGES]...
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change impact
+  usage: draft change impact [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change coverage
+  usage: draft change coverage [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change representation
+  usage: draft change representation <COMMAND>
+  flag: --help
+  flag: -h
+
+draft change representation list
+  usage: draft change representation list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change representation show
+  usage: draft change representation show [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change receipts
+  usage: draft change receipts [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change scope
+  usage: draft change scope [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change revision
+  usage: draft change revision <COMMAND>
+  flag: --help
+  flag: -h
+
+draft change revision seal
+  usage: draft change revision seal [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change revision list
+  usage: draft change revision list [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change revision show
+  usage: draft change revision show [OPTIONS] <CHANGE> <REVISION>
+  arg: <CHANGE>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change checkpoint
+  usage: draft change checkpoint [OPTIONS] <MESSAGE>
+  arg: <MESSAGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change candidate
+  usage: draft change candidate <COMMAND>
+  flag: --help
+  flag: -h
+
+draft change candidate list
+  usage: draft change candidate list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change candidate show
+  usage: draft change candidate show [OPTIONS] <CANDIDATE_NAME>
+  arg: <CANDIDATE_NAME>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change candidate add
+  usage: draft change candidate add [OPTIONS] <CANDIDATE_NAME> -- <TEMPLATE>...
+  arg: <CANDIDATE_NAME>
+  arg: <TEMPLATE>...
+  flag: --help
+  flag: --json
+  flag: --kind
+  flag: -h
+
+draft change candidate update
+  usage: draft change candidate update [OPTIONS] <CANDIDATE_NAME> -- <TEMPLATE>...
+  arg: <CANDIDATE_NAME>
+  arg: <TEMPLATE>...
+  flag: --help
+  flag: --json
+  flag: --kind
+  flag: -h
+
+draft change candidate remove
+  usage: draft change candidate remove [OPTIONS] <CANDIDATE_NAME>
+  arg: <CANDIDATE_NAME>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change abandon
+  usage: draft change abandon [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change reopen
+  usage: draft change reopen [OPTIONS] <CHANGE>
+  arg: <CHANGE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change compare
+  usage: draft change compare [OPTIONS] <LEFT> <RIGHT>
+  arg: <LEFT>
+  arg: <RIGHT>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change evidence
+  usage: draft change evidence <COMMAND>
+  flag: --help
+  flag: -h
+
+draft change evidence run
+  usage: draft change evidence run [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change evidence list
+  usage: draft change evidence list [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change evidence show
+  usage: draft change evidence show [OPTIONS] <EVIDENCE>
+  arg: <EVIDENCE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change assess
+  usage: draft change assess [OPTIONS] --risk <RISK> <REVISION>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: --rationale
+  flag: --risk
+  flag: -h
+
+draft change review
+  usage: draft change review [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --comment
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change decide
+  usage: draft change decide [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --approve
+  flag: --gate
+  flag: --help
+  flag: --json
+  flag: --reason
+  flag: --reject
+  flag: -h
+
+draft change gates
+  usage: draft change gates <COMMAND>
+  flag: --help
+  flag: -h
+
+draft change gates evaluate
+  usage: draft change gates evaluate [OPTIONS] <REVISION>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: --waiver
+  flag: -h
+
+draft change gates list
+  usage: draft change gates list [OPTIONS] <CHANGE> <REVISION>
+  arg: <CHANGE>
+  arg: <REVISION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft change gates waive
+  usage: draft change gates waive [OPTIONS] --reason <REASON> <REVISION> <CONDITION>
+  arg: <REVISION>
+  arg: <CONDITION>
+  flag: --days
+  flag: --help
+  flag: --json
+  flag: --reason
+  flag: -h
+
+draft resource
+  usage: draft resource <COMMAND>
+  flag: --help
+  flag: -h
+
+draft resource observation
+  usage: draft resource observation <COMMAND>
+  flag: --help
+  flag: -h
+
+draft resource observation show
+  usage: draft resource observation show [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft resource observation coverage
+  usage: draft resource observation coverage [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft resource observation provenance
+  usage: draft resource observation provenance [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: --snapshot-digest
+  flag: -h
+
+draft resource observation pending
+  usage: draft resource observation pending [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft resource observation preview
+  usage: draft resource observation preview [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft resource observation adopt
+  usage: draft resource observation adopt [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft resource observation transitions
+  usage: draft resource observation transitions [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft resource state
+  usage: draft resource state [OPTIONS] <RESOURCE>
+  arg: <RESOURCE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft activity
+  usage: draft activity <COMMAND>
+  flag: --help
+  flag: -h
+
+draft activity list
+  usage: draft activity list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: --limit
+  flag: --page
+  flag: --raw
+  flag: -h
+
+draft activity show
+  usage: draft activity show [OPTIONS] <EVENT_ID>
+  arg: <EVENT_ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft activity verify
+  usage: draft activity verify [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft recover
+  usage: draft recover <COMMAND>
+  flag: --help
+  flag: -h
+
+draft recover plan
+  usage: draft recover plan [OPTIONS] <REFERENCE>
+  arg: <REFERENCE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft recover run
+  usage: draft recover run [OPTIONS] <REFERENCE>
+  arg: <REFERENCE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft recover dry-run
+  usage: draft recover dry-run [OPTIONS] <REFERENCE>
+  arg: <REFERENCE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft init
+  usage: draft init [OPTIONS]
+  flag: --global
+  flag: --help
+  flag: --json
+  flag: -b
+  flag: -h
+
+draft doctor
+  usage: draft doctor [OPTIONS] [COMMAND]
+  flag: --global
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft doctor sync
+  usage: draft doctor sync [OPTIONS]
+  flag: --fix
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft doctor storage
+  usage: draft doctor storage [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft doctor index
+  usage: draft doctor index [OPTIONS]
+  flag: --global
+  flag: --help
+  flag: --json
+  flag: --refresh
+  flag: -h
+
+draft doctor activity
+  usage: draft doctor activity [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: --replay
+  flag: -h
+
+draft doctor receipts
+  usage: draft doctor receipts [OPTIONS] [RECEIPT_ID]
+  arg: [RECEIPT_ID]
+  flag: --all
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft console
+  usage: draft console [COMMAND]
+  flag: --help
+  flag: -h
+
+draft console web
+  usage: draft console web [OPTIONS]
+  flag: --help
+  flag: --no-open
+  flag: --no-preselect
+  flag: --port
+  flag: --project
+  flag: -h
+
+draft console tui
+  usage: draft console tui [OPTIONS]
+  flag: --help
+  flag: --no-preselect
+  flag: --project
+  flag: -h
+
+draft extension
+  usage: draft extension <COMMAND>
+  flag: --help
+  flag: -h
+
+draft extension tool
+  usage: draft extension tool <COMMAND>
+  flag: --help
+  flag: -h
+
+draft extension tool list
+  usage: draft extension tool list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension tool invoke
+  usage: draft extension tool invoke [OPTIONS] <ACTION_ID>
+  arg: <ACTION_ID>
+  flag: --apply
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension source
+  usage: draft extension source <COMMAND>
+  flag: --help
+  flag: -h
+
+draft extension source add
+  usage: draft extension source add [OPTIONS] <ID> <LOCATION>
+  arg: <ID>
+  arg: <LOCATION>
+  flag: --help
+  flag: --https
+  flag: --json
+  flag: --local
+  flag: --root
+  flag: --root-sha256
+  flag: -h
+
+draft extension source list
+  usage: draft extension source list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension source show
+  usage: draft extension source show [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension source remove
+  usage: draft extension source remove [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension source delete
+  usage: draft extension source delete [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension source enable
+  usage: draft extension source enable [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension source disable
+  usage: draft extension source disable [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension source trust
+  usage: draft extension source trust [OPTIONS] --root <ROOT> --fingerprint <FINGERPRINT> <ID>
+  arg: <ID>
+  flag: --fingerprint
+  flag: --help
+  flag: --json
+  flag: --reset
+  flag: --root
+  flag: -h
+
+draft extension source refresh
+  usage: draft extension source refresh [OPTIONS] [ID]
+  arg: [ID]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension search
+  usage: draft extension search [OPTIONS] [QUERY]
+  arg: [QUERY]
+  flag: --capability
+  flag: --help
+  flag: --json
+  flag: --limit
+  flag: --page
+  flag: --refresh
+  flag: --source
+  flag: -h
+
+draft extension list
+  usage: draft extension list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension show
+  usage: draft extension show [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension install
+  usage: draft extension install [OPTIONS] <TARGET>
+  arg: <TARGET>
+  flag: --grant
+  flag: --help
+  flag: --json
+  flag: --source
+  flag: --version
+  flag: -h
+
+draft extension update
+  usage: draft extension update [OPTIONS] [ID]
+  arg: [ID]
+  flag: --all
+  flag: --grant
+  flag: --help
+  flag: --json
+  flag: --source
+  flag: --version
+  flag: -h
+
+draft extension authorize
+  usage: draft extension authorize [OPTIONS] --grant <GRANTS> <ID>
+  arg: <ID>
+  flag: --grant
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension revoke
+  usage: draft extension revoke [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: --permission
+  flag: -h
+
+draft extension uninstall
+  usage: draft extension uninstall [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension enable
+  usage: draft extension enable [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft extension disable
+  usage: draft extension disable [OPTIONS] <ID>
+  arg: <ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config
+  usage: draft config [OPTIONS] [COMMAND]
+  flag: --help
+  flag: -h
+  flag: -k
+
+draft config get
+  usage: draft config get [OPTIONS] <KEY>
+  arg: <KEY>
+  flag: --global
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config set
+  usage: draft config set [OPTIONS] <KEY> <VALUE>
+  arg: <KEY>
+  arg: <VALUE>
+  flag: --global
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config unset
+  usage: draft config unset [OPTIONS] <KEY>
+  arg: <KEY>
+  flag: --global
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config hook
+  usage: draft config hook <COMMAND>
+  flag: --help
+  flag: -h
+
+draft config hook list
+  usage: draft config hook list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+  flag: -k
+
+draft config hook set
+  usage: draft config hook set [OPTIONS] <KEY> <VALUE>
+  arg: <KEY>
+  arg: <VALUE>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config hook unset
+  usage: draft config hook unset [OPTIONS] <KEY>
+  arg: <KEY>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config hook run
+  usage: draft config hook run [OPTIONS] <HOOK_NAME>
+  arg: <HOOK_NAME>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config ignore
+  usage: draft config ignore <COMMAND>
+  flag: --help
+  flag: -h
+
+draft config ignore add
+  usage: draft config ignore add [OPTIONS] <PATTERN>
+  arg: <PATTERN>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config ignore remove
+  usage: draft config ignore remove [OPTIONS] <PATTERN>
+  arg: <PATTERN>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft config ignore list
+  usage: draft config ignore list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft status
+  usage: draft status [OPTIONS]
+  flag: --full
+  flag: --help
+  flag: --json
+  flag: -c
+  flag: -h
+  flag: -p
+
+draft task
+  usage: draft task [COMMAND]
+  flag: --help
+  flag: -h
+
+draft task templates
+  usage: draft task templates [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft task create
+  usage: draft task create [OPTIONS] --goal <GOAL> <NAME>
+  arg: <NAME>
+  flag: --allow
+  flag: --candidate-preset
+  flag: --forbid
+  flag: --goal
+  flag: --help
+  flag: --json
+  flag: --mode
+  flag: --risk
+  flag: --success
+  flag: --template
+  flag: -h
+
+draft task update
+  usage: draft task update [OPTIONS] <TASK>
+  arg: <TASK>
+  flag: --assignee
+  flag: --assignee-kind
+  flag: --clear-assignee
+  flag: --clear-due
+  flag: --due
+  flag: --help
+  flag: --json
+  flag: --priority
+  flag: --status
+  flag: -h
+
+draft task next-action
+  usage: draft task next-action <TASK> <COMMAND>
+  arg: <TASK>
+  flag: --help
+  flag: -h
+
+draft task next-action add
+  usage: draft task next-action <TASK> add [OPTIONS] <LABEL>
+  arg: <LABEL>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft task next-action complete
+  usage: draft task next-action <TASK> complete [OPTIONS] <ACTION_ID>
+  arg: <ACTION_ID>
+  flag: --help
+  flag: --json
+  flag: --reopen
+  flag: -h
+
+draft task wizard
+  usage: draft task wizard [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft task drop
+  usage: draft task drop [OPTIONS] <TASK>
+  arg: <TASK>
+  flag: --hard
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft task export
+  usage: draft task export [OPTIONS] <TASK>
+  arg: <TASK>
+  flag: --help
+  flag: --json
+  flag: --output
+  flag: -h
+
+draft task import
+  usage: draft task import [OPTIONS] <PATH>
+  arg: <PATH>
+  flag: --help
+  flag: --json
+  flag: --name
+  flag: -h
+
+draft task list
+  usage: draft task list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft task show
+  usage: draft task show [OPTIONS] <TASK>
+  arg: <TASK>
+  flag: --changes
+  flag: --compare-stable
+  flag: --conflicts
+  flag: --decompose
+  flag: --evidence
+  flag: --executions
+  flag: --explain
+  flag: --full
+  flag: --help
+  flag: --json
+  flag: --lanes
+  flag: --timeline
+  flag: -h
+
+draft task spawn
+  usage: draft task spawn [OPTIONS] <NAME> [-- <INSTRUCTION>...]
+  arg: <NAME>
+  arg: [INSTRUCTION]...
+  flag: --cancel
+  flag: --cron
+  flag: --help
+  flag: --json
+  flag: --preset
+  flag: --reason
+  flag: --resume
+  flag: --retry
+  flag: -c
+  flag: -h
+  flag: -p
+
+draft inbox
+  usage: draft inbox [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft maintenance
+  usage: draft maintenance <COMMAND>
+  flag: --help
+  flag: -h
+
+draft maintenance gc
+  usage: draft maintenance gc
+  flag: --help
+  flag: -h
+
+draft maintenance compact
+  usage: draft maintenance compact [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft maintenance stats
+  usage: draft maintenance stats [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft maintenance index-rebuild
+  usage: draft maintenance index-rebuild [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft maintenance remove-project
+  usage: draft maintenance remove-project [OPTIONS]
+  flag: --force
+  flag: --help
+  flag: -h
+
+draft baseline
+  usage: draft baseline [COMMAND]
+  flag: --help
+  flag: -h
+
+draft baseline list
+  usage: draft baseline list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline republish
+  usage: draft baseline republish [OPTIONS] --republish-intent <INTENT> [BASELINE]
+  arg: [BASELINE]
+  flag: --attempt
+  flag: --help
+  flag: --json
+  flag: --purpose
+  flag: --republish-intent
+  flag: -h
+
+draft baseline show
+  usage: draft baseline show [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline current
+  usage: draft baseline current [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline state-root
+  usage: draft baseline state-root [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline evidence-root
+  usage: draft baseline evidence-root [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline coverage
+  usage: draft baseline coverage [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline lineage
+  usage: draft baseline lineage [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline composition
+  usage: draft baseline composition [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline receipts
+  usage: draft baseline receipts [OPTIONS] [RECEIPT]
+  arg: [RECEIPT]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline publications
+  usage: draft baseline publications [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline publish
+  usage: draft baseline publish <COMMAND>
+  flag: --help
+  flag: -h
+
+draft baseline publish run
+  usage: draft baseline publish run [OPTIONS]
+  flag: --attempt
+  flag: --baseline
+  flag: --help
+  flag: --json
+  flag: --purpose
+  flag: --retry-authorization
+  flag: -h
+
+draft baseline publish list
+  usage: draft baseline publish list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft baseline publish retry
+  usage: draft baseline publish retry [OPTIONS] --retry-authorization <RETRY_AUTHORIZATION>
+  flag: --attempt
+  flag: --help
+  flag: --json
+  flag: --purpose
+  flag: --retry-authorization
+  flag: -h
+
+draft baseline publish resolve
+  usage: draft baseline publish resolve [OPTIONS] --rationale <RATIONALE>
+  flag: --attempt
+  flag: --help
+  flag: --json
+  flag: --mark-failed
+  flag: --mark-succeeded
+  flag: --outcome
+  flag: --purpose
+  flag: --rationale
+  flag: -h
+
+draft baseline publish authorize-retry
+  usage: draft baseline publish authorize-retry [OPTIONS] --rationale <RATIONALE>
+  flag: --help
+  flag: --json
+  flag: --purpose
+  flag: --rationale
+  flag: -h
+
+draft baseline publish withdraw
+  usage: draft baseline publish withdraw [OPTIONS] --attempt <ATTEMPT> --reason <REASON>
+  flag: --attempt
+  flag: --help
+  flag: --json
+  flag: --purpose
+  flag: --reason
+  flag: -h
+
+draft promote
+  usage: draft promote [OPTIONS] <CHANGE> <REVISION>
+  arg: <CHANGE>
+  arg: <REVISION>
+  flag: --decision
+  flag: --expected-baseline
+  flag: --gate
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft promotion
+  usage: draft promotion [OPTIONS] <PROMOTION>
+  arg: <PROMOTION>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft authority
+  usage: draft authority <COMMAND>
+  flag: --help
+  flag: -h
+
+draft authority grant
+  usage: draft authority grant [OPTIONS]
+  flag: --capability
+  flag: --help
+  flag: --json
+  flag: --to
+  flag: -h
+
+draft authority list
+  usage: draft authority list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft authority show
+  usage: draft authority show [OPTIONS] <GRANT>
+  arg: <GRANT>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft authority revoke
+  usage: draft authority revoke [OPTIONS] --reason <REASON> <GRANT>
+  arg: <GRANT>
+  flag: --help
+  flag: --json
+  flag: --reason
+  flag: -h
+
+draft authority executor
+  usage: draft authority executor <COMMAND>
+  flag: --help
+  flag: -h
+
+draft authority executor grant
+  usage: draft authority executor grant [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: --to
+  flag: -h
+
+draft authority executor list
+  usage: draft authority executor list [OPTIONS]
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft authority executor revoke
+  usage: draft authority executor revoke [OPTIONS] --reason <REASON> <GRANT>
+  arg: <GRANT>
+  flag: --help
+  flag: --json
+  flag: --reason
+  flag: -h
+
+draft export
+  usage: draft export [OPTIONS] [BASELINE]
+  arg: [BASELINE]
+  flag: --help
+  flag: --json
+  flag: --output
+  flag: -h
+
+draft import
+  usage: draft import [OPTIONS] <PATH>
+  arg: <PATH>
+  flag: --dry-run
+  flag: --help
+  flag: --json
+  flag: -h
+
+exit codes
+  Ok(()) => ExitCode::SUCCESS,
+  DraftErrorKind::VerificationFailed => ExitCode::from(5),
+  DraftErrorKind::RiskPolicyBlocked => ExitCode::from(6),
+  DraftErrorKind::ReviewRequired => ExitCode::from(7),
+  DraftErrorKind::HookFailed
+  | DraftErrorKind::GateUnsatisfied
+  | DraftErrorKind::CoverageIncomplete
+  | DraftErrorKind::StaleRevision
+  | DraftErrorKind::StaleBaseline => ExitCode::from(8),
+  DraftErrorKind::Storage => ExitCode::from(9),
+  DraftErrorKind::ConflictDetected => ExitCode::from(2),
+  _ => ExitCode::FAILURE,

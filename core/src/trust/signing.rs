@@ -1,5 +1,5 @@
 //! Ed25519 signing and verification for receipts and the transparency log
-//! (PRD §9.8, TDD §11.3, NFRD §4.6).
+//! See `docs/internals/security.md` on signing and key handling.
 //!
 //! The private key exists only as `~/.draft/keys/signing.key` (mode 0600); the
 //! public half is published as a base64 string plus a stable `public_key_id`

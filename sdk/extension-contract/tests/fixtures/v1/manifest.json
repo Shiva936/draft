@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "example.vector",
+  "name": "Vector",
+  "version": "1.2.3",
+  "publisher": "example",
+  "draft_api": "^0.3.4",
+  "contributions": [
+    {
+      "id": "classification",
+      "kind": "resource_classification",
+      "path": "contributions/classification.json"
+    },
+    {
+      "id": "verification",
+      "kind": "verification",
+      "path": "contributions/verification.json"
+    }
+  ],
+  "schemas": [
+    {
+      "schema_id": "example.vector/result",
+      "revision": 1,
+      "path": "schemas/result.schema.json"
+    }
+  ],
+  "permissions": [
+    "process.execute"
+  ],
+  "description": "Frozen contract vector",
+  "keywords": [
+    "vector"
+  ],
+  "documentation": [
+    "docs/readme.md"
+  ],
+  "licenses": [
+    "LICENSE.txt"
+  ],
+  "assets": []
+}

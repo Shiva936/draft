@@ -2,10 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::project::home::DraftGlobalStore;
 use crate::support::actor::{ActorKind, ActorRef};
 use crate::support::common::ActorId;
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
-use crate::workspace::home::DraftGlobalStore;
 
 fn retired_profile_error(location: &Path) -> DraftError {
     DraftError::new(

@@ -3,68 +3,197 @@
   "$id": "https://draft.dev/schemas/extension-package.schema.json",
   "title": "Draft Declarative Extension Package",
   "oneOf": [
-    { "$ref": "#/$defs/manifest" },
-    { "$ref": "#/$defs/installed_package" }
+    {
+      "$ref": "#/$defs/manifest"
+    },
+    {
+      "$ref": "#/$defs/installed_package"
+    }
   ],
   "$defs": {
-    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "manifest": {
       "type": "object",
       "required": [
-        "schema_version", "id", "name", "version", "publisher", "draft_api",
-        "contributions", "documentation", "licenses", "assets"
+        "schema_version",
+        "id",
+        "name",
+        "version",
+        "publisher",
+        "draft_api",
+        "contributions",
+        "documentation",
+        "licenses",
+        "assets"
       ],
       "properties": {
-        "schema_version": { "const": 1 },
-        "id": { "type": "string", "pattern": "^[a-z0-9._-]{1,64}$" },
-        "name": { "type": "string" },
-        "version": { "type": "string" },
-        "publisher": { "type": "string" },
-        "draft_api": { "const": "^0.3.4" },
+        "schema_version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]{1,64}$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "draft_api": {
+          "const": "^0.3.4"
+        },
         "contributions": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "kind", "path"],
+            "required": [
+              "id",
+              "kind",
+              "path"
+            ],
             "properties": {
-              "id": { "type": "string" },
-              "kind": { "enum": ["task_template", "policy_preset", "risk_rule", "file_association", "documentation"] },
-              "path": { "type": "string", "pattern": "^contributions/" }
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "resource_adapter",
+                  "resource_classification",
+                  "comparison",
+                  "element_extraction",
+                  "presentation",
+                  "tool_action",
+                  "verification",
+                  "risk_rule",
+                  "policy_preset",
+                  "intent_vocabulary",
+                  "task_template",
+                  "candidate_preset",
+                  "documentation"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^contributions/"
+              }
             },
             "additionalProperties": false
           }
         },
-        "documentation": { "type": "array", "items": { "type": "string", "pattern": "^docs/" } },
-        "licenses": { "type": "array", "items": { "type": "string" } },
-        "assets": { "type": "array", "items": { "type": "string", "pattern": "^assets/" } }
+        "permissions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "process.execute"
+            ]
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "keywords": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "documentation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^docs/"
+          }
+        },
+        "licenses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^assets/"
+          }
+        }
       },
       "additionalProperties": false
     },
     "installed_package": {
       "type": "object",
-      "required": ["manifest", "content_hash", "enabled", "installed_at", "provenance"],
+      "required": [
+        "manifest",
+        "content_hash",
+        "enabled",
+        "installed_at",
+        "provenance"
+      ],
       "properties": {
-        "manifest": { "$ref": "#/$defs/manifest" },
-        "content_hash": { "$ref": "#/$defs/digest" },
-        "enabled": { "type": "boolean" },
-        "installed_at": { "type": "string", "format": "date-time" },
-        "provenance": { "$ref": "#/$defs/provenance" }
+        "manifest": {
+          "$ref": "#/$defs/manifest"
+        },
+        "content_hash": {
+          "$ref": "#/$defs/digest"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "installed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        }
       },
       "additionalProperties": false
     },
     "provenance": {
       "type": "object",
-      "required": ["schema_version", "package_id", "package_version", "operation_id", "trust"],
+      "required": [
+        "schema_version",
+        "package_id",
+        "package_version",
+        "operation_id",
+        "trust"
+      ],
       "properties": {
-        "schema_version": { "const": 1 },
-        "package_id": { "type": "string", "pattern": "^[a-z0-9._-]{1,64}$" },
-        "package_version": { "type": "string" },
-        "operation_id": { "type": "string", "pattern": "^op_[A-Za-z0-9_-]+$" },
+        "schema_version": {
+          "const": 1
+        },
+        "package_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]{1,64}$"
+        },
+        "package_version": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^op_[A-Za-z0-9_-]+$"
+        },
         "trust": {
           "oneOf": [
-            { "$ref": "#/$defs/https_catalog" },
-            { "$ref": "#/$defs/trusted_local_catalog" },
-            { "$ref": "#/$defs/direct_local" }
+            {
+              "$ref": "#/$defs/https_catalog"
+            },
+            {
+              "$ref": "#/$defs/trusted_local_catalog"
+            },
+            {
+              "$ref": "#/$defs/direct_local"
+            }
           ]
         }
       },
@@ -73,58 +202,125 @@
     "https_catalog": {
       "type": "object",
       "required": [
-        "source_kind", "source_id", "catalog_id", "trusted_root_fingerprint",
-        "signed_metadata_counters", "target_digest", "verified_at"
+        "source_kind",
+        "source_id",
+        "catalog_id",
+        "trusted_root_fingerprint",
+        "signed_metadata_counters",
+        "target_digest",
+        "verified_at"
       ],
       "properties": {
-        "source_kind": { "const": "https_catalog" },
-        "source_id": { "type": "string" },
-        "catalog_id": { "type": "string" },
-        "trusted_root_fingerprint": { "$ref": "#/$defs/digest" },
-        "signed_metadata_counters": { "$ref": "#/$defs/counters" },
-        "target_digest": { "$ref": "#/$defs/digest" },
-        "verified_at": { "type": "string", "format": "date-time" }
+        "source_kind": {
+          "const": "https_catalog"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "catalog_id": {
+          "type": "string"
+        },
+        "trusted_root_fingerprint": {
+          "$ref": "#/$defs/digest"
+        },
+        "signed_metadata_counters": {
+          "$ref": "#/$defs/counters"
+        },
+        "target_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "verified_at": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
       "additionalProperties": false
     },
     "trusted_local_catalog": {
       "type": "object",
       "required": [
-        "source_kind", "source_id", "catalog_id", "local_source", "trust_root_id",
-        "trust_decision_id", "signed_metadata_counters", "target_digest", "verified_at"
+        "source_kind",
+        "source_id",
+        "catalog_id",
+        "local_source",
+        "trust_root_id",
+        "trust_decision_id",
+        "signed_metadata_counters",
+        "target_digest",
+        "verified_at"
       ],
       "properties": {
-        "source_kind": { "const": "trusted_local_catalog" },
-        "source_id": { "type": "string" },
-        "catalog_id": { "type": "string" },
-        "local_source": { "type": "string" },
-        "trust_root_id": { "type": "string" },
-        "trust_decision_id": { "type": "string" },
-        "signed_metadata_counters": { "$ref": "#/$defs/counters" },
-        "target_digest": { "$ref": "#/$defs/digest" },
-        "verified_at": { "type": "string", "format": "date-time" }
+        "source_kind": {
+          "const": "trusted_local_catalog"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "catalog_id": {
+          "type": "string"
+        },
+        "local_source": {
+          "type": "string"
+        },
+        "trust_root_id": {
+          "type": "string"
+        },
+        "trust_decision_id": {
+          "type": "string"
+        },
+        "signed_metadata_counters": {
+          "$ref": "#/$defs/counters"
+        },
+        "target_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "verified_at": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
       "additionalProperties": false
     },
     "direct_local": {
       "type": "object",
       "required": [
-        "source_kind", "decision_id", "actor_id", "decided_at",
-        "source_description", "artifact_digest"
+        "source_kind",
+        "decision_id",
+        "actor_id",
+        "decided_at",
+        "source_description",
+        "artifact_digest"
       ],
       "properties": {
-        "source_kind": { "const": "direct_local" },
-        "decision_id": { "type": "string" },
-        "actor_id": { "type": "string", "pattern": "^act_[A-Za-z0-9_-]+$" },
-        "decided_at": { "type": "string", "format": "date-time" },
-        "source_description": { "type": "string" },
-        "artifact_digest": { "$ref": "#/$defs/digest" }
+        "source_kind": {
+          "const": "direct_local"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string",
+          "pattern": "^act_[A-Za-z0-9_-]+$"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_description": {
+          "type": "string"
+        },
+        "artifact_digest": {
+          "$ref": "#/$defs/digest"
+        }
       },
       "additionalProperties": false
     },
     "counters": {
       "type": "object",
-      "additionalProperties": { "type": "integer", "minimum": 0 }
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
     }
   }
 }

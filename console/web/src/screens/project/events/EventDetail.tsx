@@ -5,7 +5,7 @@ import { DetailDrawer } from "../../../components/DetailDrawer";
 import { DataView } from "../../../components/DataView";
 import { CandidateAvatar } from "../../../components/CandidateAvatar";
 import { NONE, formatDateTime, humanize, relative, shortDigest } from "../../../lib/format";
-import { eventType, type CanonicalEvent } from "./Events";
+import { eventTime, eventType, type CanonicalEvent } from "./Events";
 
 /**
  * One canonical event, its metadata, and the hash-linked chain that produced
@@ -39,7 +39,7 @@ export function EventDetail({
     <DetailDrawer
       title={humanize(eventType(event))}
       eyebrow={<span className="mono">{eventType(event)}</span>}
-      subtitle={`${formatDateTime(event.time)} (${relative(event.time)})`}
+      subtitle={`${formatDateTime(eventTime(event))} (${relative(eventTime(event))})`}
       onClose={onClose}
     >
       <div className="row-item" style={{ borderBottom: 0, padding: 0 }}>
@@ -71,16 +71,14 @@ export function EventDetail({
               <dt>Actor</dt>
               <dd>
                 <span className="avatar-label">
-                  <CandidateAvatar name={event.actor_id} />
-                  <span>{event.actor_id}</span>
+                  <CandidateAvatar name={event.actor} />
+                  <span>{event.actor}</span>
                 </span>
               </dd>
-              <dt>Candidate</dt>
-              <dd>{event.candidate_id ?? NONE}</dd>
               <dt>Subject</dt>
-              <dd className="mono">{event.subject_id ?? NONE}</dd>
+              <dd className="mono">{event.subject ?? NONE}</dd>
               <dt>Recorded</dt>
-              <dd>{formatDateTime(event.time)}</dd>
+              <dd>{formatDateTime(eventTime(event))}</dd>
               <dt>Correlation</dt>
               <dd className="mono">{correlation ?? NONE}</dd>
             </Definitions>
@@ -89,12 +87,10 @@ export function EventDetail({
           <section className="stack tight">
             <h3>Integrity</h3>
             <Definitions rows>
-              <dt>Event hash</dt>
-              <dd className="mono">{shortDigest(event.event_hash)}</dd>
+              <dt>Record hash</dt>
+              <dd className="mono">{shortDigest(event.record_hash)}</dd>
               <dt>Previous hash</dt>
-              <dd className="mono">{shortDigest(event.previous_event_hash)}</dd>
-              <dt>Receipt</dt>
-              <dd className="mono">{event.receipt_id ?? NONE}</dd>
+              <dd className="mono">{shortDigest(event.previous_hash)}</dd>
             </Definitions>
           </section>
 
@@ -126,7 +122,7 @@ export function EventDetail({
                         {eventType(link)}
                       </span>
                       <small>
-                        {link.actor_id} · {formatDateTime(link.time)}
+                        {link.actor} · {formatDateTime(eventTime(link))}
                       </small>
                     </div>
                   </li>
@@ -140,13 +136,13 @@ export function EventDetail({
   );
 }
 
-/** Walks `previous_event_hash` backwards to show how this event was reached. */
+/** Walks `previous_hash` backwards to show how this event was reached. */
 function auditChain(event: CanonicalEvent, events: CanonicalEvent[], depth = 6): CanonicalEvent[] {
-  const byHash = new Map(events.map((entry) => [entry.event_hash, entry]));
+  const byHash = new Map(events.map((entry) => [entry.record_hash, entry]));
   const chain: CanonicalEvent[] = [event];
   let current = event;
   while (chain.length < depth) {
-    const previous = byHash.get(current.previous_event_hash);
+    const previous = byHash.get(current.previous_hash);
     if (!previous || previous.event_id === current.event_id) break;
     chain.push(previous);
     current = previous;

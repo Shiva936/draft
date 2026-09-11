@@ -1,0 +1,99 @@
+{
+  "expect": "a resolution names the exact outcome whose head it advances",
+  "name": "publication-resolution-outcome",
+  "payload": {
+    "actor": "act_a1",
+    "authority": {
+      "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+      "kind": "draft.security/authority-grant.v1",
+      "logical_id": "auth_1"
+    },
+    "authority_decision": {
+      "considered": [
+        {
+          "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+          "kind": "draft.security/authority-grant.v1",
+          "logical_id": "auth_1"
+        }
+      ],
+      "decided_at": 1000,
+      "evaluator": {
+        "producer": "draft.core/publication",
+        "version": "0.3.4"
+      },
+      "outcome": {
+        "outcome": "permitted"
+      },
+      "scope": {
+        "capability": "draft.publish/v1",
+        "subject": "pub_a1"
+      }
+    },
+    "global_registry_revisions_at_resolution": {
+      "draft.trust/publishers": 412
+    },
+    "outcome": "sha256:c4dfffd0a4daebafd04abd8f859a6f4bb2f41d852e4e1125a3deb12c4fd4657b",
+    "policy_digest_at_resolution": "sha256:289627ad2f7cde57ee7a13282a96f88897aa502d8e720deeb5fdb14df321dd41",
+    "project_security_state_at_resolution": "sha256:f0c3a75638ab97663fdf6f2697b4156a40333a2c82a16ad1444dde3609e4f9e3",
+    "rationale": "provider confirmed the deploy landed",
+    "receipt_id": "rcp_000000000002",
+    "receipt_signer": {
+      "signature_algorithm": "ed25519",
+      "signer_identity": "act_signer",
+      "signing_key_id": "key-1"
+    },
+    "resolution": {
+      "external_reference": "deploy-991",
+      "resolution": "resolved_succeeded"
+    },
+    "resolved_at": 5000
+  },
+  "payload_schema": "publication-resolution.schema.json",
+  "self_consistency_violation": {
+    "actor": "act_a1",
+    "authority": {
+      "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+      "kind": "draft.security/authority-grant.v1",
+      "logical_id": "auth_1"
+    },
+    "authority_decision": {
+      "considered": [
+        {
+          "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+          "kind": "draft.security/authority-grant.v1",
+          "logical_id": "auth_1"
+        }
+      ],
+      "decided_at": 1000,
+      "evaluator": {
+        "producer": "draft.core/publication",
+        "version": "0.3.4"
+      },
+      "outcome": {
+        "outcome": "permitted"
+      },
+      "scope": {
+        "capability": "draft.publish/v1",
+        "subject": "pub_a1"
+      }
+    },
+    "global_registry_revisions_at_resolution": {
+      "draft.trust/publishers": 412
+    },
+    "outcome": "sha256:044d55b6a2fe396babc81430d77f5f1ead819f2e2158939a07163c2dd939a7e1",
+    "policy_digest_at_resolution": "sha256:289627ad2f7cde57ee7a13282a96f88897aa502d8e720deeb5fdb14df321dd41",
+    "project_security_state_at_resolution": "sha256:f0c3a75638ab97663fdf6f2697b4156a40333a2c82a16ad1444dde3609e4f9e3",
+    "rationale": "provider confirmed the deploy landed",
+    "receipt_id": "rcp_000000000002",
+    "receipt_signer": {
+      "signature_algorithm": "ed25519",
+      "signer_identity": "act_signer",
+      "signing_key_id": "key-1"
+    },
+    "resolution": {
+      "external_reference": "deploy-991",
+      "resolution": "resolved_succeeded"
+    },
+    "resolved_at": 5000
+  }
+}

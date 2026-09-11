@@ -2,7 +2,7 @@
  * Browser-stored Console preferences.
  *
  * Only presentation choices live here. Canonical Draft state — projects, tasks,
- * packs, identity, extension trust — is never cached in the browser.
+ * changes, identity, extension trust — is never cached in the browser.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -32,7 +32,7 @@ const KEYS = {
   theme: "draft-console-theme",
   accent: "draft-console-accent",
   startup: "draft-console-startup",
-  restore: "draft-console-restore-packs",
+  restore: "draft-console-restore-changes",
   sidebar: "draft-console-sidebar-collapsed",
   starred: "draft-console-starred",
 } as const;
@@ -149,7 +149,7 @@ export function useSidebarCollapsed(): [boolean, (value: boolean) => void] {
   return useBooleanPreference("sidebar", false);
 }
 
-export function useRestorePacks(): [boolean, (value: boolean) => void] {
+export function useRestoreChanges(): [boolean, (value: boolean) => void] {
   return useBooleanPreference("restore", true);
 }
 

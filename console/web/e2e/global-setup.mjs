@@ -55,7 +55,7 @@ export default async function globalSetup() {
   const env = { ...process.env, HOME: testHome, DRAFT_GLOBAL_HOME: globalStore };
   const initialized = JSON.parse(checked(binary("draft"), ["project", "init", workspace, "--json"], { cwd: testHome, env }));
   const port = await freePort();
-  const consoleProcess = spawn(binary("draft"), ["console", "--no-open", "--port", String(port), "--project", initialized.workspace_id], {
+  const consoleProcess = spawn(binary("draft"), ["console", "web", "--no-open", "--port", String(port), "--project", initialized.workspace_id], {
     cwd: testHome,
     env,
     stdio: ["ignore", "pipe", "pipe"]
@@ -78,7 +78,7 @@ export default async function globalSetup() {
     await context.storageState({ path: authFile });
   } catch (error) {
     consoleProcess.kill("SIGINT");
-    spawnSync(binary("draft"), ["service", "stop"], { cwd: testHome, env, timeout: 30_000 });
+    spawnSync(binary("draft"), ["daemon", "stop"], { cwd: testHome, env, timeout: 30_000 });
     rmSync(testHome, { recursive: true, force: true });
     throw error;
   } finally {
@@ -88,7 +88,7 @@ export default async function globalSetup() {
 
   return async () => {
     consoleProcess.kill("SIGINT");
-    spawnSync(binary("draft"), ["service", "stop"], { cwd: testHome, env, timeout: 30_000 });
+    spawnSync(binary("draft"), ["daemon", "stop"], { cwd: testHome, env, timeout: 30_000 });
     rmSync(authFile, { force: true });
     rmSync(runtimeFile, { force: true });
     rmSync(testHome, { recursive: true, force: true });

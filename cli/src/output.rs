@@ -49,7 +49,7 @@ pub fn print_json<T: serde::Serialize>(value: &T) {
 }
 
 /// Render any serializable value as human-readable `key value` lines
-/// (SRS-FR-130/131: default output is human-readable; JSON only via flags).
+/// Default output is human-readable; JSON only via an explicit flag.
 pub fn print_human<T: serde::Serialize>(value: &T) {
     match serde_json::to_value(value) {
         Ok(v) => print_human_value(&v, 1),

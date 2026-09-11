@@ -1,66 +1,103 @@
-pub mod adapters;
 pub mod adoption;
+pub mod authority;
+pub mod authorization;
+pub mod baseline;
+pub mod baseline_detail;
+pub mod change_detail;
+pub mod composition;
+pub mod doctor;
+pub mod gc;
+pub mod impact;
 pub mod maintenance;
+pub mod observation;
+pub mod promotion;
+pub mod provider;
+pub mod publish;
+pub mod representation;
+pub mod resource;
+pub mod roots;
+pub mod security;
+pub mod startup;
+pub mod task;
+pub mod verify;
+pub mod workflow;
 
+pub mod activity;
+
+use draft_dcg_contract::ids::ProjectId;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::operation::records::{
-    HookResult, HookStatus, NativeSubmitStatus, RollbackPlan, RollbackRecord, SubmitOverallStatus,
-    SubmitRecord,
+use crate::activity::EventKind;
+use crate::app::activity::ProjectActivity;
+use crate::dcg::change_set::{ChangeSet, ChangeSetId};
+use crate::dcg::observation::ObservationContext;
+use crate::dcg::resource::{RawResourceState, ResourceId, ResourceLocator};
+use crate::dcg::revision::RevisionState;
+use crate::dcg::snapshot::{
+    pattern_match, read_ignore_lines, relative_path as rel_path, walk_dir, IgnoreMatcher,
+    Snapshotter,
 };
-use crate::pack::lifecycle::PackLifecycle;
-use crate::pack::staging::{Evidence, FilePatch, HunkOverlap, PackWorkspace, PatchHunk, PatchSet};
-use crate::pack::PatchSetId;
-use crate::review::risk::{RiskConfig, RiskLevel, RiskSummary};
-use crate::review::session::{
-    Decision, DecisionKind, ReviewComment, ReviewFile, ReviewReport, ReviewUnit,
+use crate::dcg::state::{Snapshot, WorkspaceStatus};
+use crate::evidence::representation::{ChangeRepresentationBundle, ResourceInterference};
+use crate::evidence::risk::RiskConfig;
+use crate::evidence::verification::VerificationConfig;
+use crate::execution::records::HookResult;
+use crate::execution::workspace::{ChangeWorkspace, Evidence};
+use crate::project::config::{DraftConfig, HookEntry, ResolvedConfig};
+use crate::project::object_store::{
+    read_object_segment_index, write_object_segment_index, ObjectSegment, ObjectSegmentEntry,
+    ObjectStore,
 };
-use crate::review::verification::VerificationConfig;
-use crate::review::workflow::{DecisionId, ReviewCommentId};
+use crate::project::{DraftLayout, Workspace, WorkspaceMetadata};
+use crate::read_model::activity::{ActivityEntry, ActivityReplay};
+use crate::recovery::rollback::{RollbackPlan, RollbackRecord};
 use crate::support::actor::{ActorKind, ActorRef};
 use crate::support::common::{
-    now, ActorId, EvidenceId, PackId, ReceiptId, RollbackPlanId, SnapshotId, TaskId, WorkspaceId,
+    now, ActorId, ChangeId, EvidenceId, ReceiptId, RollbackPlanId, SnapshotId, TaskId,
     WorkspacePath,
 };
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 use crate::support::fsutil::{
     ensure_dir, list_with_extension, read_toml, write_atomic, write_json, write_toml,
 };
-use crate::support::hashing::{
-    blake3_hex, canonical_json, hex_encode, sha256_hex, try_canonical_hash,
-};
-use crate::support::lock::FileGuard;
-use crate::support::redaction::{redact as redact_secrets, redact_value};
-use crate::trust::event::{EventReplayReport, HashChainStatus, WorkspaceEventLog};
+use crate::support::hashing::{blake3_hex, hex_encode, sha256_hex, try_canonical_hash};
+use crate::support::process_lock::ProcessFileLock;
+use crate::support::redaction::redact as redact_secrets;
 use crate::trust::identity::resolve_actor;
-use crate::trust::receipt::ActionReceiptDraft;
-use crate::workspace::config::{DraftConfig, HookEntry, ResolvedConfig, SubmitHookPhase};
-use crate::workspace::object_store::{
-    read_object_pack_index, write_object_pack_index, ObjectPack, ObjectPackEntry, ObjectStore,
-};
-use crate::workspace::snapshot::{
-    diff_manifests, latest_snapshot, pattern_match, read_ignore_lines, relative_path as rel_path,
-    walk_dir, IgnoreMatcher, Scanner, Snapshotter,
-};
-use crate::workspace::state::{
-    FileChangeKind, FileKind, FileManifestEntry, Snapshot, WorkspaceStatus,
-};
-use crate::workspace::{DraftLayout, Workspace, WorkspaceMetadata};
 
 const DRAFT_DIR: &str = ".draft";
 use crate::contracts::{current_version, ContractId};
 
-#[derive(Debug, Clone)]
-pub struct App;
+/// Draft's orchestration entry point.
+///
+/// The contribution source is how installed extensions reach Draft's domain
+/// logic. It defaults to contributing nothing, which is Core-only mode: Draft
+/// builds and runs as a generic platform with no extensions present, reporting
+/// missing domain knowledge rather than guessing at it.
+#[derive(Clone)]
+pub struct App {
+    contributions: std::sync::Arc<dyn crate::extension::ExtensionContributionSource>,
+}
+
+impl std::fmt::Debug for App {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("App")
+            .field(
+                "contributions",
+                &self.contributions.active_contributions().is_empty(),
+            )
+            .finish()
+    }
+}
 
 /// Report from `draft init --global`.
 #[derive(Debug, Clone, Serialize)]
@@ -134,24 +171,53 @@ pub struct DoctorReport {
     pub project: Option<DoctorScope>,
 }
 
-/// Report from `draft pack inspect <pck_id>`.
+/// Report from `draft change inspect <chg_id>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct PackInspectReport {
-    pub manifest: crate::pack::PackManifest,
-    pub lifecycle: PackLifecycle,
-    pub quarantine: Option<crate::pack::PackQuarantineRecord>,
+pub struct ChangeInspectReport {
+    pub manifest: crate::dcg::change_store::ChangeManifest,
+    pub lifecycle: RevisionState,
+    pub quarantine: Option<crate::dcg::change_store::ChangeQuarantineRecord>,
     pub valid_actions: Vec<String>,
-    pub symbols_touched: Vec<String>,
-    pub public_api_changed: Vec<String>,
+    /// The authoritative identity of the transition this change carries.
+    pub change_set_digest: String,
+    pub base_snapshot_digest: String,
+    pub result_snapshot_digest: String,
+    /// The observation semantics both states were observed under.
+    pub observation_context_digest: String,
+    /// The exact historical observations this change relied on, base and result
+    /// kept apart.
+    ///
+    /// Absent for a change whose sides were never observed — the empty base — and
+    /// never resolved by picking the newest record for a state, which would let
+    /// a later look silently change what this change says it used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_observation: Option<crate::dcg::observation::SnapshotObservationRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_observation: Option<crate::dcg::observation::SnapshotObservationRef>,
+    /// Resources that actually changed, with proof.
+    pub resources_changed: usize,
+    /// What Draft could **not** determine — reported separately from changes,
+    /// because uncertainty is not a change and must never be counted as one.
+    pub derivation_gaps: Vec<crate::dcg::change_set::ChangeDerivationGap>,
+    /// Contributed elements the change touches, when extraction found any.
+    pub elements_touched: Vec<String>,
+    /// Diagnostic digests of the derived layers, when they exist. Never part of
+    /// this change's identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classification_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub representation_bundle_digest: Option<String>,
     pub receipts: Vec<String>,
+    /// The five-state verification result, not a boolean.
+    pub verification_state: String,
     pub verified: bool,
     pub revision_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PackReopenReport {
-    pub pack_id: String,
-    pub lifecycle: PackLifecycle,
+pub struct ChangeReopenReport {
+    pub change_id: String,
+    pub lifecycle: RevisionState,
     pub revision_id: String,
     pub operation_id: String,
 }
@@ -194,7 +260,7 @@ impl StatusComponent {
 
 #[derive(Debug, Clone, Default)]
 pub struct StatusOptions {
-    pub pack: Option<String>,
+    pub change: Option<String>,
     pub component: Option<StatusComponent>,
     pub full: bool,
 }
@@ -203,23 +269,28 @@ pub struct StatusOptions {
 pub struct StatusReport {
     pub workspace: WorkspaceStatus,
     pub component: Option<String>,
-    pub pack: Option<String>,
+    pub change: Option<String>,
     pub full: bool,
     pub sections: BTreeMap<String, Value>,
 }
 
-/// Report from `draft pack depends <pck_id>`.
+/// Report from `draft change depends <chg_id>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct PackDependsReport {
-    pub pack_id: String,
-    pub base_workspace_hash: String,
-    pub changed_files: Vec<String>,
-    /// Other packs sharing symbols with this one → the shared symbol names.
-    pub shared_symbol_packs: std::collections::BTreeMap<String, Vec<String>>,
+pub struct ChangeDependsReport {
+    pub change_id: String,
+    pub base_snapshot_digest: String,
+    pub changed_resources: Vec<String>,
+    /// Other changes touching the same contributed elements → the shared element
+    /// ids.
+    ///
+    /// Empty with no extraction capability installed, which is not the same as
+    /// "no relationship": Draft simply has no way to see one, and says so
+    /// through the reported capability gap rather than through an empty map.
+    pub shared_element_changes: std::collections::BTreeMap<String, Vec<String>>,
     pub declared_dependencies: Vec<String>,
 }
 
-/// A single detected conflict between two packs.
+/// A single detected conflict between two changes.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConflictFinding {
     pub kind: String,
@@ -227,55 +298,89 @@ pub struct ConflictFinding {
     pub blocking: bool,
 }
 
-/// Report from `draft pack conflicts <a> <b>`.
+/// Report from `draft change conflicts <a> <b>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct PackConflictsReport {
-    pub pack_a: String,
-    pub pack_b: String,
+pub struct ChangeConflictsReport {
+    pub change_a: String,
+    pub change_b: String,
     pub conflicts: Vec<ConflictFinding>,
     pub blocking: bool,
 }
 
-/// Report from `draft pack compose <a> <b> --name <name>`.
+/// Report from `draft change compose <a> <b> --name <name>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct PackComposeReport {
-    pub pack_id: String,
+pub struct ChangeComposeReport {
+    pub change_id: String,
     pub name: String,
     pub dependencies: Vec<String>,
     pub requires_reverification: bool,
     pub composition_hash: String,
 }
 
-/// Report from `draft verify pck_<id>`.
-#[derive(Debug, Clone, Serialize)]
-pub struct VerifyReport {
-    pub pack_id: String,
-    pub risk_level: String,
-    pub risk_score: u32,
-    pub explanations: Vec<String>,
-    pub required_actions: Vec<String>,
-    pub selected_tests: Vec<crate::review::verification::SelectedTest>,
-    pub selected_fuzz_targets: Vec<crate::review::verification::SelectedFuzzTarget>,
-    pub selection_reason: String,
-    pub coverage_basis: String,
-    pub symbols_touched: usize,
-    pub public_api_changed: usize,
-    pub result_hash: String,
+/// One observation, and the record of which observation it was.
+///
+/// The two travel together because they are only unambiguously paired at the
+/// moment of observation. Anything that must later say "this Change relied on
+/// *that* observation" needs both halves, and resolving the second from the
+/// store afterwards would mean choosing between records.
+#[derive(Debug, Clone)]
+pub struct ObservedSnapshot {
+    pub snapshot: Snapshot,
+    pub observation: crate::dcg::observation::SnapshotObservationRef,
 }
 
-/// Report from `draft pack --export`.
+/// Report from `draft change evidence run chg_<id>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct PackExportReport {
-    pub pack_id: String,
+pub struct VerifyReport {
+    pub change_id: String,
+    /// The aggregate, as one of the five states. Never a boolean: "nothing was
+    /// checked" and "everything passed" are different answers.
+    pub state: String,
+    /// Every check that was selected, whether or not it could run.
+    pub check_results: Vec<crate::evidence::verification::VerificationCheckResult>,
+    pub selection_reason: String,
+    pub elements_touched: usize,
+    pub result_hash: String,
+    /// The classification the checks were selected against.
+    pub classification_digest: String,
+    /// Domain knowledge Draft did not have for some of the changed resources.
+    ///
+    /// Advisory: verification still ran, still honoured the project's own
+    /// `verify.toml`, and still recorded evidence. Empty when nothing was
+    /// uninterpretable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capability_gaps: Vec<crate::extension::CapabilityGap>,
+    /// Capabilities an installed extension declares but is not authorized to
+    /// use.
+    ///
+    /// Reported separately from a gap because the knowledge is present and
+    /// only the permission is missing — the fix is to authorize, not to
+    /// install. Without this an unauthorized extension would look exactly like
+    /// no extension at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld_capabilities: Vec<crate::extension::WithheldCapability>,
+}
+
+/// The decision recorded for a check the project configured itself.
+///
+/// A project's own `verify.toml` is its own authority — there is no extension
+/// artifact to authorize — but the evidence still records *something*, so no
+/// result in the record is missing its permission story.
+const PROJECT_CONFIGURED_DECISION: &str = "project-configured";
+
+/// Report from `draft export`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangeExportReport {
+    pub change_id: String,
     pub name: String,
     pub output: String,
     pub bytes: u64,
 }
 
-/// Report from `draft pack --import`.
+/// Report from `draft import`.
 #[derive(Debug, Clone, Serialize)]
-pub struct PackImportReport {
-    pub pack_id: String,
+pub struct ChangeImportReport {
+    pub change_id: String,
     pub name: String,
     pub quarantined: bool,
     pub remapped: bool,
@@ -283,88 +388,133 @@ pub struct PackImportReport {
     pub applied: bool,
 }
 
-/// Parameters describing one canonical-pack lifecycle sync.
-struct PackSyncSpec {
-    kind: crate::trust::event::EventKind,
-    intent: crate::pack::PackIntent,
-    lifecycle: crate::pack::lifecycle::PackLifecycle,
-    metadata: Value,
-}
-
-/// Result of a `--dry-run` for submit or rollback: what would happen and why.
+/// Result of a `--dry-run` for promotion or recovery: what would happen and why.
 #[derive(Debug, Clone, Serialize)]
 pub struct DryRunReport {
     pub action: String,
     pub target: String,
     pub would_proceed: bool,
     pub resulting_state: String,
-    pub affected_files: Vec<String>,
+    /// The locator bodies this action would touch. Opaque: shown, never parsed.
+    pub affected_resources: Vec<String>,
     pub checks: Vec<DoctorCheck>,
 }
 
+/// One resource in the project, as the resource browser sees it.
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorFileEntry {
-    pub path: String,
-    pub kind: String,
+pub struct ResourceEntry {
+    /// The opaque locator body. Draft never parses it; a `file`-scheme adapter
+    /// happens to make it look like a path.
+    pub locator: ResourceLocator,
+    pub resource_id: ResourceId,
+    /// The intrinsic shape of the resource, when its adapter states one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<draft_extension_contract::ResourceForm>,
     pub protected: bool,
-    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_size: Option<u64>,
+    /// **Every** class an installed extension assigns, sorted.
+    ///
+    /// A list rather than one value, because a resource genuinely is several
+    /// things at once — a text document *and* a language source — and picking
+    /// one would discard a correct classification. Empty when nothing is
+    /// installed to recognize it, which is not an error: Draft does not need to
+    /// know what a resource is to manage it.
+    #[serde(default)]
+    pub classes: Vec<String>,
+    /// Classes installed extensions define incompatibly. Scoped to those
+    /// classes: every other assignment on this resource still stands.
+    #[serde(default)]
+    pub class_collisions: Vec<String>,
+}
+
+/// What classes a project's resources carry, and which are disputed.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ClassificationReport {
+    /// Every class assigned to at least one resource, sorted.
+    pub assigned: Vec<String>,
+    /// Resources whose classification installed extensions disagree about.
+    pub collisions: Vec<String>,
+    /// The digest of the bundle these came from, so a caller can tell whether
+    /// two reports describe the same derivation.
+    pub classification_digest: String,
+    /// Set when nothing is installed to classify anything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<crate::extension::CapabilityGap>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorFileView {
-    pub path: String,
+pub struct ResourceContentView {
+    pub locator: ResourceLocator,
     pub content: String,
     pub protected: bool,
     pub workspace_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorSaveReport {
-    pub path: String,
-    pub pack_id: String,
+pub struct ResourceSaveReport {
+    pub locator: ResourceLocator,
+    pub change_id: String,
     pub backup_path: Option<String>,
     pub workspace_hash: String,
     pub protected: bool,
 }
 
+/// A task scoped to part of a resource.
+///
+/// The region is expressed in a contributed coordinate space, so a task may
+/// name lines of a document, keys of a record set, or anything else a domain
+/// defines — Core stores the coordinates without interpreting them.
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorSelectionTaskReport {
+pub struct ResourceSelectionTaskReport {
     pub task_id: String,
-    pub path: String,
-    pub start_line: u32,
-    pub end_line: u32,
+    pub locator: ResourceLocator,
+    pub coordinate_space: String,
+    pub start: u64,
+    pub length: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorMutationReport {
-    pub path: String,
-    pub old_path: Option<String>,
+pub struct ResourceMutationReport {
+    pub locator: ResourceLocator,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_locator: Option<ResourceLocator>,
     pub backup_path: Option<String>,
     pub workspace_hash: String,
     pub action: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorSearchHit {
-    pub path: String,
+pub struct ResourceSearchHit {
+    pub locator: ResourceLocator,
     pub line: u32,
     pub preview: String,
 }
 
+/// How one resource changed against a change's base, as far as Draft can explain.
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorDiffReport {
-    pub path: String,
-    pub base: String,
-    pub unified_diff: String,
+pub struct ResourceComparisonReport {
+    pub locator: ResourceLocator,
+    pub base_state_digest: Option<String>,
+    pub result_state_digest: Option<String>,
+    /// The derived explanation, when a comparison capability produced one.
+    ///
+    /// `None` is a real answer, not a failure: without an installed comparison
+    /// Draft knows *that* the resource changed and says so, rather than
+    /// inventing a rendering it cannot justify.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub representation: Option<crate::evidence::representation::ChangeRepresentation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<crate::extension::CapabilityGap>,
     pub workspace_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EditorWorkspaceReport {
+pub struct ResourceWorkspaceReport {
     pub mode: String,
     pub workspace_hash: String,
     pub pending_edits: usize,
-    pub files: usize,
+    pub resources: usize,
     pub status: String,
 }
 
@@ -375,43 +525,46 @@ impl DoctorReport {
     }
 }
 
-/// Write a minimal canonical manifest for the implicit base pack (empty change).
+/// Write a minimal canonical manifest for the implicit base change (empty change).
 fn write_base_canonical_manifest(
     root: &Path,
-    pack_id: &PackId,
+    policy: &crate::dcg::source_view::CanonicalSourcePolicy,
+    change_id: &ChangeId,
     name: &str,
-    patch: &PatchSet,
+    change_set: &ChangeSet,
 ) -> DraftResult<()> {
-    use crate::pack::{PackManifest, PackRevision, PackStore};
-    let workspace_hash = crate::workspace::source_view::workspace_hash(root)?;
-    let patch_bytes = to_pretty(patch)?;
-    let diff_digest = sha256_hex(&patch_bytes);
-    let mut manifest = PackManifest {
-        schema_version: current_version(ContractId::PackManifest),
-        pack_id: pack_id.to_string(),
+    use crate::dcg::change_store::{ChangeContentStore, ChangeManifest, RevisionRecord};
+    let workspace_hash = crate::dcg::source_view::workspace_hash(root, policy)?;
+    let patch_bytes = to_pretty(change_set)?;
+    // The revision binds the change set by its own canonical identity, so a
+    // re-serialization cannot change what the revision points at.
+    let change_digest = change_set.change_set_digest.clone();
+    let mut manifest = ChangeManifest {
+        schema_version: current_version(ContractId::ChangeManifest),
+        change_id: change_id.to_string(),
         manifest_digest: String::new(),
         name: name.to_string(),
-        description: "base pack".to_string(),
-        intent: crate::pack::PackIntent::Feature,
+        description: "base change".to_string(),
+        intent: crate::dcg::change_store::unspecified_intent(),
         provenance: serde_json::json!({"origin": "local"}),
         author_id: "actor_local".to_string(),
         candidate_id: None,
         declared_dependencies: Vec::new(),
         created_at: now().to_rfc3339(),
     };
-    let store = PackStore::new(crate::workspace::layout::DraftLayout::for_root(root));
+    let store = ChangeContentStore::new(crate::project::layout::DraftLayout::for_root(root));
     manifest.refresh_manifest_digest();
     store.write_manifest(&manifest)?;
-    let mut revision = PackRevision {
-        schema_version: current_version(ContractId::PackRevision),
-        pack_id: manifest.pack_id.clone(),
+    let mut revision = RevisionRecord {
+        schema_version: current_version(ContractId::RevisionRecord),
+        change_id: manifest.change_id.clone(),
         manifest_digest: manifest.manifest_digest.clone(),
         revision_id: "rev_initial".into(),
         revision_number: 1,
         revision_digest: String::new(),
         base_digest: workspace_hash.clone(),
         content_digest: workspace_hash.clone(),
-        diff_digest,
+        change_digest,
         target_digest: workspace_hash.clone(),
         resolved_dependency_digests: Vec::new(),
         created_at: now().to_rfc3339(),
@@ -420,107 +573,65 @@ fn write_base_canonical_manifest(
     store.write_revision(&revision)?;
     write_atomic(
         &store
-            .dir_for(crate::pack::PackLocation::Store, pack_id.as_str())
-            .join("changes.patch"),
+            .dir_for(
+                crate::dcg::change_store::ChangeLocation::Store,
+                change_id.as_str(),
+            )
+            .join("changes.json"),
         &patch_bytes,
     )?;
     store.write_lifecycle_in(
-        crate::pack::PackLocation::Store,
-        &crate::pack::lifecycle::PackLifecycleRecord {
-            schema_version: current_version(ContractId::PackLifecycle),
-            pack_id: manifest.pack_id.clone(),
+        crate::dcg::change_store::ChangeLocation::Store,
+        &crate::dcg::revision::RevisionStateRecord {
+            schema_version: current_version(ContractId::RevisionState),
+            change_id: manifest.change_id.clone(),
             revision_id: revision.revision_id.clone(),
             revision_digest: revision.revision_digest.clone(),
-            lifecycle: crate::pack::lifecycle::PackLifecycle::Draft,
+            lifecycle: crate::dcg::revision::RevisionState::Draft,
             updated_at: now(),
             last_operation_id: crate::support::common::OperationId::new("op_init"),
         },
     )?;
-    // Empty lockfile so conflicts/depends have a file set to read.
-    let lock = crate::pack::PackLockfile {
-        schema_version: current_version(ContractId::PackLock),
-        pack_id: pack_id.to_string(),
-        workspace_hash,
-        file_hashes: std::collections::BTreeMap::new(),
-        policy_version: crate::DRAFT_VERSION.to_string(),
-        risk_engine_version: crate::DRAFT_VERSION.to_string(),
-        verification_commands: Vec::new(),
-        lsif_version: crate::DRAFT_VERSION.to_string(),
-        test_selector_version: crate::DRAFT_VERSION.to_string(),
-        fuzz_selector_version: crate::DRAFT_VERSION.to_string(),
-        dependency_pack_hashes: Vec::new(),
-        receipt_digests: Vec::new(),
-    };
+    // An empty lockfile, so conflict and dependency queries have a resource set
+    // to read rather than a missing file to interpret.
+    let lock = empty_lockfile(change_id.as_str(), change_set);
     store.write_lockfile(&lock)
 }
 
-/// Scan the workspace for test source files (excluding `.draft/`), returning
-/// (relative path, content). Used to discover tests that reference changed
-/// symbols during evidence-based selection.
-fn scan_test_files(root: &Path) -> DraftResult<Vec<(String, String)>> {
-    let mut out = Vec::new();
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .git_ignore(false)
-        .parents(false)
-        .build();
-    for dent in walker {
-        let dent = dent.map_err(|error| DraftError::storage(error.to_string()))?;
-        let path = dent.path();
-        if !path.is_file() || crate::support::pathguard::path_is_draft(path) {
-            continue;
-        }
-        let rel = match path.strip_prefix(root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-        let lower = rel.to_lowercase();
-        let is_test = lower.contains("test")
-            || lower.contains("spec")
-            || lower.contains("/tests/")
-            || lower.starts_with("tests/");
-        if is_test {
-            let bytes = fs::read(path)?;
-            if let Ok(content) = String::from_utf8(bytes) {
-                out.push((rel, content));
-            }
-        }
+/// A lockfile for a change that touches nothing.
+///
+/// The base change is a real change with a real (empty) change set, so its lock
+/// records the same authoritative digests and Core revisions as any other —
+/// there is no second, weaker shape for the empty case.
+fn empty_lockfile(
+    change_id: &str,
+    change_set: &ChangeSet,
+) -> crate::dcg::change_store::ChangeLockfile {
+    crate::dcg::change_store::ChangeLockfile {
+        schema_version: current_version(ContractId::ChangeLock),
+        change_id: change_id.to_string(),
+        base_snapshot_digest: change_set.base_snapshot_digest.clone(),
+        result_snapshot_digest: change_set.result_snapshot_digest.clone(),
+        // The base change's empty change set has no observation behind either
+        // side. Recording `None` is the honest answer; inventing a reference
+        // would name a record that does not exist.
+        base_observation: None,
+        result_observation: None,
+        observation_context_digest: change_set.observation_context_digest.clone(),
+        change_set_digest: change_set.change_set_digest.clone(),
+        resource_state_digests: std::collections::BTreeMap::new(),
+        policy_version: crate::DRAFT_VERSION.to_string(),
+        change_derivation_revision: crate::dcg::change_set::CHANGE_DERIVATION_REVISION,
+        classification_aggregator_revision:
+            crate::evidence::classification::CLASSIFICATION_AGGREGATOR_REVISION,
+        verification_aggregator_revision:
+            crate::evidence::verification::VERIFICATION_AGGREGATOR_REVISION,
+        risk_aggregator_revision: crate::evidence::risk::RISK_AGGREGATOR_REVISION,
+        impact_merge_revision: crate::dcg::impact::IMPACT_MERGE_REVISION,
+        verification_commands: Vec::new(),
+        dependency_change_ids: Vec::new(),
+        receipt_digests: Vec::new(),
     }
-    Ok(out)
-}
-
-/// Discover available fuzz target names under a `fuzz/fuzz_targets/` directory.
-fn scan_fuzz_targets(root: &Path) -> DraftResult<Vec<String>> {
-    let dir = root.join("fuzz/fuzz_targets");
-    let mut out = Vec::new();
-    if !dir.exists() {
-        return Ok(out);
-    }
-    for entry in std::fs::read_dir(&dir)? {
-        let p = entry?.path();
-        if p.extension().and_then(|e| e.to_str()) == Some("rs") {
-            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                out.push(stem.to_string());
-            }
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
-/// Names of packs currently sitting in the import quarantine.
-fn quarantine_names(paths: &crate::workspace::layout::DraftLayout) -> DraftResult<Vec<String>> {
-    let mut names = Vec::new();
-    let qdir = paths.quarantine_dir();
-    if !qdir.exists() {
-        return Ok(names);
-    }
-    for entry in std::fs::read_dir(&qdir)? {
-        let manifest = entry?.path().join("manifest.json");
-        let m: crate::pack::PackManifest = crate::contracts::read_persisted(&manifest)?;
-        names.push(m.name);
-    }
-    Ok(names)
 }
 
 /// Serialize a value to pretty JSON bytes for archive members.
@@ -563,20 +674,182 @@ fn key_perms_check(key: &Path) -> DoctorCheck {
 
 impl App {
     pub fn new() -> Self {
-        App
+        Self {
+            contributions: std::sync::Arc::new(crate::extension::NoExtensions),
+        }
+    }
+
+    /// Build an app that reads contributed domain knowledge from `source`.
+    pub fn with_extension_contributions(
+        source: std::sync::Arc<dyn crate::extension::ExtensionContributionSource>,
+    ) -> Self {
+        Self {
+            contributions: source,
+        }
+    }
+
+    /// What installed, enabled and authorized extensions currently contribute.
+    pub fn active_contributions(&self) -> crate::extension::ActiveContributions {
+        self.contributions.active_contributions()
+    }
+
+    /// The protections in force for this project.
+    ///
+    /// Core contributes only its own control plane; credentials, key material
+    /// and registry tokens are domain judgement and arrive from project config
+    /// or from an installed `control_policy`.
+    pub fn protections(
+        &self,
+        root: &Path,
+    ) -> DraftResult<Vec<crate::project::protected::ProtectionRule>> {
+        crate::project::protected::rules_for_project(
+            root,
+            &contributed_protections(&self.active_contributions()),
+        )
+    }
+
+    /// The canonical view this project observes through.
+    ///
+    /// The same contributed exclusions the observation scanner applies, so the
+    /// workspace digest and the authoritative snapshot can never disagree about
+    /// what the project contains — which would otherwise make an excluded
+    /// resource's change look like a reason to re-verify.
+    fn view_policy(&self) -> crate::dcg::source_view::CanonicalSourcePolicy {
+        crate::dcg::source_view::CanonicalSourcePolicy {
+            exclusions: contributed_view_rules(&self.active_contributions()),
+            ..Default::default()
+        }
+    }
+
+    fn workspace_hash(&self, root: &Path) -> DraftResult<String> {
+        crate::dcg::source_view::workspace_hash(root, &self.view_policy())
+    }
+
+    /// Take one authoritative observation of the project.
+    ///
+    /// The single entry point on purpose, and the place the *pinning* rule is
+    /// enforced: every snapshot is taken under the semantics this project
+    /// **adopted**, never under whatever happens to be installed at this
+    /// instant. Installing a package that would change the observed universe
+    /// records a candidate and changes nothing until somebody adopts it.
+    pub(crate) fn observe(&self, ws: &Workspace) -> DraftResult<Snapshot> {
+        self.observe_recorded(ws).map(|observed| observed.snapshot)
+    }
+
+    /// Observe the project together with the semantics it was observed under.
+    ///
+    /// The context digest travels with the snapshot because an observation's
+    /// provenance includes what it was interpreted under: the same bytes read
+    /// under different semantics are different evidence.
+    pub(crate) fn observe_for_acceptance(&self, ws: &Workspace) -> DraftResult<(Snapshot, String)> {
+        let active = self.ensure_active_context(ws)?;
+        let snapshot = self.observe(ws)?;
+        Ok((snapshot, active.context.context_digest))
+    }
+
+    /// Observe, and keep hold of exactly which observation this was.
+    ///
+    /// Anything that must later say "this Change relied on *that* observation"
+    /// takes this form, because the provenance record is only unambiguous at
+    /// the moment it is written.
+    fn observe_recorded(&self, ws: &Workspace) -> DraftResult<ObservedSnapshot> {
+        let active = self.ensure_active_context(ws)?;
+        // Look at what is installed now, and record a candidate if it differs.
+        // Detection is a side note; it never alters this observation.
+        self.refresh_pending_context(ws, &active)?;
+
+        let (snapshot, provenance_digest) = Snapshotter::new(ws, active.view_rules.clone())?
+            .create_snapshot(
+                resolve_actor(&ws.layout.draft_dir)?,
+                &active.context.context_digest,
+            )?;
+        let observation = crate::dcg::observation::SnapshotObservationRef::new(
+            snapshot.snapshot_digest.clone(),
+            provenance_digest,
+        );
+        Ok(ObservedSnapshot {
+            snapshot,
+            observation,
+        })
+    }
+
+    /// The semantics in force, adopting the effective ones if none are yet.
+    ///
+    /// A project's first context is not a transition: there is no prior
+    /// universe for it to differ from, so nothing is superseded and nobody is
+    /// asked to approve a change that is not a change.
+    fn ensure_active_context(
+        &self,
+        ws: &Workspace,
+    ) -> DraftResult<crate::dcg::observation_lifecycle::ActiveObservationContext> {
+        use crate::dcg::observation_lifecycle::ActiveObservationContext;
+        if let Some(active) = crate::dcg::observation_store::active(ws)? {
+            return Ok(active);
+        }
+        let contributions = self.active_contributions();
+        let context = effective_observation_context(ws, &contributions);
+        let view_rules = contributed_view_rules(&contributions);
+        let (snapshot, _) = Snapshotter::new(ws, view_rules.clone())?.create_snapshot(
+            resolve_actor(&ws.layout.draft_dir)?,
+            &context.context_digest,
+        )?;
+        let active = ActiveObservationContext {
+            schema_version: current_version(ContractId::ActiveObservationContext),
+            context,
+            view_rules,
+            baseline_snapshot_digest: snapshot.snapshot_digest.clone(),
+            baseline_snapshot_id: snapshot.id.clone(),
+            adopted_at: now(),
+            transition_id: None,
+        };
+        crate::dcg::observation_store::write_active(ws, &active)?;
+        Ok(active)
+    }
+
+    /// Note whether the installed extensions would observe differently.
+    ///
+    /// Writes a candidate, or clears a stale one. Never touches the active
+    /// context: a project keeps observing under the semantics it adopted until
+    /// somebody adopts different ones.
+    fn refresh_pending_context(
+        &self,
+        ws: &Workspace,
+        active: &crate::dcg::observation_lifecycle::ActiveObservationContext,
+    ) -> DraftResult<Option<crate::dcg::observation_lifecycle::PendingObservationContext>> {
+        use crate::dcg::observation_lifecycle::{diff_contexts, PendingObservationContext};
+        let contributions = self.active_contributions();
+        let effective = effective_observation_context(ws, &contributions);
+        let reasons = diff_contexts(&active.context, &effective);
+        if reasons.is_empty() {
+            // A package update that observes identically, or one that was
+            // disabled again. Either way there is nothing to decide, and a
+            // banner that outlived its cause teaches people to ignore banners.
+            crate::dcg::observation_store::clear_pending(ws)?;
+            return Ok(None);
+        }
+        let pending = PendingObservationContext {
+            schema_version: current_version(ContractId::PendingObservationContext),
+            candidate: effective,
+            candidate_view_rules: contributed_view_rules(&contributions),
+            active_context_digest: active.context.context_digest.clone(),
+            reasons,
+            detected_at: now(),
+        };
+        crate::dcg::observation_store::write_pending(ws, &pending)?;
+        Ok(Some(pending))
     }
 
     pub fn init(&self, root: &Path) -> DraftResult<InitReport> {
         self.init_with_base(root, "base")
     }
 
-    pub fn init_with_base(&self, root: &Path, base_pack_name: &str) -> DraftResult<InitReport> {
+    pub fn init_with_base(&self, root: &Path, base_change_name: &str) -> DraftResult<InitReport> {
         let layout = DraftLayout::for_root(root);
         crate::trust::identity::reject_retired_profile_state(Some(&layout.draft_dir))?;
-        let global_home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let global_home = crate::project::home::DraftGlobalStore::locate()?;
         crate::trust::identity::global::reject_retired_actor_profile(&global_home)?;
-        crate::workspace::config::reject_retired_profile_config(&layout.config_toml())?;
-        crate::workspace::config::reject_retired_profile_config(&global_home.config_toml())?;
+        crate::project::config::reject_retired_profile_config(&layout.config_toml())?;
+        crate::project::config::reject_retired_profile_config(&global_home.config_toml())?;
         if layout.draft_dir.exists() {
             return Err(DraftError::invalid_config(
                 "Draft workspace state already exists; initialization never repairs or overwrites it",
@@ -606,115 +879,150 @@ impl App {
         if !layout.policy_toml().exists() {
             write_toml(
                 &layout.policy_toml(),
-                &crate::review::policy::Policy::safe_default(),
+                &crate::project::policy::Policy::safe_default(),
             )?;
         }
         rebuild_index_for_layout(&layout)?;
         let meta = WorkspaceMetadata {
             schema_version: current_version(ContractId::WorkspaceMetadata),
-            workspace_id: WorkspaceId::generate(),
+            workspace_id: crate::project::mint_project_id(),
             draft_version: crate::DRAFT_VERSION.to_string(),
             created_at: now(),
         };
-        write_json(&layout.workspace_json(), &meta)?;
-        let store = WorkspaceEventLog::new(layout.clone(), meta.workspace_id.clone());
+        write_json(&layout.project_json(), &meta)?;
+        let store = ProjectActivity::new(layout.clone(), &meta.workspace_id);
         if created {
-            let workspace_hash = crate::workspace::source_view::workspace_hash(root)?;
-            let ledger = crate::trust::ledger::TrustLedger::open(root, meta.workspace_id.as_str())?;
-            ledger.record(
-                crate::trust::event::EventKind::InitStarted,
-                None,
-                None,
-                workspace_hash,
-                serde_json::json!({ "root": root.display().to_string() }),
-            )?;
             store.append(
-                "repo.initialized",
+                EventKind::ProjectCreated,
                 None,
                 serde_json::json!({ "root": root.display().to_string() }),
             )?;
-            let mut base = PackWorkspace::new(
+            // The base change records what `init` actually observed, not a
+            // fabricated empty state. Initializing a directory that already has
+            // content *has* observed that content, and pretending otherwise
+            // would make every later comparison start from a baseline whose
+            // coverage cannot prove anything — turning ordinary additions into
+            // presence-uncertain gaps.
+            // Constructed directly rather than through `open`, which requires
+            // the stable head that initialization has not written yet.
+            let workspace = Workspace {
+                workspace_id: meta.workspace_id.clone(),
+                root: root.to_path_buf(),
+                layout: layout.clone(),
+            };
+            let observed = self.observe(&workspace)?;
+            let mut base = ChangeWorkspace::new(
                 meta.workspace_id.clone(),
                 None,
                 None,
-                SnapshotId::new("chk_empty"),
-                SnapshotId::new("chk_empty"),
-                Some(base_pack_name.to_string()),
+                observed.id.clone(),
+                observed.id.clone(),
+                Some(base_change_name.to_string()),
             );
-            let pack_dir = layout.pack_workspace_dir(&base.id);
-            ensure_dir(&pack_dir)?;
-            let patch = empty_patch_for_pack(&base)?;
+            let change_dir = layout.change_workspace_dir(&base.id);
+            ensure_dir(&change_dir)?;
+            // No transition: the base change is the starting point, so its change
+            // set is empty between one observation and itself.
+            let patch = empty_change_set_between(&base, &observed, &observed)?;
             let evidence = Evidence {
-                schema_version: current_version(ContractId::PackEvidence),
+                schema_version: current_version(ContractId::ChangeEvidence),
                 id: EvidenceId::generate(),
-                pack_id: base.id.clone(),
+                change_id: base.id.clone(),
                 command_logs: Vec::new(),
-                files_touched: Vec::new(),
-                generated_diff_ref: None,
-                test_results: Vec::new(),
-                lint_results: Vec::new(),
+                resources_touched: Vec::new(),
+                representation_bundle_digest: None,
+                check_results: Vec::new(),
                 risk_summary_ref: None,
                 agent_plan_ref: None,
                 agent_transcript_ref: None,
                 warnings: Vec::new(),
                 created_at: now(),
             };
-            base.patch_refs.push(patch.id.to_string());
+            base.change_set_refs.push(patch.id.to_string());
             base.evidence_refs.push(evidence.id.to_string());
             base.manifest_hash = hash_json(&base)?;
-            write_json(&pack_dir.join("staging.json"), &base)?;
-            write_json(&pack_dir.join("patch.json"), &patch)?;
-            write_json(&pack_dir.join("evidence.json"), &evidence)?;
+            write_json(&change_dir.join("staging.json"), &base)?;
+            write_json(&change_dir.join("changes.json"), &patch)?;
+            write_json(&change_dir.join("evidence.json"), &evidence)?;
             // Also write the immutable manifest and revision for the empty base
-            // pack. No trust receipt is minted for this implicit initial state.
-            write_base_canonical_manifest(root, &base.id, base_pack_name, &patch)?;
+            // change. No trust receipt is minted for this implicit initial state.
+            write_base_canonical_manifest(
+                root,
+                &self.view_policy(),
+                &base.id,
+                base_change_name,
+                &patch,
+            )?;
             write_atomic(
-                layout.selected_pack_file().as_path(),
+                layout.selected_change_file().as_path(),
                 base.id.to_string().as_bytes(),
             )?;
             store.append(
-                "pack.created",
+                EventKind::ChangeCreated,
                 Some(base.id.to_string()),
                 serde_json::to_value(&base).expect("Draft-owned records must serialize"),
             )?;
-            store.append(
-                "pack.selected",
-                Some(base.id.to_string()),
-                serde_json::json!({ "name": base_pack_name }),
-            )?;
         }
-        let stable_store = crate::workspace::stable::StableHeadStore::new(layout.clone());
-        let stable_head = if stable_store.exists() {
-            stable_store.read()?
-        } else {
-            let workspace_hash = crate::workspace::source_view::workspace_hash(root)?;
-            let ledger = crate::trust::ledger::TrustLedger::open(root, meta.workspace_id.as_str())?;
-            let outcome = ledger.record(
-                crate::trust::event::EventKind::InitialStableBaseCreated,
-                None,
-                None,
-                workspace_hash,
-                serde_json::json!({ "source": "init" }),
-            )?;
-            stable_store.initialize(root, outcome.receipt.receipt_id)?
+        // The project's first Baseline: what `init` actually observed, accepted
+        // through the same path every later acceptance takes. There is no
+        // separate initialization shape — initialization is simply the
+        // acceptance with no parent.
+        let (accepted_baseline, project_state_root) = {
+            let workspace = Workspace {
+                workspace_id: meta.workspace_id.clone(),
+                root: root.to_path_buf(),
+                layout: layout.clone(),
+            };
+            let stores = crate::app::baseline::AcceptanceStores::for_layout(&layout);
+            match crate::dcg::baseline::current_baseline(&layout)? {
+                Some(existing) => {
+                    let manifest = stores.baselines.manifest(&existing)?.ok_or_else(|| {
+                        DraftError::new(
+                            DraftErrorKind::CorruptData,
+                            "the project accepts a Baseline whose manifest is missing",
+                        )
+                    })?;
+                    let root = manifest.project_state_root.clone();
+                    (existing, root)
+                }
+                None => {
+                    let active = self.ensure_active_context(&workspace)?;
+                    let observed = self.observe(&workspace)?;
+                    let accepted = crate::app::baseline::accept_observed_state(
+                        &workspace,
+                        &observed,
+                        &active.context.context_digest,
+                        crate::dcg::baseline::BaselineOrigin::Initial,
+                        crate::app::baseline::actor_id_of(&layout)?,
+                        None,
+                    )?;
+                    crate::app::baseline::record_accepted(&layout, &accepted)?;
+                    let root = accepted.manifest.project_state_root.clone();
+                    (accepted.record.baseline_id, root)
+                }
+            }
         };
-        crate::workspace::registry::ProjectRegistry::global()?.upsert(
+        crate::project::registry::ProjectRegistry::global()?.upsert(
             meta.workspace_id.as_str(),
             root,
-            Some(stable_head.stable_head_hash.clone()),
+            Some(accepted_baseline.to_string()),
+            // Derived here, above both: `app` can see the graph, and the
+            // registry must not have to.
+            crate::dcg::source_view::WorkspaceRevision::derive(root)
+                .ok()
+                .map(|revision| revision.content_digest),
         )?;
         Ok(InitReport {
             workspace_id: meta.workspace_id.to_string(),
             root: root.display().to_string(),
             created,
             draft_dir: layout.draft_dir.display().to_string(),
-            stable_head_id: stable_head.id,
-            stable_head_receipt_id: stable_head.receipt_id,
-            workspace_hash: stable_head.workspace_hash,
+            baseline_id: accepted_baseline.to_string(),
+            project_state_root: project_state_root.to_string(),
             next_actions: vec![
                 "draft task wizard".to_string(),
                 "draft task list".to_string(),
-                "draft console".to_string(),
+                "draft console tui".to_string(),
             ],
             candidate_guidance:
                 "No command candidates are configured yet; use human/manual tasks or add [candidates.<name>] in .draft/config.toml."
@@ -741,26 +1049,40 @@ impl App {
         let layout = DraftLayout::for_root(&root);
         if !allow_retired_profile_recovery {
             crate::trust::identity::reject_retired_profile_state(Some(&layout.draft_dir))?;
-            let home = crate::workspace::home::DraftGlobalStore::locate()?;
+            let home = crate::project::home::DraftGlobalStore::locate()?;
             crate::trust::identity::global::reject_retired_actor_profile(&home)?;
-            crate::workspace::config::reject_retired_profile_config(&layout.config_toml())?;
-            crate::workspace::config::reject_retired_profile_config(&home.config_toml())?;
+            crate::project::config::reject_retired_profile_config(&layout.config_toml())?;
+            crate::project::config::reject_retired_profile_config(&home.config_toml())?;
         }
-        let metadata_bytes = fs::read(layout.workspace_json()).map_err(|error| {
+        let metadata_bytes = fs::read(layout.project_json()).map_err(|error| {
             DraftError::new(
                 DraftErrorKind::CorruptData,
                 format!("workspace metadata is unreadable: {error}"),
             )
         })?;
         let meta: WorkspaceMetadata = crate::contracts::decode_persisted(&metadata_bytes)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&root);
-        let stable_store = crate::workspace::stable::StableHeadStore::new(paths.clone());
-        if !stable_store.exists() {
+        let paths = crate::project::layout::DraftLayout::for_root(&root);
+        if !allow_retired_profile_recovery {
+            // The recovery barrier, before anything reads or writes the
+            // project. A recovery-mode open skips it for the same reason it
+            // skips the checks above: `draft doctor` has to be able to reach a
+            // project the barrier will not clear.
+            crate::app::startup::ensure_recovered(&paths, &meta.workspace_id.to_string())?;
+        }
+        // A project is readable when it accepts a Baseline. A repository
+        // written by an earlier Draft has none, and is not migrated: its
+        // accepted state was established under an ontology this version does
+        // not implement, and synthesizing a Baseline from it would fabricate
+        // provenance for observations that were never recorded.
+        if crate::dcg::baseline::current_baseline(&paths)?.is_none() {
             return Err(DraftError::new(
-                DraftErrorKind::CorruptData,
-                "workspace stable-head state is missing",
+                DraftErrorKind::UnsupportedSchema,
+                "this project has no accepted Baseline",
             )
-            .with_suggestion("restore canonical v1 state from a trusted backup; Draft will not synthesize or migrate authoritative history"));
+            .with_suggestion(
+                "initialize a new project with `draft init`; repositories created by earlier \
+                 Draft versions are not readable by this one and are not migrated",
+            ));
         }
         Ok(Workspace {
             workspace_id: meta.workspace_id,
@@ -774,11 +1096,11 @@ impl App {
         validate_config_key(key)?;
         let ws = self.open(cwd)?;
         let reported = if matches!(key, "user.name" | "user.email") {
-            crate::workspace::config::validate_profile_value(key, value)?
+            crate::project::config::validate_profile_value(key, value)?
         } else {
             value.to_string()
         };
-        crate::workspace::config::set_value(&ws.layout.config_toml(), key, &reported)?;
+        crate::project::config::set_value(&ws.layout.config_toml(), key, &reported)?;
         append_project_config_event(&ws, key, "set")?;
         Ok(ConfigReport::single(key, &reported))
     }
@@ -795,7 +1117,7 @@ impl App {
         reject_remote_key(key)?;
         validate_config_key(key)?;
         let ws = self.open(cwd)?;
-        crate::workspace::config::remove_table(&ws.layout.config_toml(), key)?;
+        crate::project::config::remove_table(&ws.layout.config_toml(), key)?;
         append_project_config_event(&ws, key, "unset")?;
         Ok(ConfigReport::single(key, ""))
     }
@@ -813,17 +1135,17 @@ impl App {
     /// provision the actor identity + Ed25519 signing key, and seed the
     /// default policy. Idempotent.
     pub fn init_global(&self) -> DraftResult<InitGlobalReport> {
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         crate::trust::identity::reject_retired_profile_state(None)?;
         crate::trust::identity::global::reject_retired_actor_profile(&home)?;
-        crate::workspace::config::reject_retired_profile_config(&home.config_toml())?;
+        crate::project::config::reject_retired_profile_config(&home.config_toml())?;
         let created = !home.exists();
         let hidden = home.create_all()?;
         // Seed a default policy file if absent (safe default).
         if !home.default_policy_toml().exists() {
             write_toml(
                 &home.default_policy_toml(),
-                &crate::review::policy::Policy::safe_default(),
+                &crate::project::policy::Policy::safe_default(),
             )?;
         }
         if !home.config_toml().exists() {
@@ -841,48 +1163,46 @@ impl App {
 
     /// Read-only stable actor and signing-key state for diagnostics/Console.
     pub fn identity_status(&self) -> DraftResult<crate::trust::identity::IdentityStatus> {
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         crate::trust::identity::global::status(&home)
     }
 
-    /// `draft receipt verify rcp_<id>`: verify a single signed receipt.
+    /// `draft doctor receipts rcp_<id>`: verify a single signed receipt.
     pub fn receipt_verify(
         &self,
         cwd: &Path,
         receipt_id: &str,
-    ) -> DraftResult<crate::trust::receipt::ReceiptVerification> {
+    ) -> DraftResult<crate::receipt::ReceiptVerification> {
         validate_receipt_id(receipt_id)?;
         let ws = self.open(cwd)?;
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        ledger.verify_receipt(receipt_id)
+        crate::receipt::verify_one(&ws.layout, receipt_id)
     }
 
-    /// `draft receipt verify --all`: verify the event chain, transparency chain,
+    /// `draft doctor receipts --all`: verify the event chain, transparency chain,
     /// and every receipt. Fails closed if anything does not verify.
     pub fn receipt_verify_all(
         &self,
         cwd: &Path,
-    ) -> DraftResult<crate::trust::ledger::LedgerVerification> {
+    ) -> DraftResult<crate::read_model::LedgerVerification> {
         let ws = self.open(cwd)?;
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        ledger.verify_all()
+        crate::read_model::integrity::verify_all(&ws.layout, &ws.workspace_id)
     }
 
     /// `draft config set --global <key> <value>`.
     pub fn config_set_global(&self, key: &str, value: &str) -> DraftResult<ConfigReport> {
         reject_remote_key(key)?;
         validate_config_key(key)?;
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         crate::trust::identity::reject_retired_profile_state(None)?;
         crate::trust::identity::global::reject_retired_actor_profile(&home)?;
-        crate::workspace::config::reject_retired_profile_config(&home.config_toml())?;
+        crate::project::config::reject_retired_profile_config(&home.config_toml())?;
         home.create_all()?;
         let reported = if matches!(key, "user.name" | "user.email") {
-            crate::workspace::config::validate_profile_value(key, value)?
+            crate::project::config::validate_profile_value(key, value)?
         } else {
             value.to_string()
         };
-        crate::workspace::config::set_value(&home.config_toml(), key, &reported)?;
+        crate::project::config::set_value(&home.config_toml(), key, &reported)?;
         self.audit_global_config_change(&home, &[key], "set")?;
         Ok(ConfigReport::single(key, &reported))
     }
@@ -890,41 +1210,37 @@ impl App {
     pub fn config_get_global(&self, key: &str) -> DraftResult<ConfigReport> {
         reject_remote_key(key)?;
         validate_config_key(key)?;
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         crate::trust::identity::reject_retired_profile_state(None)?;
         crate::trust::identity::global::reject_retired_actor_profile(&home)?;
         let value =
-            crate::workspace::config::get_value(&home.config_toml(), key)?.unwrap_or_default();
+            crate::project::config::get_value(&home.config_toml(), key)?.unwrap_or_default();
         Ok(ConfigReport::single(key, &value))
     }
 
     pub fn config_unset_global(&self, key: &str) -> DraftResult<ConfigReport> {
         reject_remote_key(key)?;
         validate_config_key(key)?;
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         crate::trust::identity::reject_retired_profile_state(None)?;
         crate::trust::identity::global::reject_retired_actor_profile(&home)?;
-        crate::workspace::config::reject_retired_profile_config(&home.config_toml())?;
+        crate::project::config::reject_retired_profile_config(&home.config_toml())?;
         home.create_all()?;
-        crate::workspace::config::remove_table(&home.config_toml(), key)?;
+        crate::project::config::remove_table(&home.config_toml(), key)?;
         self.audit_global_config_change(&home, &[key], "unset")?;
         Ok(ConfigReport::single(key, ""))
     }
 
     fn audit_global_config_change(
         &self,
-        home: &crate::workspace::home::DraftGlobalStore,
+        home: &crate::project::home::DraftGlobalStore,
         keys: &[&str],
         operation: &str,
     ) -> DraftResult<()> {
         let actor = crate::trust::identity::global::ensure_actor(home)?;
         let bytes = std::fs::read(home.config_toml())?;
-        crate::trust::audit::GlobalAuditLog::global()?.append(
-            if keys.iter().all(|key| key.starts_with("user.")) {
-                "user.profile.updated"
-            } else {
-                "config.updated"
-            },
+        crate::activity::GlobalAuditLog::global()?.append(
+            crate::activity::GlobalAuditEvent::UserProfileUpdated,
             Some(actor.actor_id.clone()),
             Some("global-config".into()),
             None,
@@ -945,19 +1261,17 @@ impl App {
         name: Option<Option<&str>>,
         email: Option<Option<&str>>,
     ) -> DraftResult<ConfigReport> {
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         crate::trust::identity::reject_retired_profile_state(None)?;
         crate::trust::identity::global::reject_retired_actor_profile(&home)?;
-        crate::workspace::config::reject_retired_profile_config(&home.config_toml())?;
+        crate::project::config::reject_retired_profile_config(&home.config_toml())?;
         home.create_all()?;
         let mut updates = Vec::new();
         if let Some(value) = name {
             updates.push((
                 "user.name".to_string(),
                 value
-                    .map(|value| {
-                        crate::workspace::config::validate_profile_value("user.name", value)
-                    })
+                    .map(|value| crate::project::config::validate_profile_value("user.name", value))
                     .transpose()?,
             ));
         }
@@ -966,7 +1280,7 @@ impl App {
                 "user.email".to_string(),
                 value
                     .map(|value| {
-                        crate::workspace::config::validate_profile_value("user.email", value)
+                        crate::project::config::validate_profile_value("user.email", value)
                     })
                     .transpose()?,
             ));
@@ -976,16 +1290,14 @@ impl App {
                 "profile update must include user.name or user.email",
             ));
         }
-        crate::workspace::config::update_values(&home.config_toml(), &updates)?;
+        crate::project::config::update_values(&home.config_toml(), &updates)?;
         let keys = updates
             .iter()
             .map(|(key, _)| key.as_str())
             .collect::<Vec<_>>();
         self.audit_global_config_change(&home, &keys, "update")?;
-        let resolver = crate::workspace::config::ConfigResolver::load(
-            None,
-            Some(home.config_toml().as_path()),
-        )?;
+        let resolver =
+            crate::project::config::ConfigResolver::load(None, Some(home.config_toml().as_path()))?;
         Ok(ConfigReport {
             entries: ["user.name", "user.email"]
                 .into_iter()
@@ -998,14 +1310,14 @@ impl App {
     /// built-in default. Works outside a workspace (project layer is skipped).
     pub fn config_get_layered(&self, cwd: &Path, key: &str) -> DraftResult<ConfigReport> {
         reject_remote_key(key)?;
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         let project_cfg = match self.open(cwd) {
             Ok(ws) => Some(ws.layout.config_toml()),
             Err(error) if error.kind == DraftErrorKind::WorkspaceNotFound => None,
             Err(error) => return Err(error),
         };
         let global_cfg = home.config_toml();
-        let resolver = crate::workspace::config::ConfigResolver::load(
+        let resolver = crate::project::config::ConfigResolver::load(
             project_cfg.as_deref(),
             Some(global_cfg.as_path()),
         )?;
@@ -1013,190 +1325,6 @@ impl App {
             key,
             &resolver.get(key).unwrap_or_default(),
         ))
-    }
-
-    /// `draft doctor`: validate the global store and (if present) the project
-    /// store for the current directory.
-    pub fn doctor(&self, cwd: &Path) -> DraftResult<DoctorReport> {
-        let global = self.doctor_global_scope()?;
-        let project = match self.open(cwd) {
-            Ok(ws) => Some(self.doctor_project_scope(&ws)?),
-            Err(error) if error.kind == DraftErrorKind::WorkspaceNotFound => None,
-            Err(error) => Some(DoctorScope {
-                label: "project".to_string(),
-                root: cwd.display().to_string(),
-                exists: cwd.join(DRAFT_DIR).exists(),
-                hidden: crate::support::hidden::is_hidden(&cwd.join(DRAFT_DIR)),
-                checks: vec![DoctorCheck::fail_error("contract-open", error)],
-            }),
-        };
-        Ok(DoctorReport { global, project })
-    }
-
-    /// `draft doctor --global`: validate only the global store.
-    pub fn doctor_global(&self) -> DraftResult<DoctorReport> {
-        Ok(DoctorReport {
-            global: self.doctor_global_scope()?,
-            project: None,
-        })
-    }
-
-    fn doctor_global_scope(&self) -> DraftResult<DoctorScope> {
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
-        let exists = home.exists();
-        let mut checks = Vec::new();
-        if exists {
-            for (name, check) in [
-                (
-                    "retired-profile-location",
-                    crate::trust::identity::reject_retired_profile_state(None),
-                ),
-                (
-                    "retired-actor-profile",
-                    crate::trust::identity::global::reject_retired_actor_profile(&home),
-                ),
-                (
-                    "retired-config-namespace",
-                    crate::workspace::config::reject_retired_profile_config(&home.config_toml()),
-                ),
-            ] {
-                match check {
-                    Ok(()) => {
-                        checks.push(DoctorCheck::ok(name, "unsupported profile state absent"))
-                    }
-                    Err(error) => checks.push(DoctorCheck::fail_error(name, error)),
-                }
-            }
-            checks.push(bool_check(
-                "identity",
-                home.actor_json().exists(),
-                "actor.json present",
-                "actor.json missing — run `draft init --global`",
-            ));
-            checks.push(bool_check(
-                "signing-key",
-                home.signing_key().exists(),
-                "signing key present",
-                "signing key missing — run `draft init --global`",
-            ));
-            checks.push(bool_check(
-                "keys-dir",
-                home.keys_dir().is_dir(),
-                "keys/ present",
-                "keys/ missing",
-            ));
-            checks.push(bool_check(
-                "default-policy",
-                home.default_policy_toml().exists(),
-                "default policy present",
-                "default policy missing",
-            ));
-            match crate::trust::audit::GlobalAuditLog::global().and_then(|audit| audit.verify()) {
-                Ok(count) => checks.push(DoctorCheck::ok(
-                    "global-audit",
-                    format!("{count} hash-chained audit records verified"),
-                )),
-                Err(error) => checks.push(DoctorCheck::fail_error("global-audit", error)),
-            }
-            #[cfg(unix)]
-            checks.push(key_perms_check(&home.signing_key()));
-        } else {
-            checks.push(DoctorCheck::fail(
-                "exists",
-                "global store missing — run `draft init --global`",
-            ));
-        }
-        Ok(DoctorScope {
-            label: "global".to_string(),
-            root: home.root().display().to_string(),
-            exists,
-            hidden: crate::support::hidden::is_hidden(home.root()),
-            checks,
-        })
-    }
-
-    fn doctor_project_scope(&self, ws: &Workspace) -> DraftResult<DoctorScope> {
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let mut checks = Vec::new();
-        checks.push(bool_check(
-            "workspace-json",
-            paths.workspace_json().exists(),
-            "workspace.json present",
-            "workspace.json missing",
-        ));
-        // Event chain integrity (reuses the existing verified replay).
-        match self.verify_events(&ws.root) {
-            Ok(_) => checks.push(DoctorCheck::ok("event-chain", "event hash chain intact")),
-            Err(e) => checks.push(DoctorCheck::fail_error("event-chain", e)),
-        }
-        // Canonical trust ledger: event log, receipts, transparency chain.
-        match crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str()) {
-            Ok(ledger) => match ledger.verify_all() {
-                Ok(v) => {
-                    checks.push(bool_check(
-                        "trust-event-log",
-                        v.event_chain_ok,
-                        format!("{} canonical events verified", v.event_count),
-                        "canonical event log broken",
-                    ));
-                    checks.push(bool_check(
-                        "transparency-chain",
-                        v.transparency_ok,
-                        format!("{} transparency entries verified", v.transparency_count),
-                        "transparency chain broken",
-                    ));
-                    let bad = v.receipts.iter().filter(|r| !r.ok).count();
-                    checks.push(bool_check(
-                        "receipts",
-                        bad == 0,
-                        format!("{} receipts verified", v.receipts.len()),
-                        format!("{bad} receipt(s) failed verification"),
-                    ));
-                }
-                Err(e) => checks.push(DoctorCheck::fail_error("trust-ledger", e)),
-            },
-            Err(e) => checks.push(DoctorCheck::fail_error("trust-ledger", e)),
-        }
-        for (name, dir) in [
-            ("events-dir", paths.events_dir()),
-            ("receipts-dir", paths.receipts_dir()),
-            ("transparency-dir", paths.transparency_dir()),
-            ("packs-dir", paths.packs_dir()),
-            ("quarantine-dir", paths.quarantine_dir()),
-            ("recovery-dir", paths.recovery_dir()),
-        ] {
-            checks.push(bool_check(
-                name,
-                dir.is_dir(),
-                format!("{} present", dir.display()),
-                format!("{} missing", dir.display()),
-            ));
-        }
-        match crate::operation::RecoveryStore::for_root(&ws.root).recoverable() {
-            Ok(entries) if entries.is_empty() => {
-                checks.push(DoctorCheck::ok("recovery", "no interrupted operations"))
-            }
-            Ok(entries) => checks.push(DoctorCheck::fail(
-                "recovery",
-                format!(
-                    "{} interrupted operation(s) need recovery: {}",
-                    entries.len(),
-                    entries
-                        .iter()
-                        .map(|entry| format!("{}:{}", entry.recovery_id, entry.operation))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            )),
-            Err(e) => checks.push(DoctorCheck::fail_error("recovery", e)),
-        }
-        Ok(DoctorScope {
-            label: "project".to_string(),
-            root: ws.root.display().to_string(),
-            exists: true,
-            hidden: crate::support::hidden::is_hidden(paths.draft_dir()),
-            checks,
-        })
     }
 
     pub fn hook_list(&self, cwd: &Path) -> DraftResult<ConfigReport> {
@@ -1238,11 +1366,6 @@ impl App {
         let hook = cfg.hook(hook_name).ok_or_else(|| {
             DraftError::not_found(format!("hook '{hook_name}' is not configured"))
         })?;
-        ws.events()?.append(
-            "hook.started",
-            Some(hook_name.to_string()),
-            serde_json::json!({}),
-        )?;
         let store = ObjectStore::new(ws.layout.clone());
         let ctx = HookContext {
             message: String::new(),
@@ -1250,7 +1373,7 @@ impl App {
             description: String::new(),
             task_id: String::new(),
             execution_id: String::new(),
-            pack_id: String::new(),
+            change_id: String::new(),
             receipt_id: ReceiptId::generate().to_string(),
             actor_name: resolve_actor(&ws.layout.draft_dir)?.id.to_string(),
             timestamp: now().to_rfc3339(),
@@ -1263,9 +1386,9 @@ impl App {
             vars: BTreeMap::new(),
         };
         let result = run_hook(&ws, &store, hook_name, &hook, &ctx)
-            .map_err(|e| DraftError::new(DraftErrorKind::SubmitFailed, e.message))?;
+            .map_err(|e| DraftError::new(DraftErrorKind::HookFailed, e.message))?;
         ws.events()?.append(
-            "hook.completed",
+            EventKind::OperationExecuted,
             Some(hook_name.to_string()),
             serde_json::to_value(&result).expect("Draft-owned records must serialize"),
         )?;
@@ -1284,7 +1407,7 @@ impl App {
             patterns.push(pattern.to_string());
             write_atomic(&ws.layout.ignore_file(), patterns.join("\n").as_bytes())?;
             ws.events()?.append(
-                "ignore.added",
+                EventKind::PolicyUpdated,
                 None,
                 serde_json::json!({ "action": "add", "pattern": pattern }),
             )?;
@@ -1298,7 +1421,7 @@ impl App {
         patterns.retain(|p| p != pattern);
         write_atomic(&ws.layout.ignore_file(), patterns.join("\n").as_bytes())?;
         ws.events()?.append(
-            "ignore.removed",
+            EventKind::PolicyUpdated,
             None,
             serde_json::json!({ "action": "remove", "pattern": pattern }),
         )?;
@@ -1314,9 +1437,18 @@ impl App {
 
     pub fn status(&self, cwd: &Path) -> DraftResult<WorkspaceStatus> {
         let ws = self.open(cwd)?;
-        let status = Scanner::new(&ws)?.status()?;
+        // Observed through the adapter port, then compared. Status is a
+        // question about the same universe an authoritative observation would
+        // establish, so it must be asked the same way.
+        let observed = crate::dcg::source::ResourceSource::enumerate(
+            &crate::dcg::filesystem_source::FilesystemSource::new(&ws),
+            &crate::dcg::source::ViewRules {
+                exclusions: contributed_view_rules(&self.active_contributions()),
+            },
+        )?;
+        let status = crate::dcg::snapshot::workspace_status(&ws, &observed)?;
         ws.events()?.append(
-            "workspace.scanned",
+            EventKind::ResourceObserved,
             None,
             serde_json::json!({
                 "changes": status.changes.len(),
@@ -1395,32 +1527,47 @@ impl App {
             sections.insert(
                 "hooks".to_string(),
                 serde_json::json!({
-                    "submit": cfg.get("hooks.submit").unwrap_or_default(),
                     "verify": cfg.get("hooks.verify").unwrap_or_default(),
                     "items": if options.full { serde_json::to_value(cfg.entries())? } else { Value::Null },
                 }),
             );
         }
-        if let Some(pack_ref) = &options.pack {
-            let inspect = self.pack_inspect(cwd, pack_ref)?;
-            let readiness = self.submit_readiness_selected(cwd, Some(&inspect.manifest.pack_id))?;
+        if let Some(change_ref) = &options.change {
+            // The Change as the graph holds it, and what may legally follow
+            // from its newest sealed revision. Readiness is not a separate
+            // notion here: whether work can proceed is what the authorization
+            // view answers, and it answers it with a reason.
+            let change = self
+                .dcg_changes(cwd)?
+                .into_iter()
+                .find(|view| view.change.as_str() == change_ref)
+                .ok_or_else(|| {
+                    DraftError::new(
+                        DraftErrorKind::NotFound,
+                        format!("change '{change_ref}' is not in this project's graph"),
+                    )
+                })?;
+            let authorization = match change.revisions.first() {
+                Some(revision) => {
+                    Some(self.dcg_authorization(cwd, change_ref, revision.id.as_str())?)
+                }
+                None => None,
+            };
             sections.insert(
-                "pack".to_string(),
+                "change".to_string(),
                 serde_json::json!({
-                    "pack_id": inspect.manifest.pack_id,
-                    "name": inspect.manifest.name,
-                    "lifecycle": inspect.lifecycle,
-                    "verified": inspect.verified,
-                    "lifecycle": inspect.lifecycle,
-                    "readiness": readiness,
-                    "details": if options.full { serde_json::to_value(inspect)? } else { Value::Null },
+                    "change_id": change.change,
+                    "lifecycle": change.lifecycle,
+                    "revisions": change.revisions.len(),
+                    "authorization": authorization,
+                    "details": if options.full { serde_json::to_value(&change)? } else { Value::Null },
                 }),
             );
         }
         Ok(StatusReport {
             workspace,
             component: options.component.map(|c| c.as_str().to_string()),
-            pack: options.pack,
+            change: options.change,
             full: options.full,
             sections,
         })
@@ -1428,763 +1575,68 @@ impl App {
 
     pub fn checkpoint(&self, cwd: &Path, message: &str) -> DraftResult<CheckpointReport> {
         let ws = self.open(cwd)?;
-        let snapshot =
-            Snapshotter::new(&ws)?.create_snapshot(resolve_actor(&ws.layout.draft_dir)?)?;
-        let receipt = ActionReceiptDraft::new(
-            "checkpoint",
-            "completed",
+        let snapshot = self.observe(&ws)?;
+        // The canonical source view is computed before the checkpoint is
+        // recorded, not for its digest but for what computing it refuses: a
+        // symlink escaping the project, an absolute path, `.draft/` reached
+        // through a view rule. A checkpoint is a recovery target, and one
+        // recorded over a project Draft could not safely read is a promise it
+        // cannot keep.
+        let workspace_hash =
+            crate::dcg::source_view::workspace_hash(&ws.root, &self.view_policy())?;
+        // A checkpoint is something that happened, so it is an Activity
+        // event. It used to mint a signed receipt as well, which gave a reader
+        // two records of one act and no rule for which was authoritative — and
+        // v1 receipts attest promotions and publications, not local actions.
+        let event = ws.events()?.append(
+            EventKind::CheckpointCreated,
             Some(snapshot.id.to_string()),
-            serde_json::json!({ "message": message }),
-        )
-        .reversible_to(snapshot.id.to_string());
-        write_receipt(&ws, &receipt)?;
+            serde_json::json!({
+                "message": message,
+                "recovery_target": snapshot.id.to_string(),
+                "workspace_hash": workspace_hash,
+            }),
+        )?;
         Ok(CheckpointReport {
             snapshot_id: snapshot.id.to_string(),
-            receipt_id: receipt.id.to_string(),
-            files: snapshot.files.len(),
+            event_id: event,
+            resources: snapshot.resources.len(),
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn task_create(
-        &self,
-        cwd: &Path,
-        name: &str,
-        goal: &str,
-        template: Option<String>,
-        allowed_zones: Vec<String>,
-        forbidden_zones: Vec<String>,
-        success_criteria: Vec<String>,
-        risk: Option<&str>,
-        mode: Option<&str>,
-        candidate_preset: Option<String>,
-    ) -> DraftResult<crate::task::TaskDefinition> {
+    pub fn inbox(&self, cwd: &Path) -> DraftResult<Vec<crate::read_model::inbox::InboxItem>> {
         let ws = self.open(cwd)?;
-        let stable_store = crate::workspace::stable::StableHeadStore::new(
-            crate::workspace::layout::DraftLayout::for_root(&ws.root),
-        );
-        let stable = if stable_store.exists() {
-            stable_store.read()?.stable_head_hash
-        } else {
-            "uninitialized".to_string()
-        };
-        let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir)?);
-        let mut task =
-            crate::task::TaskDefinition::new(name.to_string(), goal.to_string(), stable, actor)?;
-        if let Some(template) = template {
-            crate::task::apply_template(&mut task, &template)?;
-        }
-        if !allowed_zones.is_empty() {
-            task.allowed_zones = allowed_zones;
-        }
-        if !forbidden_zones.is_empty() {
-            task.forbidden_zones = forbidden_zones;
-            if !task.forbidden_zones.iter().any(|p| p == ".draft/**") {
-                task.forbidden_zones.push(".draft/**".into());
-            }
-        }
-        if !success_criteria.is_empty() {
-            task.success_criteria = success_criteria;
-        }
-        task.risk = match risk.unwrap_or("medium") {
-            "low" => crate::task::TaskRisk::Low,
-            "high" => crate::task::TaskRisk::High,
-            "critical" => crate::task::TaskRisk::Critical,
-            _ => crate::task::TaskRisk::Medium,
-        };
-        task.mode = match mode.unwrap_or("normal") {
-            "safe" => crate::task::TaskMode::Safe,
-            "plan-first" => crate::task::TaskMode::PlanFirst,
-            _ => crate::task::TaskMode::Normal,
-        };
-        if let Some(candidate_preset) = candidate_preset {
-            self.candidate_registry_for(&ws)?
-                .preset(&candidate_preset)?;
-            task.candidate_preset = Some(candidate_preset);
-        }
-        validate_task_definition(&ws, &task)?;
-        crate::task::TaskStore::for_root(&ws.root).create(&task)?;
-        ws.events()?.append(
-            "task.created",
-            Some(task.id.to_string()),
-            serde_json::to_value(&task).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(task)
-    }
+        let mut by_id = BTreeMap::<String, crate::read_model::inbox::InboxItem>::new();
 
-    pub fn task_list(&self, cwd: &Path) -> DraftResult<Vec<crate::task::TaskDefinition>> {
-        let ws = self.open(cwd)?;
-        crate::task::TaskStore::for_root(&ws.root).list()
-    }
-
-    pub fn task_show(
-        &self,
-        cwd: &Path,
-        id_or_name: &str,
-    ) -> DraftResult<crate::task::TaskDefinition> {
-        let ws = self.open(cwd)?;
-        crate::task::TaskStore::for_root(&ws.root)
-            .resolve(id_or_name)?
-            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn task_update(
-        &self,
-        cwd: &Path,
-        id_or_name: &str,
-        status: Option<crate::task::TaskLifecycleStatus>,
-        priority: Option<crate::task::TaskPriority>,
-        due_at: Option<Option<crate::support::common::Timestamp>>,
-        assignee_ref: Option<Option<crate::task::AssigneeRef>>,
-    ) -> DraftResult<crate::task::TaskDefinition> {
-        let ws = self.open(cwd)?;
-        let store = crate::task::TaskStore::for_root(&ws.root);
-        let mut task = store
-            .resolve(id_or_name)?
-            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
-        if let Some(status) = status {
-            task.status = status;
-        }
-        if let Some(priority) = priority {
-            task.priority = priority;
-        }
-        if let Some(due_at) = due_at {
-            task.due_at = due_at;
-        }
-        if let Some(assignee_ref) = assignee_ref {
-            if let Some(assignee) = &assignee_ref {
-                if !matches!(assignee.kind.as_str(), "actor" | "candidate")
-                    || assignee.id.trim().is_empty()
-                {
-                    return Err(DraftError::invalid_config(
-                        "assignee must be a stable actor or candidate reference",
-                    ));
-                }
-            }
-            task.assignee_ref = assignee_ref;
-        }
-        task.updated_at = now();
-        store.update(&task)?;
-        ws.events()?.append(
-            "task.updated",
-            Some(task.id.to_string()),
-            serde_json::to_value(&task).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(task)
-    }
-
-    pub fn task_add_next_action(
-        &self,
-        cwd: &Path,
-        id_or_name: &str,
-        label: &str,
-    ) -> DraftResult<crate::task::TaskDefinition> {
-        let ws = self.open(cwd)?;
-        let store = crate::task::TaskStore::for_root(&ws.root);
-        let mut task = store
-            .resolve(id_or_name)?
-            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
-        if label.trim().is_empty() {
-            return Err(DraftError::invalid_config(
-                "next action label cannot be empty",
-            ));
-        }
-        task.next_actions.push(crate::task::NextAction {
-            id: format!("actn_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
-            label: label.trim().into(),
-            completed: false,
-        });
-        task.updated_at = now();
-        store.update(&task)?;
-        ws.events()?.append(
-            "task.next_action_added",
-            Some(task.id.to_string()),
-            serde_json::to_value(&task).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(task)
-    }
-
-    pub fn task_set_next_action(
-        &self,
-        cwd: &Path,
-        id_or_name: &str,
-        action_id: &str,
-        completed: bool,
-    ) -> DraftResult<crate::task::TaskDefinition> {
-        let ws = self.open(cwd)?;
-        let store = crate::task::TaskStore::for_root(&ws.root);
-        let mut task = store
-            .resolve(id_or_name)?
-            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
-        let action = task
-            .next_actions
-            .iter_mut()
-            .find(|action| action.id == action_id)
-            .ok_or_else(|| {
-                DraftError::not_found(format!("next action '{action_id}' was not found"))
-            })?;
-        action.completed = completed;
-        task.updated_at = now();
-        store.update(&task)?;
-        ws.events()?.append(
-            "task.next_action_updated",
-            Some(task.id.to_string()),
-            serde_json::to_value(&task).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(task)
-    }
-
-    pub fn task_view(&self, cwd: &Path, id_or_name: &str) -> DraftResult<crate::task::TaskView> {
-        let ws = self.open(cwd)?;
-        let task = crate::task::TaskStore::for_root(&ws.root)
-            .resolve(id_or_name)?
-            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
-        let executions = crate::task::ExecutionStore::for_root(&ws.root).list_for_task(&task.id)?;
-        let workflow = crate::review::workflow::WorkflowStore::for_root(&ws.root);
-        let evidence = workflow.evidence()?;
-        let decisions = workflow.decisions()?;
-        let latest_execution = executions.last().map(|e| crate::task::ExecutionView {
-            execution_id: e.id.to_string(),
-            candidate: e.candidate.clone(),
-            status: execution_status_label(e.status).to_string(),
-            produced_pack: e.produced_pack.clone(),
-            error: e
-                .failure_reason
-                .clone()
-                .or_else(|| e.cancellation_reason.clone()),
-            note: None,
-        });
-        let produced_packs = executions
-            .iter()
-            .filter_map(|e| e.produced_pack.clone())
-            .collect::<Vec<_>>();
-        let failed = executions
-            .iter()
-            .filter(|e| matches!(e.status, crate::task::ExecutionStatus::Failed))
-            .count();
-        let running = executions
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e.status,
-                    crate::task::ExecutionStatus::Queued
-                        | crate::task::ExecutionStatus::Running
-                        | crate::task::ExecutionStatus::Retrying
-                )
-            })
-            .count();
-        let task_evidence = evidence
-            .iter()
-            .filter(|e| e.task_id.as_deref() == Some(task.id.as_str()))
-            .count();
-        let approved_packs = decisions
-            .iter()
-            .filter(|d| {
-                d.decision_type == crate::review::workflow::DecisionType::Approve
-                    && d.invalidated_at.is_none()
-                    && d.pack_id
-                        .as_ref()
-                        .map(|p| produced_packs.iter().any(|pack| pack == p))
-                        .unwrap_or(false)
-            })
-            .count();
-        let health = if failed > 0 {
-            crate::task::TaskViewStatus::Blocked
-        } else if running > 0 {
-            crate::task::TaskViewStatus::Running
-        } else if produced_packs.is_empty() {
-            crate::task::TaskViewStatus::Defined
-        } else if approved_packs > 0 {
-            crate::task::TaskViewStatus::Approved
-        } else {
-            crate::task::TaskViewStatus::NeedsReview
-        };
-        let review_status = if approved_packs > 0 {
-            crate::task::TaskViewStatus::Approved
-        } else if produced_packs.is_empty() {
-            crate::task::TaskViewStatus::Pending
-        } else {
-            crate::task::TaskViewStatus::NeedsReview
-        };
-        let recommended_action = if let Some(pack) = produced_packs.last() {
-            if approved_packs > 0 {
-                format!("draft submit {pack}")
-            } else {
-                format!("draft review {pack}")
-            }
-        } else if running > 0 {
-            format!("draft task {id_or_name} --executions")
-        } else {
-            format!("draft task spawn {} -c <candidate>", task.name)
-        };
-        Ok(crate::task::TaskView {
-            task,
-            health,
-            latest_execution,
-            review_status,
-            recommended_action,
-            execution_count: executions.len(),
-            evidence_count: task_evidence,
-            produced_packs,
-        })
-    }
-
-    pub fn task_view_with_options(
-        &self,
-        cwd: &Path,
-        id_or_name: &str,
-        options: TaskViewOptions,
-    ) -> DraftResult<Value> {
-        let ws = self.open(cwd)?;
-        let task = crate::task::TaskStore::for_root(&ws.root)
-            .resolve(id_or_name)?
-            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
-        let mut out = serde_json::to_value(self.task_view(cwd, id_or_name)?)?;
-        let Some(map) = out.as_object_mut() else {
-            return Ok(out);
-        };
-        let include_all = options.full;
-        let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
-        let executions = exec_store.list_for_task(&task.id)?;
-        let produced_packs = executions
-            .iter()
-            .filter_map(|execution| execution.produced_pack.clone())
-            .collect::<Vec<_>>();
-
-        if include_all || options.executions {
-            map.insert("executions".to_string(), serde_json::to_value(&executions)?);
-        }
-        if include_all || options.packs {
-            let mut packs = Vec::new();
-            for pack in &produced_packs {
-                match self.pack_inspect(cwd, pack) {
-                    Ok(inspect) => packs.push(serde_json::to_value(inspect)?),
-                    Err(err) => packs.push(serde_json::json!({
-                        "pack_id": pack,
-                        "error": err.message,
-                    })),
-                }
-            }
-            map.insert("packs".to_string(), Value::Array(packs));
-        }
-        if include_all || options.evidence {
-            let workflow = crate::review::workflow::WorkflowStore::for_root(&ws.root);
-            let task_id = task.id.to_string();
-            let evidence = workflow
-                .evidence()?
-                .into_iter()
-                .filter(|e| {
-                    e.task_id.as_deref() == Some(task_id.as_str())
-                        || e.pack_id
-                            .as_ref()
-                            .map(|pack| produced_packs.iter().any(|p| p == pack))
-                            .unwrap_or(false)
-                })
-                .collect::<Vec<_>>();
-            map.insert("evidence".to_string(), serde_json::to_value(evidence)?);
-        }
-        if include_all || options.conflicts {
-            let mut conflicts = Vec::new();
-            for i in 0..produced_packs.len() {
-                for j in (i + 1)..produced_packs.len() {
-                    match self.pack_conflicts(cwd, &produced_packs[i], &produced_packs[j]) {
-                        Ok(report) => conflicts.push(serde_json::to_value(report)?),
-                        Err(err) => conflicts.push(serde_json::json!({
-                            "left": produced_packs[i],
-                            "right": produced_packs[j],
-                            "error": err.message,
-                        })),
-                    }
-                }
-            }
-            map.insert("conflicts".to_string(), Value::Array(conflicts));
-        }
-        if include_all || options.lanes {
-            let lanes = executions
-                .iter()
-                .map(|execution| {
-                    serde_json::json!({
-                        "candidate": execution.candidate.clone(),
-                        "execution_id": execution.id.to_string(),
-                        "status": execution_status_label(execution.status),
-                        "produced_pack": execution.produced_pack.clone(),
-                        "attempt": execution.attempt,
-                    })
-                })
-                .collect::<Vec<_>>();
-            map.insert("lanes".to_string(), Value::Array(lanes));
-        }
-        if include_all || options.timeline {
-            let task_id = task.id.to_string();
-            let execution_ids = executions
-                .iter()
-                .map(|execution| execution.id.to_string())
-                .collect::<BTreeSet<_>>();
-            let pack_ids = produced_packs.iter().cloned().collect::<BTreeSet<_>>();
-            let events = ws
-                .events()?
-                .read_all()?
-                .into_iter()
-                .filter(|event| {
-                    event
-                        .subject_id
-                        .as_ref()
-                        .map(|id| {
-                            id == &task_id || execution_ids.contains(id) || pack_ids.contains(id)
-                        })
-                        .unwrap_or(false)
-                })
-                .collect::<Vec<_>>();
-            map.insert("timeline".to_string(), serde_json::to_value(events)?);
-        }
-        if include_all || options.explain {
-            map.insert(
-                "explain".to_string(),
-                serde_json::json!({
-                    "template": task.template.clone(),
-                    "required_evidence": task.required_evidence.clone(),
-                    "review_questions": task.review_questions.clone(),
-                    "next_action": map.get("recommended_action").cloned().expect("Draft-owned records must serialize"),
-                }),
-            );
-        }
-        if include_all || options.diff_stable {
-            let mut diffs = BTreeMap::new();
-            for pack in &produced_packs {
-                match self.pack_diff_text(cwd, pack) {
-                    Ok(diff) => {
-                        diffs.insert(pack.clone(), Value::String(diff));
-                    }
-                    Err(err) => {
-                        diffs.insert(pack.clone(), serde_json::json!({ "error": err.message }));
-                    }
-                }
-            }
-            map.insert("diff_stable".to_string(), serde_json::to_value(diffs)?);
-        }
-        if include_all || options.decompose {
-            let children = self.task_decompose(&ws, &task)?;
-            map.insert(
-                "decomposition".to_string(),
-                serde_json::json!({
-                    "created_or_existing": children,
-                    "next_action": "inspect child tasks, then spawn the candidate lane for each child task",
-                }),
-            );
-        }
-        Ok(out)
-    }
-
-    fn task_decompose(
-        &self,
-        ws: &Workspace,
-        task: &crate::task::TaskDefinition,
-    ) -> DraftResult<Vec<crate::task::TaskDefinition>> {
-        let Some(template) = task.template.as_deref() else {
-            return Ok(Vec::new());
-        };
-        let template = crate::task::builtin_template(template)?;
-        let store = crate::task::TaskStore::for_root(&ws.root);
-        let mut children = Vec::new();
-        for rule in template.decomposition_rules {
-            let name = format!("{}-{}", task.name, rule.id);
-            if let Some(existing) = store.resolve(&name)? {
-                children.push(existing);
+        // Every item is derived from the graph. There is deliberately no
+        // second evidence-and-decision store to fold in beside it: two records
+        // of one review state, with no rule for which is authoritative, is how
+        // an inbox starts lying about what is outstanding.
+        for view in self.dcg_changes(&ws.root)? {
+            let Some(revision) = view.revisions.first() else {
                 continue;
-            }
-            let mut child = crate::task::TaskDefinition::new(
-                name,
-                format!("{}: {}", task.goal, rule.description),
-                task.base_stable_head.clone(),
-                task.created_by.clone(),
-            )?;
-            child.kind = crate::task::TaskKind::Generated;
-            child.template = rule.child_template.clone();
-            child.allowed_zones = rule.zones.clone();
-            child.forbidden_zones = task
-                .allowed_zones
-                .iter()
-                .filter(|zone| !child.allowed_zones.iter().any(|allowed| allowed == *zone))
-                .cloned()
-                .chain(task.forbidden_zones.iter().cloned())
-                .collect();
-            child.required_evidence = task.required_evidence.clone();
-            child.review_questions = task.review_questions.clone();
-            child.candidate_preset = task.candidate_preset.clone();
-            child.parent_pack = task.parent_pack.clone();
-            child.metadata.insert(
-                "parent_task".to_string(),
-                Value::String(task.id.to_string()),
-            );
-            child.metadata.insert(
-                "decomposition_rule".to_string(),
-                Value::String(rule.id.clone()),
-            );
-            store.create(&child)?;
-            ws.events()?.append(
-                "task.generated",
-                Some(child.id.to_string()),
-                serde_json::json!({
-                    "parent_task": task.id.to_string(),
-                    "rule": rule.id,
-                    "task_name": child.name.clone(),
+            };
+            let authorization =
+                self.dcg_authorization(&ws.root, view.change.as_str(), revision.id.as_str())?;
+            let attention = crate::read_model::inbox::RevisionAttention {
+                change: view.change.as_str(),
+                revision: revision.id.as_str(),
+                approved: authorization.approving_decision().is_some(),
+                changes_requested: authorization.decisions.iter().any(|decision| {
+                    matches!(
+                        decision.outcome,
+                        crate::dcg::decision::DecisionOutcome::ChangesRequested { .. }
+                    )
                 }),
-            )?;
-            children.push(child);
-        }
-        Ok(children)
-    }
-
-    pub fn task_drop(
-        &self,
-        cwd: &Path,
-        id_or_name: &str,
-        hard: bool,
-    ) -> DraftResult<crate::task::TaskDropOutcome> {
-        let ws = self.open(cwd)?;
-        let recovery = crate::operation::RecoveryStore::for_root(&ws.root);
-        let entry = recovery.start(
-            if hard { "task.drop_hard" } else { "task.drop" },
-            Some(id_or_name.to_string()),
-            serde_json::json!({ "task": id_or_name, "hard": hard }),
-        )?;
-        let entry = recovery.mark_in_progress(entry, None)?;
-        let outcome = match crate::task::TaskStore::for_root(&ws.root).drop_task(id_or_name, hard) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                let _ = recovery.fail(entry, err.message.clone());
-                return Err(err);
-            }
-        };
-        let _ = recovery.complete(
-            entry,
-            serde_json::json!({
-                "task_id": outcome.task_id.clone(),
-                "definition_removed": outcome.definition_removed,
-                "removed_executions": outcome.removed_executions.clone(),
-            }),
-        )?;
-        ws.events()?.append(
-            if hard {
-                "task.dropped_hard"
-            } else {
-                "task.dropped"
-            },
-            Some(outcome.task_id.clone()),
-            serde_json::to_value(&outcome).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(outcome)
-    }
-
-    pub fn task_export(
-        &self,
-        cwd: &Path,
-        id_or_name: &str,
-        output: Option<&Path>,
-    ) -> DraftResult<TaskExportReport> {
-        let ws = self.open(cwd)?;
-        let store = crate::task::TaskStore::for_root(&ws.root);
-        let task = store
-            .resolve(id_or_name)?
-            .ok_or_else(|| DraftError::not_found(format!("task '{id_or_name}' was not found")))?;
-        let output = output
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(format!("{}.task.json", task.name)));
-        let exported = store.export_to(task.id.as_str(), &output)?;
-        ws.events()?.append(
-            "task.exported",
-            Some(exported.id.to_string()),
-            serde_json::json!({
-                "task_id": exported.id.to_string(),
-                "task_name": exported.name,
-                "output": output.display().to_string(),
-            }),
-        )?;
-        Ok(TaskExportReport {
-            task_id: exported.id.to_string(),
-            task_name: exported.name,
-            output: output.display().to_string(),
-            next_action: "import with `draft task import <path>` in another Draft workspace"
-                .to_string(),
-        })
-    }
-
-    pub fn task_import(
-        &self,
-        cwd: &Path,
-        source: &Path,
-        name: Option<String>,
-    ) -> DraftResult<TaskImportReport> {
-        let ws = self.open(cwd)?;
-        let mut task: crate::task::TaskDefinition =
-            crate::contracts::decode_wire(&fs::read(source)?)?;
-        let store = crate::task::TaskStore::for_root(&ws.root);
-        if let Some(name) = name {
-            task.name = name;
-        }
-        if store.resolve(&task.name)?.is_some() {
-            return Err(DraftError::new(
-                DraftErrorKind::TaskDefinitionConflict,
-                format!("task '{}' already exists", task.name),
-            )
-            .with_suggestion("pass `--name <new-name>` or drop the existing task first"));
-        }
-        let stable = self
-            .stable_head_ref(&ws)
-            .unwrap_or_else(|_| "uninitialized".to_string());
-        let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir)?);
-        let at = now();
-        task.schema_version = current_version(ContractId::TaskDefinition);
-        task.id = TaskId::generate();
-        task.kind = crate::task::TaskKind::Imported;
-        task.created_at = at;
-        task.updated_at = at;
-        task.created_by = actor;
-        task.base_stable_head = stable;
-        task.source_context = Some(crate::task::TaskSourceContext {
-            path: source.display().to_string(),
-            start_line: None,
-            end_line: None,
-            symbol: None,
-            reason: Some("task import".to_string()),
-        });
-        store.import(&task)?;
-        ws.events()?.append(
-            "task.imported",
-            Some(task.id.to_string()),
-            serde_json::json!({
-                "task_id": task.id.to_string(),
-                "task_name": task.name,
-                "source": source.display().to_string(),
-            }),
-        )?;
-        Ok(TaskImportReport {
-            task_id: task.id.to_string(),
-            task_name: task.name,
-            source: source.display().to_string(),
-            next_action: format!("draft task spawn {}", task.id),
-        })
-    }
-
-    pub fn task_retry_execution(
-        &self,
-        cwd: &Path,
-        execution_id: &str,
-    ) -> DraftResult<crate::task::Execution> {
-        let ws = self.open(cwd)?;
-        let execution = crate::task::ExecutionStore::for_root(&ws.root).retry(execution_id)?;
-        ws.events()?.append(
-            "execution.retry_queued",
-            Some(execution.id.to_string()),
-            serde_json::to_value(&execution).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(execution)
-    }
-
-    pub fn task_cancel_execution(
-        &self,
-        cwd: &Path,
-        execution_id: &str,
-        reason: Option<String>,
-    ) -> DraftResult<crate::task::Execution> {
-        let ws = self.open(cwd)?;
-        let reason = reason.unwrap_or_else(|| "cancelled by user".to_string());
-        let store = crate::task::ExecutionStore::for_root(&ws.root);
-        let before = store.read(execution_id)?;
-        if let Some(pid) = before.pid {
-            let _ = terminate_process(pid);
-        }
-        let execution = store.mark_cancelled(execution_id, &reason)?;
-        ws.events()?.append(
-            "execution.cancelled",
-            Some(execution.id.to_string()),
-            serde_json::json!({ "reason": reason }),
-        )?;
-        Ok(execution)
-    }
-
-    pub fn task_resume_execution(
-        &self,
-        cwd: &Path,
-        execution_id: &str,
-    ) -> DraftResult<crate::task::Execution> {
-        let ws = self.open(cwd)?;
-        let store = crate::task::ExecutionStore::for_root(&ws.root);
-        let execution = store.read(execution_id)?;
-        if !execution.is_resumable() {
-            return Err(DraftError::invalid_config(format!(
-                "execution {execution_id} is not resumable"
-            )));
-        }
-        let registry = self.candidate_registry_for(&ws)?;
-        registry
-            .profile(&execution.candidate)?
-            .ensure_capability("resume")?;
-        let resumed = store.update(execution_id, |e| {
-            e.status = crate::task::ExecutionStatus::Queued;
-            e.finished_at = None;
-            e.failure_reason = None;
-            e.cancellation_reason = None;
-        })?;
-        ws.events()?.append(
-            "execution.resume_queued",
-            Some(resumed.id.to_string()),
-            serde_json::to_value(&resumed).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(resumed)
-    }
-
-    pub fn inbox(&self, cwd: &Path) -> DraftResult<Vec<crate::review::workflow::InboxItem>> {
-        let ws = self.open(cwd)?;
-        let workflow = crate::review::workflow::WorkflowStore::for_root(&ws.root);
-        let mut by_id = BTreeMap::<String, crate::review::workflow::InboxItem>::new();
-        for item in workflow.inbox()? {
-            by_id.insert(item.id.clone(), item);
-        }
-
-        for pack in self.pack_list_for_workspace(&ws)? {
-            let lifecycle = pack_lifecycle(&ws, &pack.id)?;
-            if matches!(lifecycle, PackLifecycle::Draft | PackLifecycle::Verified) {
-                insert_inbox(
-                    &mut by_id,
-                    format!("inbox:pack_review:{}", pack.id),
-                    "pack_review",
-                    pack.id.to_string(),
-                    "review_needed",
-                    format!(
-                        "pack {} needs review",
-                        pack.name.clone().unwrap_or_else(|| pack.id.to_string())
-                    ),
-                    format!("draft review -p {}", pack.id),
-                );
-            }
-            {
-                let patch = load_patch(&ws, &pack)?;
-                let paths = patch
-                    .files
+                unsatisfied_conditions: authorization
+                    .gates
                     .iter()
-                    .map(|file| file.path.as_str().to_string())
-                    .collect::<Vec<_>>();
-                let reviewers = workflow
-                    .decisions()?
-                    .into_iter()
-                    .filter(|decision| decision.pack_id.as_deref() == Some(pack.id.as_str()))
-                    .map(|decision| decision.author)
-                    .collect::<Vec<_>>();
-                let ownership =
-                    crate::workspace::ownership::evaluate(&ws.root, &paths, &reviewers)?;
-                if ownership.missing_owner_review {
-                    insert_inbox(
-                        &mut by_id,
-                        format!("inbox:owner_review:{}", pack.id),
-                        "owner_review",
-                        pack.id.to_string(),
-                        "missing_owner_review",
-                        format!("owner review needed for {}", ownership.domains.join(", ")),
-                        format!("draft approve -p {} --reason <reason>", pack.id),
-                    );
-                }
+                    .find(|gate| !gate.satisfied)
+                    .map(|gate| gate.unsatisfied.clone())
+                    .unwrap_or_default(),
+            };
+            for item in crate::read_model::inbox::derive(&attention) {
+                by_id.insert(item.id.clone(), item);
             }
         }
 
@@ -2222,25 +1674,34 @@ impl App {
             }
         }
 
-        let renewal_cutoff = now() + chrono::Duration::hours(72);
-        for waiver in workflow.waivers()? {
+        // A waiver that is about to lapse is the last moment somebody can
+        // renew it deliberately rather than discover the gate closed.
+        let renewal_cutoff = draft_dcg_contract::value::Timestamp::from_unix_nanos(
+            (now() + chrono::Duration::hours(72))
+                .timestamp_nanos_opt()
+                .unwrap_or(i64::MAX),
+        );
+        for waiver in crate::app::authorization::AuthorizationStores::for_layout(&ws.layout)
+            .waivers
+            .list()?
+        {
             if waiver.expires_at <= renewal_cutoff {
                 insert_inbox(
                     &mut by_id,
                     format!("inbox:waiver_renewal:{}", waiver.id),
                     "waiver_renewal",
-                    waiver.pack_id.clone(),
+                    waiver.revision.to_string(),
                     "expires_soon",
                     format!("waiver {} expires soon", waiver.id),
                     format!(
-                        "draft waive {} {} --reason <reason> --expires 7d",
-                        waiver.pack_id, waiver.finding_id
+                        "draft change gates waive {} {} --reason <reason> --expires 7d",
+                        waiver.revision, waiver.condition
                     ),
                 );
             }
         }
 
-        for entry in crate::operation::RecoveryStore::for_root(&ws.root).recoverable()? {
+        for entry in crate::execution::operation::RecoveryStore::for_root(&ws.root).recoverable()? {
             insert_inbox(
                 &mut by_id,
                 format!("inbox:doctor_warning:{}", entry.recovery_id),
@@ -2255,8 +1716,8 @@ impl App {
             );
         }
 
-        let pending_editor_dir = crate::workspace::layout::DraftLayout::for_root(&ws.root)
-            .editor_dir()
+        let pending_editor_dir = crate::project::layout::DraftLayout::for_root(&ws.root)
+            .workspaces_dir()
             .join("pending");
         if pending_editor_dir.exists() {
             let pending = list_with_extension(&pending_editor_dir, "json")?;
@@ -2273,7 +1734,7 @@ impl App {
                     id.clone(),
                     "pending_edits",
                     format!("editor edits are pending in {id}"),
-                    "draft console".to_string(),
+                    "draft console tui".to_string(),
                 );
             }
         }
@@ -2281,800 +1742,78 @@ impl App {
         Ok(by_id.into_values().collect())
     }
 
-    pub fn editor_tree(&self, cwd: &Path) -> DraftResult<Vec<EditorFileEntry>> {
+    /// What classes the project's resources carry.
+    ///
+    /// With nothing installed this reports no classes and one capability gap —
+    /// which is the honest answer, and distinguishable from "classified, and
+    /// nothing matched".
+    pub fn classification_report(&self, cwd: &Path) -> DraftResult<ClassificationReport> {
         let ws = self.open(cwd)?;
-        let mut out = Vec::new();
-        collect_editor_entries(&ws.root, &ws.root, &mut out)?;
-        out.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(out)
+        let snapshot = self.observe(&ws)?;
+        let contributions = self.active_contributions();
+        let classification =
+            crate::evidence::classification::classify_snapshot(&snapshot, &contributions);
+
+        let mut assigned: Vec<String> = classification
+            .assignments
+            .iter()
+            .map(|assignment| assignment.class_id.qualified())
+            .collect();
+        assigned.sort();
+        assigned.dedup();
+        let mut collisions: Vec<String> = classification
+            .collisions
+            .iter()
+            .map(|collision| collision.resource_id.as_str().to_string())
+            .collect();
+        collisions.sort();
+        collisions.dedup();
+
+        let gaps = if contributions.classifications.is_empty() {
+            vec![crate::extension::CapabilityGap::new(
+                crate::extension::ExtensionCapabilityKind::Classification,
+                Vec::new(),
+                "no installed extension classifies resources in this project",
+            )]
+        } else {
+            Vec::new()
+        };
+        Ok(ClassificationReport {
+            assigned,
+            collisions,
+            classification_digest: classification.classification_bundle_digest,
+            gaps,
+        })
     }
 
-    pub fn editor_session_commit(
+    pub fn workspace_commit(
         &self,
         cwd: &Path,
-        session_id: &str,
+        workspace_id: &str,
         operation_id: crate::support::common::OperationId,
-    ) -> DraftResult<crate::operation::editor::EditCommitResult> {
+    ) -> DraftResult<crate::execution::workspace::WorkspaceCommitResult> {
         let ws = self.open(cwd)?;
-        let store = crate::operation::editor::EditSessionStore::for_workspace(&ws.root);
-        store.commit_with_validation(session_id, operation_id, |session, _revision| {
-            if let crate::operation::editor::EditAttribution::Pack { id }
-            | crate::operation::editor::EditAttribution::Review { id } = &session.attribution
+        let store = crate::execution::workspace::WorkspaceStore::for_workspace(
+            &ws.root,
+            self.protections(&ws.root)?,
+        );
+        store.commit_with_validation(workspace_id, operation_id, |session, _revision| {
+            if let crate::execution::workspace::EditAttribution::Change { id }
+            | crate::execution::workspace::EditAttribution::Review { id } = &session.attribution
             {
-                let workflow = crate::review::workflow::WorkflowStore::for_root(&ws.root);
-                workflow.mark_pack_evidence_stale(
-                    id,
-                    "editor commit changed the canonical subject digest",
-                    "editor.session.commit",
-                )?;
-                workflow.invalidate_approvals(
-                    id,
-                    "editor commit changed the canonical subject digest",
-                )?;
+                // Nothing to invalidate: Evidence, Assessments, Decisions and
+                // Gates each bind one exact ChangeRevisionId and never carry
+                // to another, so a commit that moves the subject digest simply
+                // leaves them describing the revision they were made about.
+                let _ = id;
             }
             Ok(())
         })
     }
 
-    pub fn editor_workspace(&self, cwd: &Path) -> DraftResult<EditorWorkspaceReport> {
-        let ws = self.open(cwd)?;
-        let files = self.editor_tree(cwd)?.len();
-        let pending_dir = crate::workspace::layout::DraftLayout::for_root(&ws.root)
-            .editor_dir()
-            .join("pending");
-        let pending_edits = if pending_dir.exists() {
-            list_with_extension(&pending_dir, "json")?.len()
-        } else {
-            0
-        };
-        Ok(EditorWorkspaceReport {
-            mode: if pending_edits > 0 {
-                "task_edit".to_string()
-            } else {
-                "browse".to_string()
-            },
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-            pending_edits,
-            files,
-            status: if pending_edits > 0 {
-                "needs_review"
-            } else {
-                "ready"
-            }
-            .to_string(),
-        })
-    }
-
-    pub fn editor_read(&self, cwd: &Path, path: &str) -> DraftResult<EditorFileView> {
-        let ws = self.open(cwd)?;
-        let rel = WorkspacePath::new(crate::support::pathguard::check_relative(path).map_err(
-            |e| {
-                DraftError::new(
-                    DraftErrorKind::ProtectedFileAccess,
-                    format!("unsafe editor path '{path}': {e}"),
-                )
-            },
-        )?);
-        crate::workspace::protected::ensure_allowed(&ws.root, &rel)?;
-        let fs_path = safe_workspace_dest(&ws.root, &rel)?;
-        let bytes = std::fs::read(&fs_path)
-            .map_err(|e| DraftError::not_found(format!("cannot read {}: {e}", rel.as_str())))?;
-        let content = String::from_utf8(bytes).map_err(|_| {
-            DraftError::new(
-                DraftErrorKind::ProtectedFileAccess,
-                format!("editor can only open UTF-8 text files: {}", rel.as_str()),
-            )
-        })?;
-        Ok(EditorFileView {
-            path: rel.to_string(),
-            content,
-            protected: false,
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-        })
-    }
-
-    pub fn editor_create_file(
-        &self,
-        cwd: &Path,
-        path: &str,
-        content: &str,
-    ) -> DraftResult<EditorMutationReport> {
-        let ws = self.open(cwd)?;
-        let rel = checked_editor_path(&ws.root, path)?;
-        let dest = safe_workspace_dest(&ws.root, &rel)?;
-        if dest.exists() {
-            return Err(DraftError::new(
-                DraftErrorKind::ConflictDetected,
-                format!("editor path already exists: {}", rel.as_str()),
-            ));
-        }
-        if let Some(parent) = dest.parent() {
-            ensure_dir(parent)?;
-        }
-        write_atomic(&dest, content.as_bytes())?;
-        ws.events()?.append(
-            "editor.file_created",
-            Some(rel.to_string()),
-            serde_json::json!({ "path": rel.to_string() }),
-        )?;
-        Ok(EditorMutationReport {
-            path: rel.to_string(),
-            old_path: None,
-            backup_path: None,
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-            action: "created".to_string(),
-        })
-    }
-
-    pub fn editor_rename_file(
-        &self,
-        cwd: &Path,
-        from: &str,
-        to: &str,
-    ) -> DraftResult<EditorMutationReport> {
-        let ws = self.open(cwd)?;
-        let from_rel = checked_editor_path(&ws.root, from)?;
-        let to_rel = checked_editor_path(&ws.root, to)?;
-        let from_path = safe_workspace_dest(&ws.root, &from_rel)?;
-        let to_path = safe_workspace_dest(&ws.root, &to_rel)?;
-        if !from_path.is_file() {
-            return Err(DraftError::not_found(format!(
-                "editor source does not exist: {}",
-                from_rel.as_str()
-            )));
-        }
-        if to_path.exists() {
-            return Err(DraftError::new(
-                DraftErrorKind::ConflictDetected,
-                format!("editor destination already exists: {}", to_rel.as_str()),
-            ));
-        }
-        if let Some(parent) = to_path.parent() {
-            ensure_dir(parent)?;
-        }
-        fs::rename(&from_path, &to_path).map_err(|e| {
-            DraftError::storage(format!(
-                "failed to rename {} to {}: {e}",
-                from_rel.as_str(),
-                to_rel.as_str()
-            ))
-        })?;
-        ws.events()?.append(
-            "editor.file_renamed",
-            Some(to_rel.to_string()),
-            serde_json::json!({ "from": from_rel.to_string(), "to": to_rel.to_string() }),
-        )?;
-        Ok(EditorMutationReport {
-            path: to_rel.to_string(),
-            old_path: Some(from_rel.to_string()),
-            backup_path: None,
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-            action: "renamed".to_string(),
-        })
-    }
-
-    pub fn editor_delete_file(&self, cwd: &Path, path: &str) -> DraftResult<EditorMutationReport> {
-        let ws = self.open(cwd)?;
-        let rel = checked_editor_path(&ws.root, path)?;
-        let dest = safe_workspace_dest(&ws.root, &rel)?;
-        if !dest.is_file() {
-            return Err(DraftError::not_found(format!(
-                "editor file does not exist: {}",
-                rel.as_str()
-            )));
-        }
-        let backup = editor_backup_path(&ws.root, &rel)?;
-        if let Some(parent) = backup.parent() {
-            ensure_dir(parent)?;
-        }
-        fs::copy(&dest, &backup)
-            .map_err(|e| DraftError::storage(format!("failed to back up {}: {e}", rel.as_str())))?;
-        fs::remove_file(&dest)
-            .map_err(|e| DraftError::storage(format!("failed to delete {}: {e}", rel.as_str())))?;
-        ws.events()?.append(
-            "editor.file_deleted",
-            Some(rel.to_string()),
-            serde_json::json!({ "path": rel.to_string(), "backup": backup.display().to_string() }),
-        )?;
-        Ok(EditorMutationReport {
-            path: rel.to_string(),
-            old_path: None,
-            backup_path: Some(backup.display().to_string()),
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-            action: "deleted".to_string(),
-        })
-    }
-
-    pub fn editor_search(
-        &self,
-        cwd: &Path,
-        query: &str,
-        limit: usize,
-    ) -> DraftResult<Vec<EditorSearchHit>> {
-        let ws = self.open(cwd)?;
-        let query = query.trim();
-        if query.is_empty() {
-            return Ok(vec![]);
-        }
-        let mut hits = Vec::new();
-        for file in self.editor_tree(cwd)? {
-            if file.protected {
-                continue;
-            }
-            let path = safe_workspace_dest(&ws.root, &WorkspacePath::new(&file.path))?;
-            let bytes = fs::read(&path).map_err(|error| {
-                DraftError::storage(format!("cannot read {}: {error}", path.display()))
-            })?;
-            let Ok(content) = String::from_utf8(bytes) else {
-                continue;
-            };
-            for (idx, line) in content.lines().enumerate() {
-                if line.contains(query) {
-                    hits.push(EditorSearchHit {
-                        path: file.path.clone(),
-                        line: (idx + 1) as u32,
-                        preview: crate::support::redaction::redact(line.trim()),
-                    });
-                    if hits.len() >= limit.max(1) {
-                        return Ok(hits);
-                    }
-                }
-            }
-        }
-        Ok(hits)
-    }
-
-    pub fn editor_diff(
-        &self,
-        cwd: &Path,
-        path: &str,
-        pack_ref: Option<&str>,
-    ) -> DraftResult<EditorDiffReport> {
-        let ws = self.open(cwd)?;
-        let rel = checked_editor_path(&ws.root, path)?;
-        let current_path = safe_workspace_dest(&ws.root, &rel)?;
-        let current = if current_path.exists() {
-            fs::read_to_string(&current_path).map_err(|error| {
-                DraftError::storage(format!("cannot read {}: {error}", current_path.display()))
-            })?
-        } else {
-            String::new()
-        };
-        let (base_name, base_content) = if let Some(pack_ref) = pack_ref {
-            (
-                format!("pack-base:{pack_ref}"),
-                self.editor_pack_base_content(&ws, &rel, pack_ref)?,
-            )
-        } else {
-            return Err(DraftError::not_found(
-                "stable file content is not available in the current stable_head record; pass a pack id to diff against pack base",
-            ));
-        };
-        Ok(EditorDiffReport {
-            path: rel.to_string(),
-            base: base_name,
-            unified_diff: simple_unified_diff(rel.as_str(), &base_content, &current),
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-        })
-    }
-
-    pub fn editor_restore_from_pack_base(
-        &self,
-        cwd: &Path,
-        path: &str,
-        pack_ref: &str,
-    ) -> DraftResult<EditorMutationReport> {
-        let ws = self.open(cwd)?;
-        let rel = checked_editor_path(&ws.root, path)?;
-        let dest = safe_workspace_dest(&ws.root, &rel)?;
-        let backup = if dest.exists() {
-            let backup = editor_backup_path(&ws.root, &rel)?;
-            if let Some(parent) = backup.parent() {
-                ensure_dir(parent)?;
-            }
-            fs::copy(&dest, &backup).map_err(|e| {
-                DraftError::storage(format!("failed to back up {}: {e}", rel.as_str()))
-            })?;
-            Some(backup)
-        } else {
-            None
-        };
-        let base = self.editor_pack_base_content(&ws, &rel, pack_ref)?;
-        if let Some(parent) = dest.parent() {
-            ensure_dir(parent)?;
-        }
-        write_atomic(&dest, base.as_bytes())?;
-        ws.events()?.append(
-            "editor.file_restored",
-            Some(rel.to_string()),
-            serde_json::json!({ "path": rel.to_string(), "pack": pack_ref }),
-        )?;
-        Ok(EditorMutationReport {
-            path: rel.to_string(),
-            old_path: None,
-            backup_path: backup.map(|p| p.display().to_string()),
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-            action: "restored".to_string(),
-        })
-    }
-
-    fn editor_pack_base_content(
-        &self,
-        ws: &Workspace,
-        rel: &WorkspacePath,
-        pack_ref: &str,
-    ) -> DraftResult<String> {
-        let pack_id = self.resolve_canonical_pack_ref(ws, pack_ref)?;
-        let store =
-            crate::pack::PackStore::new(crate::workspace::layout::DraftLayout::for_root(&ws.root));
-        let loc = store
-            .locate(&pack_id)
-            .unwrap_or(crate::pack::PackLocation::Store);
-        let path = store.dir_for(loc, &pack_id).join("changes.patch");
-        let bytes = fs::read(&path)
-            .map_err(|e| DraftError::not_found(format!("cannot read pack diff {pack_id}: {e}")))?;
-        let patch: PatchSet = crate::contracts::decode_persisted(&bytes)?;
-        let file = patch
-            .files
-            .iter()
-            .find(|f| f.path.as_str() == rel.as_str())
-            .ok_or_else(|| {
-                DraftError::not_found(format!("pack {pack_id} does not include {}", rel.as_str()))
-            })?;
-        let Some(old_hash) = &file.old_hash else {
-            return Ok(String::new());
-        };
-        let content = ObjectStore::new(ws.layout.clone()).get_bytes(old_hash)?;
-        String::from_utf8(content).map_err(|_| {
-            DraftError::new(
-                DraftErrorKind::ProtectedFileAccess,
-                format!("pack base for {} is not UTF-8 text", rel.as_str()),
-            )
-        })
-    }
-
-    pub fn editor_save_to_pack(
-        &self,
-        cwd: &Path,
-        path: &str,
-        content: &str,
-        pack_name: Option<String>,
-    ) -> DraftResult<EditorSaveReport> {
-        let ws = self.open(cwd)?;
-        let rel = WorkspacePath::new(crate::support::pathguard::check_relative(path).map_err(
-            |e| {
-                DraftError::new(
-                    DraftErrorKind::ProtectedFileAccess,
-                    format!("unsafe editor path '{path}': {e}"),
-                )
-            },
-        )?);
-        crate::workspace::protected::ensure_allowed(&ws.root, &rel)?;
-        let dest = safe_workspace_dest(&ws.root, &rel)?;
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let backup_path = if dest.exists() {
-            let backup = project_paths.editor_dir().join("backups").join(format!(
-                "{}-{}",
-                now().timestamp_millis(),
-                rel.as_str().replace('/', "__")
-            ));
-            if let Some(parent) = backup.parent() {
-                ensure_dir(parent)?;
-            }
-            std::fs::copy(&dest, &backup).map_err(|e| {
-                DraftError::storage(format!("failed to back up {}: {e}", rel.as_str()))
-            })?;
-            Some(backup.display().to_string())
-        } else {
-            None
-        };
-        if let Some(parent) = dest.parent() {
-            ensure_dir(parent)?;
-        }
-        write_atomic(&dest, content.as_bytes())?;
-        let pack = self.pack_create(
-            cwd,
-            pack_name.or_else(|| Some(format!("editor-{}", rel.as_str().replace('/', "-")))),
-            None,
-            true,
-        )?;
-        let store = crate::review::workflow::WorkflowStore::for_root(&ws.root);
-        let _ = store.mark_pack_evidence_stale(
-            pack.id.as_str(),
-            "editor saved new content into pack",
-            "editor.save",
-        );
-        let _ = store.invalidate_approvals(pack.id.as_str(), "editor saved new content into pack");
-        Ok(EditorSaveReport {
-            path: rel.to_string(),
-            pack_id: pack.id.to_string(),
-            backup_path,
-            workspace_hash: crate::workspace::source_view::workspace_hash(&ws.root)?,
-            protected: false,
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn task_create_from_selection(
-        &self,
-        cwd: &Path,
-        path: &str,
-        start_line: u32,
-        end_line: u32,
-        selected_text: &str,
-        reason: Option<String>,
-        workspace_hash: Option<String>,
-    ) -> DraftResult<EditorSelectionTaskReport> {
-        let ws = self.open(cwd)?;
-        let rel = WorkspacePath::new(crate::support::pathguard::check_relative(path).map_err(
-            |e| {
-                DraftError::new(
-                    DraftErrorKind::ProtectedFileAccess,
-                    format!("unsafe editor selection path '{path}': {e}"),
-                )
-            },
-        )?);
-        crate::workspace::protected::ensure_allowed(&ws.root, &rel)?;
-        let current_hash = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        if let Some(expected) = workspace_hash {
-            if !expected.is_empty() && expected != current_hash {
-                return Err(DraftError::new(
-                    DraftErrorKind::DirtyWorkspace,
-                    "workspace changed since the editor selection was read",
-                )
-                .with_suggestion("reload the file before creating a task from selection"));
-            }
-        }
-        let stable_store = crate::workspace::stable::StableHeadStore::new(
-            crate::workspace::layout::DraftLayout::for_root(&ws.root),
-        );
-        let stable = if stable_store.exists() {
-            stable_store.read()?.stable_head_hash
-        } else {
-            "uninitialized".to_string()
-        };
-        let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir)?);
-        let mut task = crate::task::TaskDefinition::new(
-            format!("Review {}", rel.as_str()),
-            reason
-                .clone()
-                .unwrap_or_else(|| format!("Review selected code in {}", rel.as_str())),
-            stable,
-            actor,
-        )?;
-        task.kind = crate::task::TaskKind::Defined;
-        task.source_context = Some(crate::task::TaskSourceContext {
-            path: rel.to_string(),
-            start_line: Some(start_line),
-            end_line: Some(end_line),
-            symbol: None,
-            reason,
-        });
-        task.allowed_zones = vec![rel.to_string()];
-        task.success_criteria = vec!["Selected code has been reviewed and addressed".to_string()];
-        task.metadata.insert(
-            "selected_text".to_string(),
-            serde_json::Value::String(crate::support::redaction::redact(selected_text)),
-        );
-        task.metadata.insert(
-            "selection_workspace_hash".to_string(),
-            serde_json::Value::String(current_hash),
-        );
-        crate::task::TaskStore::for_root(&ws.root).create(&task)?;
-        ws.events()?.append(
-            "task.created_from_selection",
-            Some(task.id.to_string()),
-            serde_json::to_value(&task).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(EditorSelectionTaskReport {
-            task_id: task.id.to_string(),
-            path: rel.to_string(),
-            start_line,
-            end_line,
-        })
-    }
-
-    pub fn waive(
-        &self,
-        cwd: &Path,
-        pack_id: &str,
-        finding_id: &str,
-        reason: &str,
-        expires: &str,
-    ) -> DraftResult<crate::review::workflow::Waiver> {
-        let ws = self.open(cwd)?;
-        self.resolve_pack_ref(&ws, pack_id)?;
-        let seconds = parse_duration_seconds(expires)?;
-        let created_at = now();
-        let waiver = crate::review::workflow::Waiver {
-            schema_version: current_version(ContractId::Waiver),
-            id: crate::review::workflow::WaiverId::generate(),
-            pack_id: pack_id.into(),
-            finding_id: finding_id.into(),
-            author: format!("{:?}", resolve_actor(&ws.layout.draft_dir)?),
-            reason: reason.into(),
-            created_at,
-            expires_at: created_at + chrono::Duration::seconds(seconds),
-            receipt_id: None,
-        };
-        crate::review::workflow::WorkflowStore::for_root(&ws.root).write_waiver(&waiver)?;
-        ws.events()?.append(
-            "waiver.created",
-            Some(pack_id.into()),
-            serde_json::to_value(&waiver).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(waiver)
-    }
-
-    /// The canonical spawn engine (Blueprint §3.9, TDD §10.1).
-    ///
-    /// Resolves a stored task (or creates an inline one), resolves the
-    /// candidate list or preset, validates capabilities, and runs one real
-    /// execution per candidate in an isolated workspace. Each successful
-    /// execution produces a pack diffed against the same pre-spawn baseline;
-    /// the working tree is left exactly as it was before the spawn.
-    #[allow(clippy::too_many_arguments)]
-    pub fn task_spawn(
-        &self,
-        cwd: &Path,
-        name: &str,
-        pack_id: Option<&str>,
-        candidates: Vec<String>,
-        cron: Option<String>,
-        instruction: Vec<String>,
-    ) -> DraftResult<TaskSpawnReport> {
-        self.task_spawn_with_preset(cwd, name, pack_id, candidates, None, cron, instruction)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn task_spawn_with_preset(
-        &self,
-        cwd: &Path,
-        name: &str,
-        pack_id: Option<&str>,
-        mut candidates: Vec<String>,
-        preset: Option<String>,
-        cron: Option<String>,
-        instruction: Vec<String>,
-    ) -> DraftResult<TaskSpawnReport> {
-        let ws = self.open(cwd)?;
-        let store = crate::task::TaskStore::for_root(&ws.root);
-        let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
-        let instruction = instruction.join(" ");
-
-        // Stored-vs-inline instruction rules.
-        let mut task = match store.resolve(name)? {
-            Some(stored) => {
-                if !instruction.trim().is_empty() {
-                    return Err(DraftError::new(
-                        DraftErrorKind::TaskDefinitionConflict,
-                        format!(
-                            "task '{name}' already has a stored definition; spawn it without an inline instruction"
-                        ),
-                    )
-                    .with_suggestion(format!(
-                        "run `draft task spawn {name}` to use the stored goal, or `draft task {name}` to inspect it"
-                    )));
-                }
-                stored
-            }
-            None => {
-                if instruction.trim().is_empty() {
-                    return Err(DraftError::invalid_config(format!(
-                        "no stored task named '{name}'; an inline instruction is required"
-                    ))
-                    .with_suggestion(format!(
-                        "run `draft task spawn {name} -- <instruction>` or create it first with `draft task create {name} --goal <goal>`"
-                    )));
-                }
-                let stable = self.stable_head_ref(&ws)?;
-                let actor = format!("{:?}", resolve_actor(&ws.layout.draft_dir)?);
-                let task_name = inline_task_name(name);
-                let mut t = crate::task::TaskDefinition::new(
-                    task_name,
-                    instruction.clone(),
-                    stable,
-                    actor,
-                )?;
-                t.kind = crate::task::TaskKind::Inline;
-                store.create(&t)?;
-                ws.events()?.append(
-                    "task.created",
-                    Some(t.id.to_string()),
-                    serde_json::to_value(&t).expect("Draft-owned records must serialize"),
-                )?;
-                t
-            }
-        };
-
-        if let Some(cron) = cron {
-            task.schedule = Some(crate::task::TaskSchedule {
-                cron: Some(cron),
-                note: None,
-            });
-        }
-
-        // Candidate list / preset resolution.
-        let registry = self.candidate_registry_for(&ws)?;
-        let mut preset_used = None;
-        if candidates.is_empty() {
-            let preset_name = preset.clone().or_else(|| task.candidate_preset.clone());
-            if let Some(preset_name) = preset_name {
-                let p = registry.preset(&preset_name)?;
-                candidates = p.candidates.clone();
-                preset_used = Some(p);
-            } else {
-                candidates.push("manual".to_string());
-            }
-        } else if let Some(preset_name) = preset {
-            // Explicit candidates win, but a named preset still applies its policy.
-            preset_used = Some(registry.preset(&preset_name)?);
-        }
-        if let Some(p) = &preset_used {
-            if p.plan_first && task.mode == crate::task::TaskMode::Normal {
-                task.mode = crate::task::TaskMode::PlanFirst;
-            }
-            if p.require_full_evidence && !task.required_evidence.iter().any(|e| e == "full_tests")
-            {
-                task.required_evidence.push("full_tests".to_string());
-            }
-            if p.prefer_smallest_valid_pack {
-                task.metadata
-                    .insert("prefer_smallest_valid_pack".to_string(), Value::Bool(true));
-            }
-        }
-        task.updated_at = now();
-        store.update(&task)?;
-
-        // Validate every candidate profile before starting any execution.
-        let mut profiles = Vec::new();
-        for candidate in &candidates {
-            let profile = registry.profile(candidate)?;
-            if profile.kind.runs_command() {
-                profile.ensure_capability("edit")?;
-                if task.mode == crate::task::TaskMode::PlanFirst {
-                    profile.ensure_capability("plan")?;
-                }
-                if profile.command.is_none() {
-                    return Err(DraftError::new(
-                        DraftErrorKind::CandidateNotConfigured,
-                        format!("candidate '{candidate}' has no command configured"),
-                    )
-                    .with_suggestion(format!(
-                        "set `command` under [candidates.{candidate}] in .draft/config.toml"
-                    )));
-                }
-            }
-            profiles.push(profile);
-        }
-        if profiles.iter().any(|profile| profile.kind.runs_command()) {
-            let stable = crate::workspace::stable::StableHeadStore::new(
-                crate::workspace::layout::DraftLayout::for_root(&ws.root),
-            )
-            .read()?;
-            ensure_workspace_matches_hash(
-                &ws,
-                &stable.workspace_hash,
-                "task spawn",
-                "create a pack from the current edits, discard them, or run the task from a clean stable head",
-            )?;
-        }
-
-        let parent_pack = Some(match pack_id {
-            Some(pack_id) => pack_id.to_string(),
-            None => self.selected_pack_id(cwd)?,
-        });
-        ws.events()?.append(
-            "task.spawned",
-            Some(task.id.to_string()),
-            serde_json::json!({
-                "pack_id": parent_pack,
-                "candidates": candidates,
-                "preset": preset_used.as_ref().map(|p| p.name.clone()),
-                "instruction": redact_secrets(&task.goal),
-            }),
-        )?;
-
-        // One shared pre-spawn baseline: every candidate pack diffs against it.
-        let baseline =
-            Snapshotter::new(&ws)?.create_snapshot(resolve_actor(&ws.layout.draft_dir)?)?;
-        let mut executions = Vec::new();
-        for profile in &profiles {
-            let command = profile
-                .command
-                .as_deref()
-                .map(|t| crate::task::candidate::render_command(t, &task.goal))
-                .unwrap_or_default();
-            let mut execution =
-                crate::task::Execution::queued(&task, profile.name.clone(), command);
-            execution.workspace_id = Some(ws.workspace_id.to_string());
-            execution.parent_pack = parent_pack.clone();
-            exec_store.write(&execution)?;
-            ws.events()?.append(
-                "execution.queued",
-                Some(execution.id.to_string()),
-                serde_json::json!({
-                    "task_id": task.id.to_string(),
-                    "candidate": profile.name,
-                }),
-            )?;
-            if !profile.kind.runs_command() {
-                executions.push(ExecutionSummary {
-                    execution_id: execution.id.to_string(),
-                    candidate: profile.name.clone(),
-                    status: "queued".to_string(),
-                    produced_pack: None,
-                    error: None,
-                    note: Some(
-                        "human execution: make edits in the editor or workspace, then create a pack"
-                            .to_string(),
-                    ),
-                });
-                continue;
-            }
-            match self.run_candidate_execution(&ws, &task, &execution, profile, &baseline) {
-                Ok(produced_pack) => {
-                    let refreshed = exec_store.read(execution.id.as_str())?;
-                    executions.push(ExecutionSummary {
-                        execution_id: execution.id.to_string(),
-                        candidate: profile.name.clone(),
-                        status: execution_status_label(refreshed.status).to_string(),
-                        produced_pack,
-                        error: refreshed.failure_reason,
-                        note: None,
-                    });
-                }
-                Err(e) => {
-                    let _ = exec_store.mark_failed(execution.id.as_str(), &e.to_string());
-                    let _ = ws.events()?.append(
-                        "execution.failed",
-                        Some(execution.id.to_string()),
-                        serde_json::json!({
-                            "task_id": task.id.to_string(),
-                            "candidate": profile.name,
-                            "reason": redact_secrets(&e.to_string()),
-                        }),
-                    );
-                    executions.push(ExecutionSummary {
-                        execution_id: execution.id.to_string(),
-                        candidate: profile.name.clone(),
-                        status: "failed".to_string(),
-                        produced_pack: None,
-                        error: Some(e.to_string()),
-                        note: None,
-                    });
-                }
-            }
-        }
-        store.rebuild_index()?;
-
-        let next_action = if let Some(done) = executions
-            .iter()
-            .find(|e| e.status == "completed" && e.produced_pack.is_some())
-        {
-            format!(
-                "draft review {}",
-                done.produced_pack.clone().unwrap_or_default()
-            )
-        } else if executions.iter().any(|e| e.status == "queued") {
-            "make the edits, then run `draft pack new` to capture them".to_string()
-        } else {
-            format!("draft task {} --executions", task.name)
-        };
-        Ok(TaskSpawnReport {
-            task_id: task.id.to_string(),
-            task_name: task.name.clone(),
-            task_kind: format!("{:?}", task.kind).to_lowercase(),
-            preset: preset_used.map(|p| p.name),
-            parent_pack,
-            executions,
-            next_action,
-        })
-    }
-
     /// Run one candidate command in an isolated copy of the workspace,
     /// enforce candidate limits and file guards, and turn accepted changes
-    /// into a pack against `baseline`. The working tree is restored to its
+    /// into a change against `baseline`. The working tree is restored to its
     /// pre-spawn contents before returning.
     fn run_candidate_execution(
         &self,
@@ -3085,12 +1824,12 @@ impl App {
         baseline: &Snapshot,
     ) -> DraftResult<Option<String>> {
         let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
+        let paths = crate::project::layout::DraftLayout::for_root(&ws.root);
         let exe_id = execution.id.as_str();
         let runtime_dir = paths.execution_runtime_dir(exe_id);
         ensure_dir(&runtime_dir)?;
 
-        // Deterministic task contract for the candidate (TDD §10.2).
+        // The deterministic task contract handed to the candidate.
         write_json(
             &paths.execution_contract_file(exe_id),
             &serde_json::json!({
@@ -3101,9 +1840,9 @@ impl App {
                 "allowed_zones": task.allowed_zones,
                 "forbidden_zones": task.forbidden_zones,
                 "success_criteria": task.success_criteria,
-                "base_stable_head": task.base_stable_head,
+                "base_baseline": task.base_baseline,
                 "required_evidence": task.required_evidence,
-                "protected_files": crate::workspace::protected::rules_for_project(&ws.root)?,
+                "protected_resources": self.protections(&ws.root)?,
                 "output": {
                     "mode": "edit_in_place",
                     "workspace": "current directory",
@@ -3118,9 +1857,18 @@ impl App {
         let work_dir = if isolated {
             let dir = paths.execution_work_dir(exe_id);
             ensure_dir(&dir)?;
-            for entry in baseline.files.iter() {
-                let src = safe_workspace_dest(&ws.root, &entry.path)?;
-                let dst = dir.join(entry.path.as_str());
+            // Only filesystem-addressed resources can be copied into an
+            // isolated run directory. Another scheme's resources stay where they
+            // are; the candidate reaches them through their adapter or not at
+            // all.
+            for entry in baseline
+                .resources
+                .iter()
+                .filter(|state| state.locator.scheme == crate::extension::FILE_SCHEME)
+            {
+                let rel = WorkspacePath::new(&entry.locator.body);
+                let src = safe_workspace_dest(&ws.root, &rel)?;
+                let dst = dir.join(rel.as_str());
                 if let Some(parent) = dst.parent() {
                     ensure_dir(parent)?;
                 }
@@ -3128,7 +1876,7 @@ impl App {
                     fs::copy(&src, &dst).map_err(|e| {
                         DraftError::storage(format!(
                             "failed to copy {} into execution workspace: {e}",
-                            entry.path.as_str()
+                            rel.as_str()
                         ))
                     })?;
                 }
@@ -3203,7 +1951,7 @@ impl App {
             })?;
         exec_store.mark_running(exe_id, Some(child.id()))?;
         ws.events()?.append(
-            "execution.started",
+            EventKind::OperationPlanned,
             Some(exe_id.to_string()),
             serde_json::json!({
                 "task_id": task.id.to_string(),
@@ -3270,7 +2018,7 @@ impl App {
             );
             exec_store.mark_failed(exe_id, &reason)?;
             ws.events()?.append(
-                "execution.failed",
+                EventKind::OperationRefused,
                 Some(exe_id.to_string()),
                 serde_json::json!({
                     "task_id": task.id.to_string(),
@@ -3293,87 +2041,90 @@ impl App {
         self.enforce_execution_guards(ws, task, profile, execution, &changes)?;
 
         if changes.is_empty() {
-            let created_pack =
-                self.create_empty_execution_pack(ws, task, execution, profile, baseline)?;
+            // A run that changed nothing produces no Change. There is nothing
+            // to seal a revision of, and an empty Change would be a thing to
+            // review that says nothing happened.
             exec_store.mark_completed(exe_id)?;
-            exec_store.update(exe_id, |e| {
-                e.produced_pack = Some(created_pack.clone());
-            })?;
             ws.events()?.append(
-                "execution.completed",
+                EventKind::OperationExecuted,
                 Some(exe_id.to_string()),
                 serde_json::json!({
                     "task_id": task.id.to_string(),
                     "candidate": profile.name,
                     "changed_files": 0,
-                    "produced_pack": created_pack,
+                    "produced_change": Value::Null,
                 }),
             )?;
-            return Ok(Some(created_pack));
+            return Ok(None);
         }
 
-        // Apply accepted changes, capture the pack, restore the tree.
-        let produced_pack = if isolated {
-            let stash = stash_workspace_files(&ws.root, &changes)?;
-            let apply = apply_isolated_changes(&ws.root, &work_dir, &changes);
-            let pack = match apply {
-                Ok(()) => self.pack_create_with_base(
-                    &ws.root,
-                    Some(pack_name_for(task, profile, exe_id)),
-                    Some(task.id.to_string()),
-                    baseline.clone(),
-                ),
-                Err(e) => Err(e),
-            };
-            restore_workspace_files(&ws.root, stash)?;
-            Some(pack?)
-        } else {
-            Some(self.pack_create_with_base(
-                &ws.root,
-                Some(pack_name_for(task, profile, exe_id)),
-                Some(task.id.to_string()),
-                baseline.clone(),
-            )?)
-        };
-        let pack_id = produced_pack.as_ref().map(|p| p.id.to_string());
+        // Apply the run's output to the workspace, then seal a revision of it.
+        //
+        // An isolated run produces its files in a work directory, and a
+        // revision seals what is *observed* in the workspace — so the output
+        // has to land there before it can be sealed at all. It stays: a task's
+        // work is visible in the tree like any other, and what happens to it
+        // next is the ordinary chain of evidence, assessment, gate and
+        // decision. Nothing here accepts it.
+        if isolated {
+            apply_isolated_changes(&ws.root, &work_dir, &changes)?;
+        }
+        let change_id = Some(self.seal_execution_revision(ws, task, profile, &changes)?);
         exec_store.update(exe_id, |e| {
-            e.produced_pack = pack_id.clone();
+            e.produced_change = change_id.clone();
         })?;
         exec_store.mark_completed(exe_id)?;
         ws.events()?.append(
-            "execution.completed",
+            EventKind::OperationExecuted,
             Some(exe_id.to_string()),
             serde_json::json!({
                 "task_id": task.id.to_string(),
                 "candidate": profile.name,
                 "changed_files": changes.len(),
-                "produced_pack": pack_id,
+                "produced_change": change_id,
             }),
         )?;
         // Isolated work dir is no longer needed after a completed run.
         if isolated {
             let _ = fs::remove_dir_all(paths.execution_work_dir(exe_id));
         }
-        Ok(pack_id)
+        Ok(change_id)
     }
 
-    fn create_empty_execution_pack(
+    /// Open a Change for this execution and seal what it produced.
+    ///
+    /// The identity is derived from the task and what actually changed, so a
+    /// re-run that produces the same output converges on the same Change and
+    /// the same revision rather than minting a second thing to review.
+    ///
+    /// The scope is the resources the run touched. Resolution narrows it to
+    /// what the accepted Baseline holds — a file the run created is in the
+    /// sealed state root but outside the reviewed boundary, because nobody has
+    /// yet agreed that the Change may reach it.
+    fn seal_execution_revision(
         &self,
         ws: &Workspace,
         task: &crate::task::TaskDefinition,
-        execution: &crate::task::Execution,
         profile: &crate::task::candidate::CandidateProfile,
-        baseline: &Snapshot,
+        changes: &[IsolatedChange],
     ) -> DraftResult<String> {
-        let mut pack = self.pack_create_with_base(
+        let scope: Vec<String> = changes
+            .iter()
+            .map(|change| {
+                crate::dcg::resource::resource_id_for_locator(&format!(
+                    "file:{}",
+                    change.path.as_str()
+                ))
+                .to_string()
+            })
+            .collect();
+        let change = self.dcg_open_change(
             &ws.root,
-            Some(profile.name.clone()),
-            Some(task.id.to_string()),
-            baseline.clone(),
+            &format!("{} via {}", task.name, profile.name),
+            &scope,
         )?;
-        pack.execution_id = Some(execution.id.clone());
-        save_pack_staging(ws, &mut pack)?;
-        Ok(pack.id.to_string())
+        self.dcg_seal(&ws.root, change.id.as_str())?;
+        Ok(change.id.to_string())
     }
 
     /// Validate collected candidate changes against the task contract and
@@ -3389,13 +2140,13 @@ impl App {
     ) -> DraftResult<()> {
         let exec_store = crate::task::ExecutionStore::for_root(&ws.root);
         let mut violations: Vec<String> = Vec::new();
-        let rules = crate::workspace::protected::rules_for_project(&ws.root)?;
+        let rules = self.protections(&ws.root)?;
         for change in changes {
             let path = change.path.as_str();
-            if crate::workspace::protected::matches_rules(&rules, path) {
+            if crate::project::protected::matches_rules(&rules, path) {
                 violations.push(format!("protected file '{path}'"));
                 let _ = ws.events()?.append(
-                    "protected.access_attempt",
+                    EventKind::OperationRefused,
                     Some(execution.id.to_string()),
                     serde_json::json!({
                         "path": path,
@@ -3437,11 +2188,11 @@ impl App {
                 ));
             }
         }
-        if let Some(max) = profile.limits.max_changed_lines {
-            let total: u64 = changes.iter().map(|c| c.changed_lines).sum();
-            if total > u64::from(max) {
+        if let Some(max) = profile.limits.max_output_bytes_changed {
+            let total: u64 = changes.iter().map(|change| change.bytes).sum();
+            if total > max {
                 violations.push(format!(
-                    "{total} changed lines exceeds the candidate limit of {max}"
+                    "{total} bytes changed exceeds the candidate limit of {max}"
                 ));
             }
         }
@@ -3455,7 +2206,7 @@ impl App {
         })?;
         exec_store.mark_failed(execution.id.as_str(), &reason)?;
         ws.events()?.append(
-            "execution.blocked",
+            EventKind::OperationRefused,
             Some(execution.id.to_string()),
             serde_json::json!({
                 "task_id": task.id.to_string(),
@@ -3469,16 +2220,11 @@ impl App {
         )
     }
 
-    /// Resolve the current stable head reference, or "uninitialized".
-    fn stable_head_ref(&self, ws: &Workspace) -> DraftResult<String> {
-        let store = crate::workspace::stable::StableHeadStore::new(
-            crate::workspace::layout::DraftLayout::for_root(&ws.root),
-        );
-        if store.exists() {
-            Ok(store.read()?.stable_head_hash)
-        } else {
-            Ok("uninitialized".to_string())
-        }
+    /// The Baseline this project accepts, or "uninitialized".
+    fn accepted_baseline_ref(&self, ws: &Workspace) -> DraftResult<String> {
+        Ok(crate::dcg::baseline::current_baseline(&ws.layout)?
+            .map(|baseline| baseline.to_string())
+            .unwrap_or_else(|| "uninitialized".to_string()))
     }
 
     fn candidate_registry_for(
@@ -3486,7 +2232,7 @@ impl App {
         ws: &Workspace,
     ) -> DraftResult<crate::task::candidate::CandidateRegistry> {
         let project_config = ws.layout.config_toml();
-        let global_config = Some(crate::workspace::home::DraftGlobalStore::locate()?.config_toml());
+        let global_config = Some(crate::project::home::DraftGlobalStore::locate()?.config_toml());
         crate::task::candidate::CandidateRegistry::load(
             Some(project_config.as_path()),
             global_config.as_deref(),
@@ -3509,15 +2255,6 @@ impl App {
     ) -> DraftResult<Vec<crate::task::candidate::CandidatePreset>> {
         let ws = self.open(cwd)?;
         Ok(self.candidate_registry_for(&ws)?.presets())
-    }
-
-    pub fn task_current(&self, cwd: &Path) -> DraftResult<Value> {
-        let tasks = self.task_list(cwd)?;
-        if let Some(task) = tasks.last() {
-            Ok(serde_json::to_value(task).expect("Draft-owned records must serialize"))
-        } else {
-            Ok(serde_json::json!({ "message": "No running tasks." }))
-        }
     }
 
     pub fn candidate_list(
@@ -3549,7 +2286,7 @@ impl App {
             kind.unwrap_or("command"),
             "custom",
             template,
-            "candidate.added",
+            EventKind::PolicyUpdated,
         )
     }
 
@@ -3572,7 +2309,7 @@ impl App {
             kind.unwrap_or(existing_kind),
             "custom",
             template,
-            "candidate.updated",
+            EventKind::PolicyUpdated,
         )
     }
 
@@ -3583,60 +2320,16 @@ impl App {
     ) -> DraftResult<crate::task::candidate::CandidateProfile> {
         let ws = self.open(cwd)?;
         let record = self.candidate_show(cwd, name)?;
-        crate::workspace::config::remove_table(
+        crate::project::config::remove_table(
             &ws.layout.config_toml(),
             &format!("candidates.{name}"),
         )?;
         ws.events()?.append(
-            "candidate.removed",
+            EventKind::PolicyUpdated,
             Some(name.to_string()),
             serde_json::json!({}),
         )?;
         Ok(record)
-    }
-
-    pub fn candidate_packs(
-        &self,
-        cwd: &Path,
-        pack: Option<&str>,
-        candidate: Option<&str>,
-    ) -> DraftResult<Vec<CandidatePackAssignment>> {
-        let ws = self.open(cwd)?;
-        let packs = self.pack_list(cwd)?;
-        let mut out = Vec::new();
-        for p in packs {
-            if let Some(filter) = pack {
-                if p.id.as_str() != filter && p.name.as_deref() != Some(filter) {
-                    continue;
-                }
-            }
-            let execution = p
-                .execution_id
-                .as_ref()
-                .map(|execution_id| {
-                    crate::task::ExecutionStore::for_root(&ws.root).read(execution_id.as_str())
-                })
-                .transpose()?;
-            let name = execution
-                .as_ref()
-                .map(|execution| execution.candidate.clone())
-                .unwrap_or_else(|| {
-                    p.execution_id
-                        .as_ref()
-                        .map(|_| "unknown".to_string())
-                        .unwrap_or_else(|| "manual".to_string())
-                });
-            if candidate.map(|c| c != name).unwrap_or(false) {
-                continue;
-            }
-            out.push(CandidatePackAssignment {
-                pack_id: p.id.to_string(),
-                candidate: name,
-                task_id: p.task_id.as_ref().map(ToString::to_string),
-                execution_id: p.execution_id.as_ref().map(ToString::to_string),
-            });
-        }
-        Ok(out)
     }
 
     fn write_candidate(
@@ -3646,17 +2339,17 @@ impl App {
         kind: &str,
         source: &str,
         template: Vec<String>,
-        event: &str,
+        event: EventKind,
     ) -> DraftResult<crate::task::candidate::CandidateProfile> {
         let ws = self.open(cwd)?;
         let _ = crate::task::candidate::CandidateKind::parse(kind)?;
-        crate::workspace::config::set_value(
+        crate::project::config::set_value(
             &ws.layout.config_toml(),
             &format!("candidates.{name}.kind"),
             kind,
         )?;
         if !template.is_empty() {
-            crate::workspace::config::set_value(
+            crate::project::config::set_value(
                 &ws.layout.config_toml(),
                 &format!("candidates.{name}.command"),
                 &template.join(" "),
@@ -3674,2397 +2367,514 @@ impl App {
         Ok(record)
     }
 
-    pub fn pack_create(
+    /// How each changed resource should be presented, and by whom.
+    ///
+    /// Every resource gets an answer. Where nothing claims a resource, or where
+    /// two publishers tie, the answer is the universal neutral rendering —
+    /// which Draft always provides and no extension contributes — with the
+    /// reason recorded so a reader can tell "nothing knows how to show this"
+    /// from "two things disagree about how".
+    pub fn presentation_bindings(
         &self,
         cwd: &Path,
-        name: Option<String>,
-        task_id: Option<String>,
-        from_working_tree: bool,
-    ) -> DraftResult<PackWorkspace> {
-        let ws = self.open(cwd)?;
-        if let Some(name) = name.as_deref() {
-            self.ensure_unique_pack_name(&ws, name)?;
-        }
-        let base = latest_snapshot(&ws)?.unwrap_or_else(|| empty_snapshot(&ws));
-        let result =
-            Snapshotter::new(&ws)?.create_snapshot(resolve_actor(&ws.layout.draft_dir)?)?;
-        let patch = diff_snapshots(&ws, &base, &result)?;
-        let evidence = Evidence {
-            schema_version: current_version(ContractId::PackEvidence),
-            id: EvidenceId::generate(),
-            pack_id: PackId::new("pending"),
-            command_logs: vec![],
-            files_touched: patch.files.iter().map(|f| f.path.clone()).collect(),
-            generated_diff_ref: None,
-            test_results: vec![],
-            lint_results: vec![],
-            risk_summary_ref: None,
-            agent_plan_ref: None,
-            agent_transcript_ref: None,
-            warnings: if from_working_tree {
-                vec![]
-            } else {
-                vec!["created from current workspace snapshot".to_string()]
-            },
-            created_at: now(),
+        surface: &str,
+    ) -> DraftResult<Vec<serde_json::Value>> {
+        use draft_extension_contract::PresentationSurface;
+        let surface = match surface {
+            "resource" => PresentationSurface::ResourceView,
+            "change" => PresentationSurface::ChangeView,
+            other => {
+                return Err(DraftError::invalid_config(format!(
+                    "unknown presentation surface '{other}'; expected 'resource' or 'change'"
+                )))
+            }
         };
-        let mut pack = PackWorkspace::new(
-            ws.workspace_id.clone(),
-            task_id.map(TaskId::new),
-            None,
-            base.id.clone(),
-            result.id.clone(),
-            name,
-        );
-        let mut evidence = evidence;
-        evidence.pack_id = pack.id.clone();
-        let pack_dir = ws.layout.pack_workspace_dir(&pack.id);
-        ensure_dir(&pack_dir)?;
-        write_json(&pack_dir.join("staging.json"), &pack)?;
-        write_json(&pack_dir.join("patch.json"), &patch)?;
-        write_json(&pack_dir.join("evidence.json"), &evidence)?;
-        pack.patch_refs.push(patch.id.to_string());
-        pack.evidence_refs.push(evidence.id.to_string());
-        pack.manifest_hash = hash_json(&pack)?;
-        write_json(&pack_dir.join("staging.json"), &pack)?;
-        ws.events()?.append(
-            "pack.created",
-            Some(pack.id.to_string()),
-            serde_json::to_value(&pack).expect("Draft-owned records must serialize"),
-        )?;
-        write_atomic(
-            ws.layout.selected_pack_file().as_path(),
-            pack.id.to_string().as_bytes(),
-        )?;
-        ws.events()?.append(
-            "pack.selected",
-            Some(pack.id.to_string()),
-            serde_json::json!({}),
-        )?;
-        // Materialize the immutable manifest/revision and signed creation
-        // receipt so every pack is inspectable and exportable immediately.
-        let created_patch = load_patch(&ws, &pack)?;
-        self.sync_canonical_pack(
-            &ws,
-            &pack,
-            Some(&created_patch),
-            PackSyncSpec {
-                kind: crate::trust::event::EventKind::PackCreated,
-                intent: crate::pack::PackIntent::Feature,
-                lifecycle: crate::pack::lifecycle::PackLifecycle::Draft,
-                metadata: serde_json::json!({ "name": pack.name }),
-            },
-        )?;
-        Ok(pack)
-    }
-
-    fn pack_create_with_base(
-        &self,
-        cwd: &Path,
-        name: Option<String>,
-        task_id: Option<String>,
-        base: Snapshot,
-    ) -> DraftResult<PackWorkspace> {
         let ws = self.open(cwd)?;
-        if let Some(name) = name.as_deref() {
-            self.ensure_unique_pack_name(&ws, name)?;
+        let snapshot = self.observe(&ws)?;
+        let contributions = self.active_contributions();
+        let classification =
+            crate::evidence::classification::classify_snapshot(&snapshot, &contributions);
+        let classes = classification.by_resource();
+
+        let mut out = Vec::with_capacity(snapshot.resources.len());
+        for state in &snapshot.resources {
+            let view = crate::extension::ResourceView {
+                locator_scheme: state.locator.scheme.as_str(),
+                locator_body: state.locator.body.as_str(),
+                media_type: state.media_type.as_deref(),
+                form: state.form,
+                attributes: &state.attributes,
+                content_size: state.content_size,
+            };
+            let empty = BTreeSet::new();
+            let resolved = contributions.presentation_for(
+                surface,
+                &view,
+                classes.get(&state.resource_id).unwrap_or(&empty),
+            );
+            out.push(match resolved {
+                crate::extension::Resolution::Resolved {
+                    value,
+                    contributors,
+                } => serde_json::json!({
+                    "resource_id": state.resource_id.as_str(),
+                    "locator": state.locator,
+                    "state": "resolved",
+                    "presentation_id": value.presentation_id.qualified(),
+                    "engine": value.engine,
+                    "config": value.config,
+                    "contributors": contributors,
+                }),
+                crate::extension::Resolution::Ambiguous { candidates } => serde_json::json!({
+                    "resource_id": state.resource_id.as_str(),
+                    "locator": state.locator,
+                    "state": "ambiguous",
+                    "candidates": candidates
+                        .iter()
+                        .map(|candidate| serde_json::json!({
+                            "presentation_id": candidate.value.presentation_id.qualified(),
+                            "engine": candidate.value.engine,
+                            "contributed_by": candidate.extension_id,
+                        }))
+                        .collect::<Vec<_>>(),
+                    "fallback": NEUTRAL_PRESENTATION,
+                }),
+                crate::extension::Resolution::NoMatch => serde_json::json!({
+                    "resource_id": state.resource_id.as_str(),
+                    "locator": state.locator,
+                    "state": "fallback",
+                    "engine": NEUTRAL_PRESENTATION,
+                }),
+            });
         }
-        let result =
-            Snapshotter::new(&ws)?.create_snapshot(resolve_actor(&ws.layout.draft_dir)?)?;
-        let patch = diff_snapshots(&ws, &base, &result)?;
-        let evidence = Evidence {
-            schema_version: current_version(ContractId::PackEvidence),
-            id: EvidenceId::generate(),
-            pack_id: PackId::new("pending"),
-            command_logs: vec![],
-            files_touched: patch.files.iter().map(|f| f.path.clone()).collect(),
-            generated_diff_ref: None,
-            test_results: vec![],
-            lint_results: vec![],
-            risk_summary_ref: None,
-            agent_plan_ref: None,
-            agent_transcript_ref: None,
-            warnings: vec!["created from task execution baseline".to_string()],
-            created_at: now(),
-        };
-        let mut pack = PackWorkspace::new(
-            ws.workspace_id.clone(),
-            task_id.map(TaskId::new),
-            None,
-            base.id.clone(),
-            result.id.clone(),
-            name,
-        );
-        let mut evidence = evidence;
-        evidence.pack_id = pack.id.clone();
-        let pack_dir = ws.layout.pack_workspace_dir(&pack.id);
-        ensure_dir(&pack_dir)?;
-        write_json(&pack_dir.join("staging.json"), &pack)?;
-        write_json(&pack_dir.join("patch.json"), &patch)?;
-        write_json(&pack_dir.join("evidence.json"), &evidence)?;
-        pack.patch_refs.push(patch.id.to_string());
-        pack.evidence_refs.push(evidence.id.to_string());
-        pack.manifest_hash = hash_json(&pack)?;
-        write_json(&pack_dir.join("staging.json"), &pack)?;
-        ws.events()?.append(
-            "pack.created",
-            Some(pack.id.to_string()),
-            serde_json::to_value(&pack).expect("Draft-owned records must serialize"),
-        )?;
-        write_atomic(
-            ws.layout.selected_pack_file().as_path(),
-            pack.id.to_string().as_bytes(),
-        )?;
-        ws.events()?.append(
-            "pack.selected",
-            Some(pack.id.to_string()),
-            serde_json::json!({}),
-        )?;
-        self.sync_canonical_pack(
-            &ws,
-            &pack,
-            Some(&patch),
-            PackSyncSpec {
-                kind: crate::trust::event::EventKind::PackCreated,
-                intent: crate::pack::PackIntent::Feature,
-                lifecycle: crate::pack::lifecycle::PackLifecycle::Draft,
-                metadata: serde_json::json!({ "name": pack.name, "base": "task_execution" }),
-            },
-        )?;
-        Ok(pack)
+        Ok(out)
     }
 
-    pub fn pack_create_from_base(
-        &self,
-        cwd: &Path,
-        name: String,
-        base_pack_ref: Option<String>,
-    ) -> DraftResult<PackWorkspace> {
-        let ws = self.open(cwd)?;
-        let base_ref = base_pack_ref.unwrap_or(self.selected_pack_id(cwd)?);
-        let base_pack = self.resolve_pack_ref(&ws, &base_ref)?;
-        let base = load_snapshot(&ws, &base_pack.result_snapshot_id)?;
-        self.pack_create_with_base(cwd, Some(name), None, base)
-    }
-
-    pub fn pack_select(&self, cwd: &Path, id: &str) -> DraftResult<PackWorkspace> {
-        self.pack_select_ref(cwd, id)
-    }
-
-    pub fn pack_select_ref(&self, cwd: &Path, reference: &str) -> DraftResult<PackWorkspace> {
-        let ws = self.open(cwd)?;
-        let pack = self.resolve_pack_ref(&ws, reference)?;
-        write_atomic(
-            ws.layout.selected_pack_file().as_path(),
-            pack.id.to_string().as_bytes(),
-        )?;
-        ws.events()?.append(
-            "pack.selected",
-            Some(pack.id.to_string()),
-            serde_json::json!({}),
-        )?;
-        Ok(pack)
-    }
-
-    pub fn pack_show_selected(&self, cwd: &Path) -> DraftResult<PackReport> {
-        let id = self.selected_pack_id(cwd)?;
-        self.pack_show(cwd, &id)
-    }
-
-    pub fn pack_delete_ref(&self, cwd: &Path, reference: &str) -> DraftResult<PackDeleteReport> {
-        let ws = self.open(cwd)?;
-        let pack = self.resolve_pack_ref(&ws, reference)?;
-        ensure_pack_not_locked(&ws, &pack)?;
-        if pack.base_snapshot_id.as_str() == "chk_empty"
-            && pack.result_snapshot_id.as_str() == "chk_empty"
-        {
-            return Err(DraftError::invalid_config("cannot delete the base pack"));
+    /// Resolve a template id against the installed contributions.
+    ///
+    /// Draft ships none, so with nothing installed this always fails — and it
+    /// says so by naming what *is* available, rather than reporting an unknown
+    /// id as though the caller mistyped one that exists.
+    fn resolve_task_template(&self, id: &str) -> DraftResult<crate::task::TaskTemplate> {
+        let contributions = self.active_contributions();
+        let templates = contributions.task_templates();
+        let parsed = draft_extension_contract::NamespacedId::parse(id)
+            .map_err(|error| DraftError::invalid_config(format!("invalid template id: {error}")))?;
+        match templates.get(&parsed) {
+            Some(contributed) => crate::task::resolve_template(contributed),
+            None if templates.is_empty() => Err(DraftError::not_found(format!(
+                "no task template '{id}': no installed extension contributes any"
+            ))
+            .with_suggestion(
+                "install an extension contributing `task_template`, or create the task without \
+                 --template",
+            )),
+            None => {
+                let available: Vec<String> = templates.keys().map(|key| key.qualified()).collect();
+                Err(DraftError::not_found(format!(
+                    "no task template '{id}'; available: {}",
+                    available.join(", ")
+                )))
+            }
         }
-        let active = self.pack_list(cwd)?;
-        if active.len() <= 1 {
-            return Err(DraftError::invalid_config(
-                "cannot delete the last active pack",
-            ));
-        }
-        let selected = Some(self.selected_pack_id(cwd)?);
-        let replacement = if selected.as_deref() == Some(pack.id.as_str()) {
-            active
+    }
+
+    /// The tool actions installed extensions offer, and what each applies to.
+    ///
+    /// An action whose artifact has no grant to execute is listed as withheld
+    /// rather than omitted: "nothing offers this" and "something offers it and
+    /// you have not authorized it" are different answers, and only the second
+    /// has a fix.
+    pub fn tool_list(&self, cwd: &Path) -> DraftResult<Vec<serde_json::Value>> {
+        let ws = self.open(cwd)?;
+        let snapshot = self.observe(&ws)?;
+        let contributions = self.active_contributions();
+        let classification =
+            crate::evidence::classification::classify_snapshot(&snapshot, &contributions);
+        let classes = classification.by_resource();
+        let empty = BTreeSet::new();
+
+        let mut out = Vec::new();
+        for contributed in &contributions.tool_actions {
+            let action = &contributed.value;
+            let applies: Vec<String> = snapshot
+                .resources
                 .iter()
-                .filter(|p| p.id != pack.id)
-                .max_by_key(|p| p.created_at)
-                .map(|p| p.id.to_string())
-        } else {
-            selected
+                .filter(|state| {
+                    crate::extension::capability::matches(
+                        &action.applies_to,
+                        &resource_view_of(state),
+                        classes.get(&state.resource_id).unwrap_or(&empty),
+                    )
+                })
+                .map(|state| state.locator.body.clone())
+                .collect();
+            let (command, _) = self.authorized_command(
+                &contributions,
+                &contributed.extension_id,
+                &action.operation,
+            );
+            out.push(serde_json::json!({
+                "action_id": action.action_id.qualified(),
+                "display_name": action.display_name,
+                "description": action.description,
+                "contributed_by": contributed.extension_id,
+                "effect": action.effect,
+                "authorized": command.is_some(),
+                "applies_to": applies,
+            }));
+        }
+        out.sort_by(|left, right| left["action_id"].as_str().cmp(&right["action_id"].as_str()));
+        Ok(out)
+    }
+
+    /// Run one tool action and apply what it proposed, as Draft's own operation.
+    ///
+    /// The tool runs, returns findings and proposed mutations, and stops there.
+    /// Draft opens an edit session under its own operation id and attribution,
+    /// stages each proposal — which is where protections, path safety and the
+    /// workspace lease apply, identically to a human edit — and commits. A
+    /// proposal Draft refuses stops the whole operation: applying the half it
+    /// liked would leave the project in a state neither the tool nor the user
+    /// asked for.
+    pub fn tool_invoke(
+        &self,
+        cwd: &Path,
+        action_id: &str,
+        apply: bool,
+    ) -> DraftResult<serde_json::Value> {
+        let ws = self.open(cwd)?;
+        let contributions = self.active_contributions();
+        let parsed = draft_extension_contract::NamespacedId::parse(action_id)
+            .map_err(|error| DraftError::invalid_config(format!("invalid action id: {error}")))?;
+        let Some(contributed) = contributions
+            .tool_actions
+            .iter()
+            .find(|contributed| contributed.value.action_id == parsed)
+        else {
+            let available: Vec<String> = contributions
+                .tool_actions
+                .iter()
+                .map(|contributed| contributed.value.action_id.qualified())
+                .collect();
+            return Err(DraftError::not_found(if available.is_empty() {
+                format!("no tool action '{action_id}': no installed extension contributes any")
+            } else {
+                format!(
+                    "no tool action '{action_id}'; available: {}",
+                    available.join(", ")
+                )
+            }));
         };
-        let Some(replacement_id) = replacement else {
-            return Err(DraftError::invalid_config(
-                "cannot delete selected pack without a replacement",
-            ));
+        let action = &contributed.value;
+
+        let (_, decision) =
+            self.authorized_command(&contributions, &contributed.extension_id, &action.operation);
+        let Some(decision) = decision else {
+            return Err(DraftError::new(
+                DraftErrorKind::CapabilityNotAuthorized,
+                format!(
+                    "'{action_id}' is contributed by {} but its artifact has no grant to execute",
+                    contributed.extension_id
+                ),
+            )
+            .with_suggestion(format!(
+                "run `draft extension authorize {} --permission process.execute`",
+                contributed.extension_id
+            )));
         };
-        let pack_dir = ws.layout.pack_workspace_dir(&pack.id);
-        let deleted_files = count_files(&pack_dir)?;
-        // Task definitions and execution records are independent durable
-        // history and are never deleted as a side effect of pack disposal.
-        let deleted_executions = 0usize;
-        let deleted_tasks = 0usize;
+
+        // The resources the action declares itself applicable to, from the
+        // current authoritative observation.
+        let snapshot = self.observe(&ws)?;
+        let classification =
+            crate::evidence::classification::classify_snapshot(&snapshot, &contributions);
+        let classes = classification.by_resource();
+        let empty = BTreeSet::new();
+        let subjects: Vec<&crate::dcg::resource::RawResourceState> = snapshot
+            .resources
+            .iter()
+            .filter(|state| {
+                crate::extension::capability::matches(
+                    &action.applies_to,
+                    &resource_view_of(state),
+                    classes.get(&state.resource_id).unwrap_or(&empty),
+                )
+            })
+            .collect();
+
+        let operation_id = crate::support::common::OperationId::generate();
+        let request = serde_json::json!({
+            "action_id": action.action_id.qualified(),
+            "resources": subjects
+                .iter()
+                .map(|state| serde_json::json!({
+                    "resource_id": state.resource_id.as_str(),
+                    "locator": state.locator,
+                    "state_digest": state.state_digest,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let response = crate::execution::mechanism::invoke_command(
+            &action.operation,
+            &request,
+            &crate::execution::mechanism::MechanismInputs::default(),
+            &crate::execution::mechanism::MechanismContext {
+                workspace_id: ws.workspace_id.to_string(),
+                operation_id: operation_id.to_string(),
+                producer: producer_ref_for(&contributions, &contributed.extension_id),
+                authorization_decision: Some(decision.clone()),
+            },
+        )?;
+
+        let result: crate::execution::mechanism::proposal::ToolActionResult =
+            serde_json::from_value(response.payload.clone()).map_err(|error| {
+                DraftError::new(
+                    DraftErrorKind::CorruptData,
+                    format!("'{action_id}' returned a response Draft cannot read: {error}"),
+                )
+            })?;
+        crate::execution::mechanism::proposal::check_within_declared_effect(
+            action_id,
+            &action.effect,
+            &result,
+        )?;
+
+        let mut report = serde_json::json!({
+            "action_id": action.action_id.qualified(),
+            "contributed_by": contributed.extension_id,
+            "operation_id": operation_id.to_string(),
+            "authorization_decision": decision,
+            "executable_identity": response.executable_identity,
+            "exit_code": response.exit_code,
+            "duration_ms": response.duration_ms,
+            "summary": result.summary,
+            "detail": result.detail,
+            "proposed_mutations": result.proposed_mutations,
+            "applied": false,
+        });
+        if !apply || result.proposed_mutations.is_empty() {
+            return Ok(report);
+        }
+
+        // From here on it is Draft's operation. The session carries Draft's own
+        // operation id and attribution; the tool named neither and could not.
+        let store = crate::execution::workspace::WorkspaceStore::for_workspace(
+            &ws.root,
+            self.protections(&ws.root)?,
+        );
+        let session = store.open(
+            crate::execution::workspace::EditAttribution::Task {
+                id: operation_id.to_string(),
+            },
+            operation_id.clone(),
+        )?;
+        for proposal in &result.proposed_mutations {
+            use crate::execution::mechanism::proposal::ProposedMutation as Proposal;
+            match proposal {
+                Proposal::SetContent { locator, content } => {
+                    store.stage_content(
+                        &session.id,
+                        locator,
+                        content.clone(),
+                        operation_id.clone(),
+                    )?;
+                }
+                Proposal::CreateCollection { locator } => {
+                    store.stage_create_collection(&session.id, locator, operation_id.clone())?;
+                }
+                Proposal::Relocate { from, to } => {
+                    store.stage_relocate(&session.id, from, to, operation_id.clone())?;
+                }
+                Proposal::Remove { locator, recursive } => {
+                    store.stage_remove(&session.id, locator, *recursive, operation_id.clone())?;
+                }
+            }
+        }
+        let committed = store.commit(&session.id, operation_id.clone())?;
         ws.events()?.append(
-            "pack.deleted",
-            Some(pack.id.to_string()),
+            EventKind::OperationExecuted,
+            Some(operation_id.to_string()),
             serde_json::json!({
-                "name": pack.name,
-                "replacement_selected_pack": replacement_id,
-                "deleted_files": deleted_files,
-                "deleted_executions": deleted_executions,
-                "deleted_tasks": deleted_tasks
+                "action_id": action.action_id.qualified(),
+                "contributed_by": contributed.extension_id,
+                "authorization_decision": decision,
+                "resources_changed": committed.resources_changed,
             }),
         )?;
-        fs::remove_dir_all(&pack_dir)
-            .map_err(|e| DraftError::storage(format!("failed to delete pack {}: {e}", pack.id)))?;
-        write_atomic(
-            ws.layout.selected_pack_file().as_path(),
-            replacement_id.as_bytes(),
-        )?;
-        let deleted_objects = garbage_collect_objects(&ws)?;
-        Ok(PackDeleteReport {
-            deleted_pack_id: pack.id.to_string(),
-            deleted_pack_name: pack.name,
-            replacement_selected_pack: replacement_id,
-            deleted_files: deleted_files + deleted_objects,
-        })
+        report["applied"] = serde_json::Value::Bool(true);
+        report["resources_changed"] = serde_json::to_value(&committed.resources_changed)?;
+        Ok(report)
     }
 
-    pub fn selected_pack_id(&self, cwd: &Path) -> DraftResult<String> {
+    /// Mutable work that belongs to a context other than the one given.
+    ///
+    /// Changes and Change workspaces only. A promoted Change is
+    /// history and is never superseded — it recorded what was true under the
+    /// semantics of its day, and still does.
+    fn context_sensitive_work(
+        &self,
+        ws: &Workspace,
+        context_digest: &str,
+    ) -> DraftResult<Vec<crate::dcg::observation_lifecycle::SupersededWork>> {
+        use crate::dcg::observation_lifecycle::{SupersededKind, SupersededWork};
+        let mut stranded = Vec::new();
+        for change in crate::dcg::change::ChangeStore::new(ws.layout.changes_dir()).list()? {
+            // A completed Change is history. It recorded what was true under
+            // the semantics of its day and still does; only work that could
+            // still change is stranded.
+            if change.lifecycle != crate::dcg::change::ChangeLifecycle::Active {
+                continue;
+            }
+            // Any Change with sealed work is reported, not only one sealed
+            // under this exact context.
+            //
+            // A revision records the state root it sealed, not the observation
+            // semantics that produced it — the context lives on the
+            // Observations behind the roots, and nothing links a revision back
+            // to them. So the precise question cannot be asked here, and of the
+            // two available errors only one is safe: this warning exists to
+            // stop somebody adopting new semantics and silently stranding
+            // work, and a warning that misses work defeats it. Naming a
+            // Change that turns out to be unaffected costs a second look.
+            let sealed = crate::dcg::revision::RevisionStore::new(ws.layout.revisions_dir())
+                .list()?
+                .into_iter()
+                .any(|revision| revision.change == change.id);
+            if !sealed {
+                continue;
+            }
+            stranded.push(SupersededWork {
+                kind: SupersededKind::Change,
+                id: change.id.to_string(),
+                context_digest: context_digest.to_string(),
+            });
+        }
+        stranded.sort();
+        Ok(stranded)
+    }
+
+    /// Every intent a caller may declare, with the vocabulary that declares it.
+    pub fn intents(&self, cwd: &Path) -> DraftResult<Vec<serde_json::Value>> {
+        let _ = self.open(cwd)?;
+        let contributions = self.active_contributions();
+        let mut out = vec![serde_json::json!({
+            "intent_id": crate::dcg::change_store::UNSPECIFIED_INTENT,
+            "display_name": "Unspecified",
+            "description": "No intent vocabulary is installed to name one.",
+            "contributed_by": serde_json::Value::Null,
+        })];
+        for preset in &contributions.intent_vocabularies {
+            for intent in &preset.value.intents {
+                out.push(serde_json::json!({
+                    "intent_id": intent.intent_id.qualified(),
+                    "display_name": intent.display_name,
+                    "description": intent.description,
+                    "contributed_by": preset.extension_id,
+                }));
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn selected_change_id(&self, cwd: &Path) -> DraftResult<String> {
         let ws = self.open(cwd)?;
-        let raw = fs::read_to_string(ws.layout.selected_pack_file()).map_err(|e| {
+        let raw = fs::read_to_string(ws.layout.selected_change_file()).map_err(|e| {
             DraftError::not_found(format!(
-                "no selected pack: {e}; run `draft pack -s <pck-id/name>`"
+                "no selected change: {e}; run `draft change select <chg-id/name>`"
             ))
         })?;
         Ok(raw.trim().to_string())
     }
 
-    pub fn resolve_pack_arg(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<String> {
-        match pack_id {
-            Some(id) if !id.trim().is_empty() => {
-                let ws = self.open(cwd)?;
-                match self.resolve_pack_ref(&ws, id) {
-                    Ok(pack) => Ok(pack.id.to_string()),
-                    Err(staging_error) => {
-                        let store = crate::pack::PackStore::new(
-                            crate::workspace::layout::DraftLayout::for_root(&ws.root),
-                        );
-                        let candidate = if id.starts_with("pck_") {
-                            Some(id.to_string())
-                        } else {
-                            store
-                                .list()?
-                                .into_iter()
-                                .chain(store.list_quarantined()?)
-                                .find(|m| m.name == id)
-                                .map(|m| m.pack_id)
-                        };
-                        match candidate {
-                            Some(cid) if store.locate(&cid).is_some() => Ok(cid),
-                            _ => Err(staging_error),
-                        }
-                    }
-                }
-            }
-            _ => self.selected_pack_id(cwd),
-        }
-    }
-
-    pub fn pack_list(&self, cwd: &Path) -> DraftResult<Vec<PackWorkspace>> {
-        let ws = self.open(cwd)?;
-        self.pack_list_for_workspace(&ws)
-    }
-
-    fn pack_list_for_workspace(&self, ws: &Workspace) -> DraftResult<Vec<PackWorkspace>> {
-        let mut packs = Vec::new();
-        if ws.layout.pack_workspaces_dir().exists() {
-            for entry in fs::read_dir(ws.layout.pack_workspaces_dir())? {
-                let p = entry?.path().join("staging.json");
-                if p.exists() {
-                    let pack: PackWorkspace = crate::contracts::read_persisted(&p)?;
-                    pack.validate()?;
-                    packs.push(pack);
-                }
-            }
-        }
-        packs.sort_by_key(|a: &PackWorkspace| a.created_at);
-        Ok(packs)
-    }
-
-    pub fn pack_show(&self, cwd: &Path, id: &str) -> DraftResult<PackReport> {
-        let ws = self.open(cwd)?;
-        let pack = self.resolve_pack_ref(&ws, id)?;
-        let patch = load_patch(&ws, &pack)?;
-        let evidence = Some(load_evidence(&ws, &pack)?);
-        Ok(PackReport {
-            lifecycle: pack_lifecycle(&ws, &pack.id)?,
-            pack,
-            patch,
-            evidence,
-        })
-    }
-
-    fn ensure_unique_pack_name(&self, ws: &Workspace, name: &str) -> DraftResult<()> {
-        if name.trim().is_empty() {
-            return Err(DraftError::invalid_config("pack name cannot be empty"));
-        }
-        if self
-            .pack_list_for_workspace(ws)?
-            .iter()
-            .any(|p| p.name.as_deref() == Some(name))
-        {
-            return Err(DraftError::invalid_config(format!(
-                "pack name '{name}' already exists"
-            )));
-        }
-        Ok(())
-    }
-
-    fn resolve_pack_ref(&self, ws: &Workspace, reference: &str) -> DraftResult<PackWorkspace> {
-        if reference.starts_with("pck_") {
-            validate_pack_id(reference)?;
-            let pack = load_pack(ws, reference)?;
-            return Ok(pack);
-        }
-        let matches: Vec<_> = self
-            .pack_list_for_workspace(ws)?
-            .into_iter()
-            .filter(|p| p.name.as_deref() == Some(reference))
-            .collect();
-        match matches.len() {
-            1 => Ok(matches.into_iter().next().unwrap()),
-            0 => Err(DraftError::not_found(format!("unknown pack '{reference}'"))),
-            _ => Err(DraftError::invalid_config(format!(
-                "pack name '{reference}' is ambiguous"
-            ))),
-        }
-    }
-
-    pub fn risk(&self, cwd: &Path, pack_id: &str) -> DraftResult<RiskSummary> {
-        self.risk_inner(cwd, pack_id, true)
-    }
-
-    fn risk_preview(&self, cwd: &Path, pack_id: &str) -> DraftResult<RiskSummary> {
-        self.risk_inner(cwd, pack_id, false)
-    }
-
-    fn risk_inner(&self, cwd: &Path, pack_id: &str, persist: bool) -> DraftResult<RiskSummary> {
-        let ws = self.open(cwd)?;
-        validate_pack_id(pack_id)?;
-        let pack = load_pack(&ws, pack_id)?;
-        let patch = load_patch(&ws, &pack)?;
-        let risk_config = read_or_default::<RiskConfig>(&ws.layout.risk_toml())?;
-        let mut score = patch.files.len() as u32;
-        let mut factors = Vec::new();
-        let mut reason_codes = Vec::new();
-        let mut hotspots = Vec::new();
-        let mut evidence_gaps = Vec::new();
-        let mut evidence_summary = Vec::new();
-        if patch.files.iter().any(|f| f.binary) {
-            score += 3;
-            factors.push("binary files".to_string());
-            reason_codes.push("binary_change".to_string());
-            hotspots.extend(
-                patch
-                    .files
-                    .iter()
-                    .filter(|f| f.binary)
-                    .map(|f| f.path.clone()),
-            );
-        }
-        if patch
-            .files
-            .iter()
-            .any(|f| matches!(f.change_kind, FileChangeKind::Deleted))
-        {
-            score += 2;
-            factors.push("deletions".to_string());
-            reason_codes.push("deletion".to_string());
-            hotspots.extend(
-                patch
-                    .files
-                    .iter()
-                    .filter(|f| matches!(f.change_kind, FileChangeKind::Deleted))
-                    .map(|f| f.path.clone()),
-            );
-        }
-        if patch
-            .files
-            .iter()
-            .any(|f| f.path.0.contains("secret") || f.path.0.contains(".env"))
-        {
-            score += 5;
-            factors.push("sensitive paths".to_string());
-            reason_codes.push("sensitive_path".to_string());
-            hotspots.extend(
-                patch
-                    .files
-                    .iter()
-                    .filter(|f| f.path.0.contains("secret") || f.path.0.contains(".env"))
-                    .map(|f| f.path.clone()),
-            );
-        }
-        for rule in risk_config.path_rules.iter() {
-            let matched: Vec<_> = patch
-                .files
-                .iter()
-                .filter(|f| {
-                    let lower = f.path.0.to_ascii_lowercase();
-                    rule.patterns
-                        .iter()
-                        .any(|needle| lower.contains(&needle.to_ascii_lowercase()))
-                })
-                .map(|f| f.path.clone())
-                .collect();
-            if !matched.is_empty() {
-                score += rule.weight;
-                factors.push(rule.code.replace('_', " "));
-                reason_codes.push(rule.code.clone());
-                hotspots.extend(matched);
-            }
-        }
-        let deleted_tests: Vec<_> = patch
-            .files
-            .iter()
-            .filter(|f| {
-                matches!(f.change_kind, FileChangeKind::Deleted)
-                    && f.path.0.to_ascii_lowercase().contains("test")
-            })
-            .map(|f| f.path.clone())
-            .collect();
-        if !deleted_tests.is_empty() {
-            score += 5;
-            factors.push("deleted tests".to_string());
-            reason_codes.push("deleted_tests".to_string());
-            hotspots.extend(deleted_tests);
-        }
-        if patch.files.len() >= 20 {
-            score += 4;
-            factors.push("large change set".to_string());
-            reason_codes.push("large_change_set".to_string());
-        }
-        if pack.verification_refs.is_empty() {
-            score += 2;
-            factors.push("missing verification".to_string());
-            reason_codes.push("missing_verification".to_string());
-            evidence_gaps.push("verification receipt missing".to_string());
-        } else {
-            evidence_summary.push(format!(
-                "{} verification receipt(s)",
-                pack.verification_refs.len()
-            ));
-        }
-        if evidence_summary.is_empty() {
-            evidence_summary.push("no verification evidence recorded".to_string());
-        }
-        if factors.is_empty() {
-            factors.push("small text-only change".to_string());
-            reason_codes.push("low_complexity".to_string());
-        }
-        let level = if score >= risk_config.critical_threshold {
-            RiskLevel::Critical
-        } else if score >= risk_config.high_threshold {
-            RiskLevel::High
-        } else if score >= risk_config.medium_threshold {
-            RiskLevel::Medium
-        } else {
-            RiskLevel::Low
-        };
-        hotspots.sort();
-        hotspots.dedup();
-        let policy_decision = if matches!(level, RiskLevel::Critical | RiskLevel::High)
-            && pack.verification_refs.is_empty()
-        {
-            "blocked_until_verified".to_string()
-        } else {
-            "allowed_for_review".to_string()
-        };
-        let mut receipt_id = "preview".to_string();
-        let mut receipt = ActionReceiptDraft::new(
-            "risk",
-            level.as_str(),
-            Some(pack.id.to_string()),
-            Value::Null,
-        );
-        if persist {
-            receipt_id = receipt.id.to_string();
-        }
-        let summary = RiskSummary {
-            pack_id: pack.id.to_string(),
-            receipt_id,
-            level,
-            score,
-            factors,
-            reason_codes,
-            hotspots,
-            evidence_gaps,
-            evidence_summary,
-            policy_decision,
-            files_changed: patch.files.len(),
-        };
-        if persist {
-            receipt.payload =
-                serde_json::to_value(&summary).expect("Draft-owned records must serialize");
-            write_receipt(&ws, &receipt)?;
-            ws.events()?.append(
-                "risk.completed",
-                Some(pack.id.to_string()),
-                serde_json::to_value(&summary).expect("Draft-owned records must serialize"),
-            )?;
-        }
-        Ok(summary)
-    }
-
-    pub fn risk_selected(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<RiskSummary> {
-        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        self.risk(cwd, &pack_id)
-    }
-
-    pub fn risk_selected_with_options(
-        &self,
-        cwd: &Path,
-        pack_id: Option<&str>,
-        explain: bool,
-        include_evidence: bool,
-    ) -> DraftResult<RiskSummary> {
-        let mut summary = self.risk_selected(cwd, pack_id)?;
-        if !explain {
-            summary.factors.clear();
-        }
-        if !include_evidence {
-            summary.evidence_summary.clear();
-        }
-        Ok(summary)
-    }
-
-    pub fn risk_preview_selected_with_options(
-        &self,
-        cwd: &Path,
-        pack_id: Option<&str>,
-        explain: bool,
-        include_evidence: bool,
-    ) -> DraftResult<RiskSummary> {
-        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        let mut summary = self.risk_preview(cwd, &pack_id)?;
-        if !explain {
-            summary.factors.clear();
-        }
-        if !include_evidence {
-            summary.evidence_summary.clear();
-        }
-        Ok(summary)
-    }
-
-    pub fn review(
-        &self,
-        cwd: &Path,
-        pack_id: &str,
-        comment: Option<String>,
-    ) -> DraftResult<ReviewReport> {
-        let ws = self.open(cwd)?;
-        validate_pack_id(pack_id)?;
-        let mut pack = load_pack(&ws, pack_id)?;
-        ensure_pack_workspace_matches_target(
-            &ws,
-            &pack,
-            "review",
-            "update the pack from the current edits or restore the workspace to the pack target before review",
-        )?;
-        let store = crate::pack::PackStore::new(ws.layout.clone());
-        let location = store.locate(pack_id).ok_or_else(|| {
-            DraftError::new(
-                DraftErrorKind::CorruptData,
-                "pack staging state references a missing canonical pack",
-            )
-        })?;
-        let mut lifecycle = store.read_lifecycle_in(location, pack_id)?;
-        if lifecycle.lifecycle == PackLifecycle::Draft {
-            return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "pack must be verified before review can start",
-            ));
-        }
-        let mut comments = load_review_file(&ws, &pack.id)?;
-        let risk = Some(self.risk_preview(cwd, pack_id)?);
-        if let Some(body) = comment {
-            comments.comments.push(ReviewComment {
-                id: ReviewCommentId::generate(),
-                pack_id: pack.id.clone(),
-                path: None,
-                hunk_id: None,
-                actor: resolve_actor(&ws.layout.draft_dir)?,
-                body,
-                created_at: now(),
-            });
-            ws.events()?.append(
-                "review.comment_added",
-                Some(pack.id.to_string()),
-                serde_json::json!({ "count": comments.comments.len() }),
-            )?;
-        } else {
-            ws.events()?.append(
-                "review.started",
-                Some(pack.id.to_string()),
-                serde_json::json!({}),
-            )?;
-        }
-        if lifecycle.lifecycle == PackLifecycle::Verified {
-            lifecycle.transition(crate::pack::lifecycle::PackTransitionRequest {
-                operation_id: crate::support::common::OperationId::new(format!(
-                    "op_review_{}",
-                    pack.id
-                )),
-                expected_revision_id: lifecycle.revision_id.clone(),
-                expected_revision_digest: lifecycle.revision_digest.clone(),
-                target: PackLifecycle::Reviewing,
-            })?;
-            store.write_lifecycle_in(location, &lifecycle)?;
-        }
-        write_json(
-            &ws.layout
-                .pack_workspace_dir(&pack.id)
-                .join("review.lock.json"),
-            &serde_json::json!({
-                "schema_version": current_version(ContractId::ReviewFile),
-                "pack_id": pack.id,
-                "actor": resolve_actor(&ws.layout.draft_dir)?,
-                "updated_at": now()
-            }),
-        )?;
-        save_review_file(&ws, &pack.id, &comments)?;
-        let review_units = build_review_units(&ws, &pack, risk.as_ref())?;
-        let risk_receipt_id = risk
-            .as_ref()
-            .and_then(|risk| (risk.receipt_id != "preview").then(|| risk.receipt_id.clone()));
-        let receipt = ActionReceiptDraft::new(
-            "review",
-            "completed",
-            Some(pack.id.to_string()),
-            serde_json::json!({
-                "review_units": review_units,
-                "risk_receipt_id": risk_receipt_id,
-                "comments": comments.comments.len()
-            }),
-        );
-        let receipt_id = receipt.id.to_string();
-        write_receipt(&ws, &receipt)?;
-        pack.review_refs.push(receipt_id.clone());
-        save_pack_staging(&ws, &mut pack)?;
-        Ok(ReviewReport {
-            pack_id: pack.id.to_string(),
-            review_receipt_id: Some(receipt_id),
-            comments: comments.comments.len(),
-            decisions: comments.decisions.len(),
-            status: lifecycle.lifecycle,
-            review_units,
-            risk_receipt_id,
-        })
-    }
-
-    pub fn review_selected(
-        &self,
-        cwd: &Path,
-        pack_id: Option<&str>,
-        comment: Option<String>,
-    ) -> DraftResult<ReviewReport> {
-        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        self.review(cwd, &pack_id, comment)
-    }
-
-    pub fn decide(
-        &self,
-        cwd: &Path,
-        pack_id: &str,
-        kind: DecisionKind,
-        reason: Option<String>,
-    ) -> DraftResult<Decision> {
-        let ws = self.open(cwd)?;
-        validate_pack_id(pack_id)?;
-        let mut pack = load_pack(&ws, pack_id)?;
-        ensure_pack_workspace_matches_target(
-            &ws,
-            &pack,
-            decision_dirty_action(kind),
-            "update the pack from the current edits or restore the workspace to the pack target before deciding",
-        )?;
-        let store = crate::pack::PackStore::new(ws.layout.clone());
-        let location = store.locate(pack_id).ok_or_else(|| {
-            DraftError::new(
-                DraftErrorKind::CorruptData,
-                "pack staging state references a missing canonical pack",
-            )
-        })?;
-        let mut lifecycle = store.read_lifecycle_in(location, pack_id)?;
-        if matches!(kind, DecisionKind::Approve | DecisionKind::Reject)
-            && !matches!(
-                lifecycle.lifecycle,
-                PackLifecycle::Reviewing | PackLifecycle::Approved | PackLifecycle::Rejected
-            )
-        {
-            return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "review is required before approve/reject",
-            ));
-        }
-        let actor = resolve_actor(&ws.layout.draft_dir)?;
-        if matches!(kind, DecisionKind::Approve | DecisionKind::Reject)
-            && actor.kind != ActorKind::Human
-        {
-            return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "final approve/reject requires a human actor",
-            ));
-        }
-        let decision = Decision {
-            id: DecisionId::generate(),
-            pack_id: pack.id.clone(),
-            actor,
-            kind,
-            reason,
-            created_at: now(),
-        };
-        let mut file = load_review_file(&ws, &pack.id)?;
-        file.decisions.push(decision.clone());
-        save_review_file(&ws, &pack.id, &file)?;
-        pack.decision_refs.push(decision.id.to_string());
-        save_pack_staging(&ws, &mut pack)?;
-        let review_lock = ws
-            .layout
-            .pack_workspace_dir(&pack.id)
-            .join("review.lock.json");
-        if matches!(decision.kind, DecisionKind::Approve | DecisionKind::Reject)
-            && review_lock.exists()
-        {
-            fs::remove_file(review_lock)?;
-        }
-        let event = if decision.kind == DecisionKind::Approve {
-            "pack.approved"
-        } else if decision.kind == DecisionKind::Reject {
-            "pack.rejected"
-        } else {
-            "review.completed"
-        };
-        let receipt_kind = if decision.kind == DecisionKind::Approve {
-            "approval"
-        } else {
-            "review"
-        };
-        let receipt = ActionReceiptDraft::new(
-            receipt_kind,
-            decision.kind.label(),
-            Some(pack.id.to_string()),
-            serde_json::json!({
-                "decision": decision,
-                "review_refs": pack.review_refs,
-                "verification_refs": pack.verification_refs,
-            }),
-        );
-        write_receipt(&ws, &receipt)?;
-        if matches!(decision.kind, DecisionKind::Approve | DecisionKind::Reject) {
-            lifecycle.transition(crate::pack::lifecycle::PackTransitionRequest {
-                operation_id: crate::support::common::OperationId::new(decision.id.as_str()),
-                expected_revision_id: lifecycle.revision_id.clone(),
-                expected_revision_digest: lifecycle.revision_digest.clone(),
-                target: if decision.kind == DecisionKind::Approve {
-                    PackLifecycle::Approved
-                } else {
-                    PackLifecycle::Rejected
-                },
-            })?;
-            store.write_lifecycle_in(location, &lifecycle)?;
-        }
-        if matches!(decision.kind, DecisionKind::Approve | DecisionKind::Reject) {
-            let base = crate::workspace::stable::StableHeadStore::new(
-                crate::workspace::layout::DraftLayout::for_root(&ws.root),
-            )
-            .read()?
-            .stable_head_hash;
-            let kind = if decision.kind == DecisionKind::Approve {
-                crate::review::workflow::DecisionType::Approve
-            } else {
-                crate::review::workflow::DecisionType::Reject
-            };
-            let mut record = crate::review::workflow::new_decision(
-                kind,
-                pack.id.to_string(),
-                base,
-                format!("{:?}", decision.actor),
-                decision
-                    .reason
-                    .clone()
-                    .unwrap_or_else(|| decision.kind.label().to_string()),
-            )?;
-            record.receipt_id = Some(receipt.id.to_string());
-            crate::review::workflow::WorkflowStore::for_root(&ws.root).write_decision(&record)?;
-        }
-        ws.events()?.append(
-            event,
-            Some(pack.id.to_string()),
-            serde_json::to_value(&decision).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(decision)
-    }
-
-    pub fn decide_selected(
-        &self,
-        cwd: &Path,
-        pack_id: Option<&str>,
-        kind: DecisionKind,
-        reason: Option<String>,
-    ) -> DraftResult<Decision> {
-        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        self.decide(cwd, &pack_id, kind, reason)
-    }
-
-    pub fn compare(&self, cwd: &Path, left: &str, right: &str) -> DraftResult<CompareReport> {
-        let ws = self.open(cwd)?;
-        let l = self.resolve_pack_ref(&ws, left)?;
-        let r = self.resolve_pack_ref(&ws, right)?;
-        let lp = load_patch(&ws, &l)?;
-        let rp = load_patch(&ws, &r)?;
-        let lf: BTreeSet<_> = lp.files.iter().map(|f| f.path.clone()).collect();
-        let rf: BTreeSet<_> = rp.files.iter().map(|f| f.path.clone()).collect();
-        let overlapping_files: Vec<_> = lf.intersection(&rf).cloned().collect();
-        let overlapping_hunks = hunk_overlaps(&lp, &rp);
-        let mut warnings = Vec::new();
-        for path in &overlapping_files {
-            let left_file = lp.files.iter().find(|f| &f.path == path);
-            let right_file = rp.files.iter().find(|f| &f.path == path);
-            if let (Some(lf), Some(rf)) = (left_file, right_file) {
-                if file_level_conflict(lf, rf) {
-                    warnings.push(format!("{path}: non-text or whole-file overlap"));
-                }
-            }
-        }
-        if !overlapping_hunks.is_empty() {
-            warnings.push(format!(
-                "{} overlapping text hunk(s)",
-                overlapping_hunks.len()
-            ));
-        }
-        let compatible = warnings.is_empty();
-        let report = CompareReport {
-            id: format!("cmp_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]),
-            left_pack: l.id.to_string(),
-            right_pack: r.id.to_string(),
-            overlapping_files,
-            overlapping_hunks,
-            unique_left_files: lf.difference(&rf).cloned().collect(),
-            unique_right_files: rf.difference(&lf).cloned().collect(),
-            compatible,
-            warnings,
-            recommendation: Some(if compatible {
-                "compose is allowed".to_string()
-            } else {
-                "resolve overlaps before compose".to_string()
-            }),
-        };
-        ws.events()?.append(
-            "compare.completed",
-            None,
-            serde_json::to_value(&report).expect("Draft-owned records must serialize"),
-        )?;
-        Ok(report)
-    }
-
-    pub fn compose(
-        &self,
-        cwd: &Path,
-        left: &str,
-        right: &str,
-        output: &str,
-    ) -> DraftResult<ComposeResult> {
-        let ws = self.open(cwd)?;
-        let l = self.resolve_pack_ref(&ws, left)?;
-        let r = self.resolve_pack_ref(&ws, right)?;
-        ensure_pack_not_locked(&ws, &l)?;
-        ensure_pack_not_locked(&ws, &r)?;
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let compose_wsh = crate::workspace::source_view::workspace_hash_cached(
-            &ws.root,
-            &project_paths.workspace_hash_cache(),
-        )?;
-        ledger.record(
-            crate::trust::event::EventKind::CompositionCreated,
-            Some(format!("{}+{}", l.id, r.id)),
-            None,
-            compose_wsh.clone(),
-            serde_json::json!({ "sources": [l.id.to_string(), r.id.to_string()] }),
-        )?;
-        let composition_failed = |reason: &str| -> DraftResult<()> {
-            ledger.record(
-                crate::trust::event::EventKind::CompositionFailed,
-                Some(format!("{}+{}", l.id, r.id)),
-                None,
-                compose_wsh.clone(),
-                serde_json::json!({
-                    "sources": [l.id.to_string(), r.id.to_string()],
-                    "reason": reason,
-                }),
-            )?;
-            Ok(())
-        };
-        let l_base = load_snapshot(&ws, &l.base_snapshot_id)?;
-        let r_base = load_snapshot(&ws, &r.base_snapshot_id)?;
-        if snapshot_file_fingerprint(&l_base) != snapshot_file_fingerprint(&r_base) {
-            composition_failed("compose requires packs with the same base content")?;
-            return Err(DraftError::new(
-                DraftErrorKind::ConflictDetected,
-                "compose requires packs with the same base content",
-            ));
-        }
-        let lp = load_patch(&ws, &l)?;
-        let rp = load_patch(&ws, &r)?;
-        let cmp = self.compare(cwd, left, right)?;
-        if !cmp.compatible {
-            composition_failed("compose has overlapping changes")?;
-            return Err(DraftError::new(
-                DraftErrorKind::ConflictDetected,
-                "compose has overlapping changes",
-            )
-            .with_context(format!("{:?}", cmp.warnings)));
-        }
-        ledger.record(
-            crate::trust::event::EventKind::CompositionVerified,
-            Some(format!("{}+{}", l.id, r.id)),
-            None,
-            compose_wsh.clone(),
-            serde_json::json!({
-                "sources": [l.id.to_string(), r.id.to_string()],
-                "compare": cmp.id,
-            }),
-        )?;
-        let mut files = lp.files.clone();
-        files.extend(rp.files.clone());
-        files.sort_by(|a, b| a.path.cmp(&b.path).then(a.old_path.cmp(&b.old_path)));
-        let mut patch = PatchSet {
-            schema_version: current_version(ContractId::PatchSet),
-            id: PatchSetId::generate(),
-            base_snapshot_id: l.base_snapshot_id.clone(),
-            result_snapshot_id: r.result_snapshot_id.clone(),
-            files,
-            patch_graph_hash: String::new(),
-        };
-        patch.patch_graph_hash = hash_json(&patch)?;
-        let evidence = Evidence {
-            schema_version: current_version(ContractId::PackEvidence),
-            id: EvidenceId::generate(),
-            pack_id: PackId::new("pending"),
-            command_logs: vec![],
-            files_touched: patch.files.iter().map(|f| f.path.clone()).collect(),
-            generated_diff_ref: None,
-            test_results: vec![],
-            lint_results: vec![],
-            risk_summary_ref: None,
-            agent_plan_ref: None,
-            agent_transcript_ref: None,
-            warnings: vec!["composed from compatible packs".to_string()],
-            created_at: now(),
-        };
-        let mut pack = PackWorkspace::new(
-            ws.workspace_id.clone(),
-            l.task_id.clone().or_else(|| r.task_id.clone()),
-            None,
-            l.base_snapshot_id.clone(),
-            r.result_snapshot_id.clone(),
-            Some(output.to_string()),
-        );
-        let mut evidence = evidence;
-        evidence.pack_id = pack.id.clone();
-        pack.source_pack_ids = vec![l.id.to_string(), r.id.to_string()];
-        pack.patch_refs.push(patch.id.to_string());
-        pack.evidence_refs.push(evidence.id.to_string());
-        let pack_dir = ws.layout.pack_workspace_dir(&pack.id);
-        ensure_dir(&pack_dir)?;
-        write_json(&pack_dir.join("patch.json"), &patch)?;
-        write_json(&pack_dir.join("evidence.json"), &evidence)?;
-        save_pack_staging(&ws, &mut pack)?;
-        self.sync_canonical_pack(
-            &ws,
-            &pack,
-            Some(&patch),
-            PackSyncSpec {
-                kind: crate::trust::event::EventKind::PackComposed,
-                intent: crate::pack::PackIntent::Feature,
-                lifecycle: crate::pack::lifecycle::PackLifecycle::Draft,
-                metadata: serde_json::json!({
-                    "sources": pack.source_pack_ids,
-                    "compare": cmp.id,
-                }),
-            },
-        )?;
-        let receipt = ActionReceiptDraft::new(
-            "compose",
-            "completed",
-            Some(pack.id.to_string()),
-            serde_json::json!({
-                "sources": pack.source_pack_ids,
-                "files": patch.files.len(),
-                "compare": cmp.id
-            }),
-        );
-        write_receipt(&ws, &receipt)?;
-        ws.events()?.append(
-            "compose.completed",
-            Some(pack.id.to_string()),
-            serde_json::json!({ "receipt_id": receipt.id.to_string() }),
-        )?;
-        Ok(ComposeResult {
-            output_pack_id: pack.id.to_string(),
-            source_packs: pack.source_pack_ids,
-            receipt_id: receipt.id.to_string(),
-            files: patch.files.len(),
-            compatible: true,
-            requires_verification: true,
-            requires_review: true,
-            final_success: false,
-        })
-    }
-
-    pub fn disperse(
-        &self,
-        cwd: &Path,
-        pack_id: &str,
-        output_a: &str,
-        output_b: &str,
-    ) -> DraftResult<DisperseResult> {
-        let ws = self.open(cwd)?;
-        let source = self.resolve_pack_ref(&ws, pack_id)?;
-        ensure_pack_not_locked(&ws, &source)?;
-        let mut left = PackWorkspace::new(
-            ws.workspace_id.clone(),
-            source.task_id.clone(),
-            source.execution_id.clone(),
-            source.base_snapshot_id.clone(),
-            source.result_snapshot_id.clone(),
-            Some(output_a.to_string()),
-        );
-        left.source_pack_ids = vec![source.id.to_string()];
-        let mut right = PackWorkspace::new(
-            ws.workspace_id.clone(),
-            source.task_id.clone(),
-            source.execution_id.clone(),
-            source.base_snapshot_id.clone(),
-            source.result_snapshot_id.clone(),
-            Some(output_b.to_string()),
-        );
-        right.source_pack_ids = vec![source.id.to_string()];
-        ensure_dir(&ws.layout.pack_workspace_dir(&left.id))?;
-        ensure_dir(&ws.layout.pack_workspace_dir(&right.id))?;
-        let patch = load_patch(&ws, &source)?;
-        let mut left_files = Vec::new();
-        let mut right_files = Vec::new();
-        for (idx, file) in patch.files.into_iter().enumerate() {
-            if idx % 2 == 0 {
-                left_files.push(file);
-            } else {
-                right_files.push(file);
-            }
-        }
-        if right_files.is_empty() && left_files.len() > 1 {
-            if let Some(file) = left_files.pop() {
-                right_files.push(file);
-            }
-        }
-        let left_patch = split_patch(&source, left_files)?;
-        let right_patch = split_patch(&source, right_files)?;
-        let left_evidence = split_evidence(&left, &left_patch, "dispersed output A");
-        let right_evidence = split_evidence(&right, &right_patch, "dispersed output B");
-        left.patch_refs.push(left_patch.id.to_string());
-        right.patch_refs.push(right_patch.id.to_string());
-        left.evidence_refs.push(left_evidence.id.to_string());
-        right.evidence_refs.push(right_evidence.id.to_string());
-        write_json(
-            &ws.layout.pack_workspace_dir(&left.id).join("patch.json"),
-            &left_patch,
-        )?;
-        write_json(
-            &ws.layout.pack_workspace_dir(&right.id).join("patch.json"),
-            &right_patch,
-        )?;
-        write_json(
-            &ws.layout.pack_workspace_dir(&left.id).join("evidence.json"),
-            &left_evidence,
-        )?;
-        write_json(
-            &ws.layout
-                .pack_workspace_dir(&right.id)
-                .join("evidence.json"),
-            &right_evidence,
-        )?;
-        save_pack_staging(&ws, &mut left)?;
-        save_pack_staging(&ws, &mut right)?;
-        for (output, output_patch) in [(&left, &left_patch), (&right, &right_patch)] {
-            self.sync_canonical_pack(
-                &ws,
-                output,
-                Some(output_patch),
-                PackSyncSpec {
-                    kind: crate::trust::event::EventKind::PackDispersed,
-                    intent: crate::pack::PackIntent::Feature,
-                    lifecycle: crate::pack::lifecycle::PackLifecycle::Draft,
-                    metadata: serde_json::json!({
-                        "source": source.id,
-                        "output": output.id,
-                    }),
-                },
-            )?;
-        }
-        let receipt = ActionReceiptDraft::new(
-            "disperse",
-            "completed",
-            Some(source.id.to_string()),
-            serde_json::json!({ "outputs": [left.id.to_string(), right.id.to_string()] }),
-        );
-        write_receipt(&ws, &receipt)?;
-        ws.events()?.append(
-            "disperse.completed",
-            Some(source.id.to_string()),
-            serde_json::json!({ "receipt_id": receipt.id.to_string() }),
-        )?;
-        Ok(DisperseResult {
-            source_pack_id: source.id.to_string(),
-            output_pack_ids: vec![left.id.to_string(), right.id.to_string()],
-            receipt_id: receipt.id.to_string(),
-            requires_verification: true,
-            requires_review: true,
-            final_success: false,
-        })
-    }
-
-    pub fn submit(
-        &self,
-        cwd: &Path,
-        pack_id: &str,
-        vars: BTreeMap<String, String>,
-    ) -> DraftResult<SubmitRecord> {
-        let ws = self.open(cwd)?;
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let _submit_lock =
-            FileGuard::acquire(&project_paths.lock_file("submit"), Duration::from_secs(30))?;
-        validate_pack_id(pack_id)?;
-        // Imported packs take the canonical import-submit path: gates, content
-        // application from embedded objects, and promotion out of quarantine.
-        {
-            let store = crate::pack::PackStore::new(
-                crate::workspace::layout::DraftLayout::for_root(&ws.root),
-            );
-            if let Some(loc) = store.locate(pack_id) {
-                let manifest = store.read_manifest_in(loc, pack_id)?;
-                if store.quarantine_record(pack_id)?.is_some() {
-                    return self.submit_imported_pack(&ws, &store, loc, manifest);
-                }
-            }
-        }
-        let mut pack = load_pack(&ws, pack_id)?;
-        ensure_pack_not_locked(&ws, &pack)?;
-        ensure_pack_workspace_matches_target(
-            &ws,
-            &pack,
-            "submit",
-            "update the pack from the current edits or restore the workspace to the approved pack target before submit",
-        )?;
-        validate_canonical_submit_gate(&ws, pack_id)?;
-        let started = now();
-        let submit_started_event_id = ws.events()?.append(
-            "submit.started",
-            Some(pack.id.to_string()),
-            serde_json::json!({}),
-        )?;
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        ledger.record(
-            crate::trust::event::EventKind::SubmitStarted,
-            Some(pack.id.to_string()),
-            None,
-            crate::workspace::source_view::workspace_hash_cached(
-                &ws.root,
-                &project_paths.workspace_hash_cache(),
-            )?,
-            serde_json::json!({ "orchestration_event_id": submit_started_event_id.to_string() }),
-        )?;
-        let cfg = ResolvedConfig::load(&ws)?;
-        let policy = effective_policy(&ws)?;
-        let patch = load_patch(&ws, &pack)?;
-        if patch.files.iter().any(|f| is_draft_path(f.path.as_str())) {
-            let receipt = failed_submit(
-                &ws,
-                &pack,
-                started,
-                "Warning: .draft/ is included in the submit candidate.",
-            )?;
-            ws.events()?.append(
-                "submit.completed",
-                Some(pack.id.to_string()),
-                serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
-            )?;
-            return Err(DraftError::new(DraftErrorKind::SubmitFailed, ".draft/ is included in the submit candidate.\n\nDraft metadata must never be submitted into an external repository or external system.\n\nSubmit aborted."));
-        }
-        let readiness = submit_readiness(&ws, &pack, &patch, &policy)?;
-        if readiness.verification_receipt_id.is_none() {
-            let reason = readiness
-                .blockers
-                .first()
-                .cloned()
-                .unwrap_or_else(|| "verification is required before submit".to_string());
-            let receipt = failed_submit(&ws, &pack, started, &reason)?;
-            ws.events()?.append(
-                "submit.completed",
-                Some(pack.id.to_string()),
-                serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
-            )?;
-            return Err(DraftError::new(DraftErrorKind::VerificationFailed, reason));
-        }
-        if policy.require_approval_for_submit && readiness.approval_ref.is_none() {
-            let reason = readiness
-                .blockers
-                .iter()
-                .find(|blocker| blocker.contains("approval") || blocker.contains("review"))
-                .cloned()
-                .unwrap_or_else(|| "approval is required before submit".to_string());
-            let receipt = failed_submit(&ws, &pack, started, &reason)?;
-            ws.events()?.append(
-                "submit.completed",
-                Some(pack.id.to_string()),
-                serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
-            )?;
-            return Err(DraftError::new(DraftErrorKind::ReviewRequired, reason));
-        }
-        let risk_summary = Some(self.risk(cwd, pack_id).map_err(|e| {
-            DraftError::new(
-                DraftErrorKind::RiskPolicyBlocked,
-                format!("risk evaluation failed before submit: {e}"),
-            )
-        })?);
-        if risk_summary
-            .as_ref()
-            .map(|risk| risk.policy_decision.starts_with("blocked"))
-            .unwrap_or(false)
-        {
-            let receipt = failed_submit(&ws, &pack, started, "risk policy blocks submit")?;
-            ws.events()?.append(
-                "submit.completed",
-                Some(pack.id.to_string()),
-                serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
-            )?;
-            return Err(DraftError::new(
-                DraftErrorKind::RiskPolicyBlocked,
-                "risk policy blocks submit",
-            ));
-        }
-        let receipt_id = ReceiptId::generate();
-        let rendered_message = render_message(&ws, &cfg, &pack, &patch, &receipt_id)?;
-        let store = ObjectStore::new(ws.layout.clone());
-        let message_ref = store.put_bytes(rendered_message.as_bytes())?;
-        let mut receipt = SubmitRecord {
-            schema_version: current_version(ContractId::SubmitRecord),
-            id: receipt_id,
-            pack_id: pack.id.clone(),
-            actor_id: resolve_actor(&ws.layout.draft_dir)?.id,
-            native_submit_status: NativeSubmitStatus::Submitted,
-            hook_status: HookStatus::NotConfigured,
-            overall_status: SubmitOverallStatus::Submitted,
-            message_ref: message_ref.clone(),
-            hook_results: Vec::new(),
-            hook_receipt_refs: Vec::new(),
-            object_refs: vec![message_ref.clone()],
-            event_refs: vec![submit_started_event_id.to_string()],
-            risk_level: risk_summary
-                .as_ref()
-                .map(|risk| risk.level.as_str().to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            risk_receipt_id: risk_summary.as_ref().map(|risk| risk.receipt_id.clone()),
-            started_at: started,
-            ended_at: now(),
-            record_digest: String::new(),
-            failure_reason: None,
-        };
-        for hook in cfg.submit_hooks(SubmitHookPhase::Before) {
-            let ctx = HookContext {
-                message: rendered_message.clone(),
-                title: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
-                description: String::new(),
-                task_id: pack
-                    .task_id
-                    .as_ref()
-                    .map(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                execution_id: pack
-                    .execution_id
-                    .as_ref()
-                    .map(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                pack_id: pack.id.to_string(),
-                receipt_id: receipt.id.to_string(),
-                actor_name: resolve_actor(&ws.layout.draft_dir)?.id.to_string(),
-                timestamp: now().to_rfc3339(),
-                verified: (!pack.verification_refs.is_empty()).to_string(),
-                risk_level: risk_summary
-                    .as_ref()
-                    .map(|risk| risk.level.as_str().to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                files_changed: patch.files.len().to_string(),
-                workspace_root: ws.root.display().to_string(),
-                hook_name: "submit.before".to_string(),
-                hook_phase: SubmitHookPhase::Before.as_str().to_string(),
-                vars: vars.clone(),
-            };
-            ledger.record(
-                crate::trust::event::EventKind::SubmitHookStarted,
-                Some(pack.id.to_string()),
-                None,
-                crate::workspace::source_view::workspace_hash_cached(
-                    &ws.root,
-                    &project_paths.workspace_hash_cache(),
-                )?,
-                serde_json::json!({ "phase": "before", "command": hook.command }),
-            )?;
-            match run_hook(&ws, &store, "submit.before", &hook, &ctx) {
-                Ok(result) => {
-                    let failed = result.exit_code != 0;
-                    ledger.record(
-                        if failed {
-                            crate::trust::event::EventKind::SubmitHookFailed
-                        } else {
-                            crate::trust::event::EventKind::SubmitHookCompleted
-                        },
-                        Some(pack.id.to_string()),
-                        None,
-                        crate::workspace::source_view::workspace_hash_cached(
-                            &ws.root,
-                            &project_paths.workspace_hash_cache(),
-                        )?,
-                        serde_json::json!({
-                            "phase": "before",
-                            "command": hook.command,
-                            "exit_code": result.exit_code,
-                        }),
-                    )?;
-                    let hook_receipt = ActionReceiptDraft::new(
-                        "hook",
-                        if failed { "failed" } else { "succeeded" },
-                        Some(pack.id.to_string()),
-                        serde_json::to_value(&result).expect("Draft-owned records must serialize"),
-                    );
-                    let hook_receipt_id = hook_receipt.id.to_string();
-                    write_receipt(&ws, &hook_receipt)?;
-                    receipt.hook_receipt_refs.push(hook_receipt_id);
-                    receipt.hook_results.push(result);
-                    if failed {
-                        receipt.hook_status = HookStatus::Failed;
-                        if hook.continue_on_error {
-                            receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
-                        } else {
-                            receipt.overall_status = SubmitOverallStatus::Failed;
-                            receipt.failure_reason = Some("hooks.submit.before failed".to_string());
-                            receipt.ended_at = now();
-                            receipt.record_digest = hash_json(&receipt)?;
-                            write_submit_record(&ws, &receipt)?;
-                            ws.events()?.append(
-                                "submit.completed",
-                                Some(pack.id.to_string()),
-                                serde_json::to_value(&receipt)
-                                    .expect("Draft-owned records must serialize"),
-                            )?;
-                            return Err(DraftError::new(
-                                DraftErrorKind::SubmitFailed,
-                                "hooks.submit.before failed",
-                            ));
-                        }
-                    } else {
-                        receipt.hook_status = HookStatus::Succeeded;
-                    }
-                }
-                Err(e) => {
-                    receipt.hook_status = HookStatus::Failed;
-                    ledger.record(
-                        crate::trust::event::EventKind::SubmitHookFailed,
-                        Some(pack.id.to_string()),
-                        None,
-                        crate::workspace::source_view::workspace_hash_cached(
-                            &ws.root,
-                            &project_paths.workspace_hash_cache(),
-                        )?,
-                        serde_json::json!({
-                            "phase": "before",
-                            "command": hook.command,
-                            "error": e.message,
-                        }),
-                    )?;
-                    let hook_receipt = ActionReceiptDraft::new(
-                        "hook",
-                        "failed",
-                        Some(pack.id.to_string()),
-                        serde_json::json!({
-                            "hook_name": "submit",
-                            "hook_phase": hook.phase,
-                            "error": e.message
-                        }),
-                    );
-                    let hook_receipt_id = hook_receipt.id.to_string();
-                    write_receipt(&ws, &hook_receipt)?;
-                    receipt.hook_receipt_refs.push(hook_receipt_id);
-                    if hook.continue_on_error {
-                        receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
-                        receipt.failure_reason = Some(e.message);
-                    } else {
-                        receipt.overall_status = SubmitOverallStatus::Failed;
-                        receipt.failure_reason = Some(e.message.clone());
-                        receipt.ended_at = now();
-                        receipt.record_digest = hash_json(&receipt)?;
-                        write_submit_record(&ws, &receipt)?;
-                        ws.events()?.append(
-                            "submit.completed",
-                            Some(pack.id.to_string()),
-                            serde_json::to_value(&receipt)
-                                .expect("Draft-owned records must serialize"),
-                        )?;
-                        return Err(DraftError::new(DraftErrorKind::SubmitFailed, e.message));
-                    }
-                }
-            }
-        }
-        let stable_store = crate::workspace::stable::StableHeadStore::new(project_paths.clone());
-        let previous_head = if stable_store.exists() {
-            Some(stable_store.read()?)
-        } else {
-            None
-        };
-        let submit_mode = cfg.pack_disposal;
-        let pack_digest = Some(hash_json(&serde_json::json!({
-            "pack": pack,
-            "patch": patch,
-            "submit_receipt": receipt.id.to_string()
-        }))?);
-        let affected_paths = patch
-            .files
-            .iter()
-            .map(|f| f.path.as_str().to_string())
-            .filter(|p| !is_draft_path(p.as_str()))
-            .collect::<Vec<_>>();
-        let pack_summary = Some(crate::workspace::stable::PackSummary {
-            pack_id: pack_id.to_string(),
-            name: pack.name.clone(),
-            affected_paths: affected_paths.clone(),
-        });
-        ledger.record(
-            crate::trust::event::EventKind::ProjectStateVerificationStarted,
-            Some(pack_id.to_string()),
-            None,
-            crate::workspace::source_view::workspace_hash_cached(
-                &ws.root,
-                &project_paths.workspace_hash_cache(),
-            )?,
-            serde_json::json!({ "submit_receipt": receipt.id.to_string() }),
-        )?;
-        // Project-state verification (SRS-FR-083–086): pack validity is not
-        // project stability — re-verify the composed final state before any
-        // receipt is written or stable_head advances. Failure preserves the
-        // pack and leaves stable_head unchanged.
-        let ps_report = crate::review::verification::verify_project_state(
-            &ws.root,
-            &project_paths,
-            ws.workspace_id.as_str(),
-            &affected_paths,
-            true,
-        )?;
-        if !ps_report.passed {
-            let failed_names = ps_report.failed_checks().join(", ");
-            ledger.record(
-                crate::trust::event::EventKind::ProjectStateVerificationFailed,
-                Some(pack_id.to_string()),
-                None,
-                ps_report.workspace_hash.clone(),
-                serde_json::json!({
-                    "submit_receipt": receipt.id.to_string(),
-                    "checks": ps_report.checks,
-                    "failed": ps_report.failed_checks(),
-                }),
-            )?;
-            receipt.overall_status = SubmitOverallStatus::Failed;
-            receipt.failure_reason =
-                Some(format!("project-state verification failed: {failed_names}"));
-            receipt.ended_at = now();
-            receipt.record_digest = hash_json(&receipt)?;
-            write_submit_record(&ws, &receipt)?;
-            ws.events()?.append(
-                "submit.completed",
-                Some(pack.id.to_string()),
-                serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
-            )?;
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                format!(
-                    "project-state verification failed: {failed_names}\n\nThe pack was preserved and stable_head was not advanced."
-                ),
-            ));
-        }
-        let project_verified = ledger.record(
-            crate::trust::event::EventKind::ProjectStateVerified,
-            Some(pack_id.to_string()),
-            None,
-            ps_report.workspace_hash.clone(),
-            serde_json::json!({
-                "submit_receipt": receipt.id.to_string(),
-                "submit_mode": submit_mode.as_str(),
-                "checks": ps_report.checks,
-            }),
-        )?;
-        // Advance stable_head only after successful project-state verification
-        // (SRS-FR-050). After-submit hooks run post-advance but pre-disposal
-        // (TDD §13.1/§14.3), so a failed after hook preserves pack metadata.
-        if submit_mode == crate::workspace::stable::SubmitMode::MergeAndDispose {
-            let stable_head = stable_store.advance(
-                &ws.root,
-                project_verified.receipt.receipt_id.clone(),
-                previous_head,
-                pack_digest,
-                pack_summary,
-                submit_mode,
-            )?;
-            ledger.record(
-                crate::trust::event::EventKind::StableHeadAdvanced,
-                Some(stable_head.id.clone()),
-                None,
-                stable_head.workspace_hash.clone(),
-                serde_json::json!({
-                    "stable_head": stable_head.id,
-                    "project_state_receipt": project_verified.receipt.receipt_id,
-                    "submit_receipt": receipt.id.to_string()
-                }),
-            )?;
-        }
-        for hook in cfg.submit_hooks(SubmitHookPhase::After) {
-            let ctx = HookContext {
-                message: rendered_message.clone(),
-                title: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
-                description: String::new(),
-                task_id: pack
-                    .task_id
-                    .as_ref()
-                    .map(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                execution_id: pack
-                    .execution_id
-                    .as_ref()
-                    .map(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                pack_id: pack.id.to_string(),
-                receipt_id: receipt.id.to_string(),
-                actor_name: resolve_actor(&ws.layout.draft_dir)?.id.to_string(),
-                timestamp: now().to_rfc3339(),
-                verified: (!pack.verification_refs.is_empty()).to_string(),
-                risk_level: risk_summary
-                    .as_ref()
-                    .map(|risk| risk.level.as_str().to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                files_changed: patch.files.len().to_string(),
-                workspace_root: ws.root.display().to_string(),
-                hook_name: "submit.after".to_string(),
-                hook_phase: SubmitHookPhase::After.as_str().to_string(),
-                vars: vars.clone(),
-            };
-            ledger.record(
-                crate::trust::event::EventKind::SubmitHookStarted,
-                Some(pack.id.to_string()),
-                None,
-                crate::workspace::source_view::workspace_hash_cached(
-                    &ws.root,
-                    &project_paths.workspace_hash_cache(),
-                )?,
-                serde_json::json!({ "phase": "after", "command": hook.command }),
-            )?;
-            match run_hook(&ws, &store, "submit.after", &hook, &ctx) {
-                Ok(result) => {
-                    let failed = result.exit_code != 0;
-                    ledger.record(
-                        if failed {
-                            crate::trust::event::EventKind::SubmitHookFailed
-                        } else {
-                            crate::trust::event::EventKind::SubmitHookCompleted
-                        },
-                        Some(pack.id.to_string()),
-                        None,
-                        crate::workspace::source_view::workspace_hash_cached(
-                            &ws.root,
-                            &project_paths.workspace_hash_cache(),
-                        )?,
-                        serde_json::json!({
-                            "phase": "after",
-                            "command": hook.command,
-                            "exit_code": result.exit_code,
-                        }),
-                    )?;
-                    let hook_receipt = ActionReceiptDraft::new(
-                        "hook",
-                        if failed { "failed" } else { "succeeded" },
-                        Some(pack.id.to_string()),
-                        serde_json::to_value(&result).expect("Draft-owned records must serialize"),
-                    );
-                    let hook_receipt_id = hook_receipt.id.to_string();
-                    write_receipt(&ws, &hook_receipt)?;
-                    receipt.hook_receipt_refs.push(hook_receipt_id);
-                    receipt.hook_results.push(result);
-                    if failed {
-                        receipt.hook_status = HookStatus::Failed;
-                        if hook.continue_on_error {
-                            receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
-                        } else {
-                            receipt.overall_status = SubmitOverallStatus::Failed;
-                            receipt.failure_reason = Some("hooks.submit.after failed".to_string());
-                            receipt.ended_at = now();
-                            receipt.record_digest = hash_json(&receipt)?;
-                            write_submit_record(&ws, &receipt)?;
-                            ws.events()?.append(
-                                "submit.completed",
-                                Some(pack.id.to_string()),
-                                serde_json::to_value(&receipt)
-                                    .expect("Draft-owned records must serialize"),
-                            )?;
-                            return Err(DraftError::new(
-                                DraftErrorKind::SubmitFailed,
-                                "hooks.submit.after failed",
-                            ));
-                        }
-                    } else {
-                        receipt.hook_status = HookStatus::Succeeded;
-                    }
-                }
-                Err(e) => {
-                    receipt.hook_status = HookStatus::Failed;
-                    ledger.record(
-                        crate::trust::event::EventKind::SubmitHookFailed,
-                        Some(pack.id.to_string()),
-                        None,
-                        crate::workspace::source_view::workspace_hash_cached(
-                            &ws.root,
-                            &project_paths.workspace_hash_cache(),
-                        )?,
-                        serde_json::json!({
-                            "phase": "after",
-                            "command": hook.command,
-                            "error": e.message,
-                        }),
-                    )?;
-                    let hook_receipt = ActionReceiptDraft::new(
-                        "hook",
-                        "failed",
-                        Some(pack.id.to_string()),
-                        serde_json::json!({
-                            "hook_name": "submit.after",
-                            "hook_phase": SubmitHookPhase::After.as_str(),
-                            "error": e.message
-                        }),
-                    );
-                    let hook_receipt_id = hook_receipt.id.to_string();
-                    write_receipt(&ws, &hook_receipt)?;
-                    receipt.hook_receipt_refs.push(hook_receipt_id);
-                    if hook.continue_on_error {
-                        receipt.overall_status = SubmitOverallStatus::SubmittedWithHookFailure;
-                        receipt.failure_reason = Some(e.message);
-                    } else {
-                        receipt.overall_status = SubmitOverallStatus::Failed;
-                        receipt.failure_reason = Some(e.message.clone());
-                        receipt.ended_at = now();
-                        receipt.record_digest = hash_json(&receipt)?;
-                        write_submit_record(&ws, &receipt)?;
-                        ws.events()?.append(
-                            "submit.completed",
-                            Some(pack.id.to_string()),
-                            serde_json::to_value(&receipt)
-                                .expect("Draft-owned records must serialize"),
-                        )?;
-                        return Err(DraftError::new(DraftErrorKind::SubmitFailed, e.message));
-                    }
-                }
-            }
-        }
-        receipt.ended_at = now();
-        receipt.record_digest = hash_json(&receipt)?;
-        write_submit_record(&ws, &receipt)?;
-        pack.receipt_refs.push(receipt.id.to_string());
-        save_pack_staging(&ws, &mut pack)?;
-        ws.events()?.append(
-            "submit.completed",
-            Some(pack.id.to_string()),
-            serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
-        )?;
-        self.finalize_canonical_pack(&ws, &pack, &receipt)?;
-        ledger.record(
-            crate::trust::event::EventKind::SubmitFinalized,
-            Some(pack_id.to_string()),
-            None,
-            crate::workspace::source_view::workspace_hash_cached(
-                &ws.root,
-                &project_paths.workspace_hash_cache(),
-            )?,
-            serde_json::json!({ "submit_receipt": receipt.id.to_string() }),
-        )?;
-        match dispose_pack_metadata(&ws, &project_paths, pack_id) {
-            Ok(removed) => {
-                ledger.record(
-                    crate::trust::event::EventKind::PackDisposed,
-                    Some(pack_id.to_string()),
-                    None,
-                    crate::workspace::source_view::workspace_hash_cached(
-                        &ws.root,
-                        &project_paths.workspace_hash_cache(),
-                    )?,
-                    serde_json::json!({ "removed_entries": removed }),
-                )?;
-            }
-            Err(e) => {
-                ledger.record(
-                    crate::trust::event::EventKind::PackDisposalFailed,
-                    Some(pack_id.to_string()),
-                    None,
-                    crate::workspace::source_view::workspace_hash_cached(
-                        &ws.root,
-                        &project_paths.workspace_hash_cache(),
-                    )?,
-                    serde_json::json!({ "error": e.message }),
-                )?;
-                return Err(e);
-            }
-        }
-        Ok(receipt)
-    }
-
-    /// Bind submit to the already-approved immutable revision. Submit hooks
-    /// may create workspace files, but those post-decision side effects must
-    /// never derive or silently replace the revision that was reviewed.
-    fn finalize_canonical_pack(
-        &self,
-        ws: &Workspace,
-        pack: &PackWorkspace,
-        receipt: &SubmitRecord,
-    ) -> DraftResult<()> {
-        use crate::pack::lifecycle::{PackLifecycle, PackTransitionRequest};
-
-        let store = crate::pack::PackStore::new(ws.layout.clone());
-        let location = store.locate(pack.id.as_str()).ok_or_else(|| {
-            DraftError::new(
-                DraftErrorKind::CorruptData,
-                "pack staging state references a missing canonical pack",
-            )
-        })?;
-        let revision = store.current_revision_in(location, pack.id.as_str())?;
-        let mut lifecycle = store.read_lifecycle_in(location, pack.id.as_str())?;
-        if lifecycle.lifecycle != PackLifecycle::Approved {
-            return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "the exact immutable pack revision is not approved for submit",
-            ));
-        }
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let outcome = ledger.record(
-            crate::trust::event::EventKind::PackSubmitted,
-            Some(pack.id.to_string()),
-            None,
-            crate::workspace::source_view::workspace_hash(&ws.root)?,
-            serde_json::json!({ "submit_receipt": receipt.id.to_string() }),
-        )?;
-        lifecycle.transition(PackTransitionRequest {
-            operation_id: crate::support::common::OperationId::new(&outcome.event.event_id),
-            expected_revision_id: revision.revision_id,
-            expected_revision_digest: revision.revision_digest,
-            target: PackLifecycle::Submitted,
-        })?;
-        store.write_lifecycle_in(location, &lifecycle)
-    }
-
-    /// Materialize or advance the canonical immutable pack/revision and its
-    /// separate lifecycle record, then record the signed trust event.
-    fn sync_canonical_pack(
-        &self,
-        ws: &Workspace,
-        pack: &PackWorkspace,
-        patch: Option<&PatchSet>,
-        spec: PackSyncSpec,
-    ) -> DraftResult<String> {
-        use crate::pack::lifecycle::{PackLifecycle, PackLifecycleRecord, PackTransitionRequest};
-        use crate::pack::{PackLockfile, PackManifest, PackRevision, PackStore};
-        let PackSyncSpec {
-            kind,
-            intent,
-            lifecycle,
-            metadata,
-        } = spec;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = PackStore::new(paths.clone());
-        let workspace_hash = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        let changes_bytes = patch.map(to_pretty).transpose()?;
-        if let Some(p) = patch {
-            let mut paths_to_check = Vec::new();
-            for file in &p.files {
-                paths_to_check.push(&file.path);
-                if let Some(old_path) = &file.old_path {
-                    paths_to_check.push(old_path);
-                }
-            }
-            let violations = crate::workspace::protected::violations(&ws.root, paths_to_check)?;
-            if let Some(v) = violations.first() {
-                return Err(DraftError::new(
-                    DraftErrorKind::ProtectedFileAccess,
-                    format!("protected file cannot be packed: {}", v.path),
-                )
-                .with_context(format!("matched protected pattern '{}'", v.pattern))
-                .with_suggestion("remove the protected file from the pack scope"));
-            }
-        }
-
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let manifest = if store.exists(pack.id.as_str()) {
-            store.read_manifest(pack.id.as_str())?
-        } else {
-            let mut manifest = PackManifest {
-                schema_version: current_version(ContractId::PackManifest),
-                pack_id: pack.id.to_string(),
-                manifest_digest: String::new(),
-                name: pack.name.clone().unwrap_or_else(|| pack.id.to_string()),
-                description: String::new(),
-                intent,
-                provenance: serde_json::json!({"kind": "local_workspace"}),
-                author_id: ledger.actor_id().to_string(),
-                candidate_id: None,
-                declared_dependencies: Vec::new(),
-                created_at: now().to_rfc3339(),
-            };
-            manifest.refresh_manifest_digest();
-            store.write_manifest(&manifest)?;
-            manifest
-        };
-        manifest.ensure_supported()?;
-
-        let existing_revisions = store.revisions(pack.id.as_str())?;
-        let current = if existing_revisions.is_empty() {
-            None
-        } else {
-            Some(store.current_revision_in(crate::pack::PackLocation::Store, pack.id.as_str())?)
-        };
-        let diff_digest = changes_bytes
-            .as_ref()
-            .map(|bytes| sha256_hex(bytes))
-            .or_else(|| {
-                current
-                    .as_ref()
-                    .map(|revision| revision.diff_digest.clone())
-            })
-            .unwrap_or_else(|| sha256_hex(b""));
-        let base_digest = hash_json(&load_snapshot(ws, &pack.base_snapshot_id)?)?;
-        let content_digest = hash_json(&load_snapshot(ws, &pack.result_snapshot_id)?)?;
-        let revision_changed = current.as_ref().is_none_or(|revision| {
-            revision.diff_digest != diff_digest
-                || revision.content_digest != content_digest
-                || revision.target_digest != workspace_hash
-        });
-        let revision = if revision_changed {
-            let mut revision = PackRevision {
-                schema_version: current_version(ContractId::PackRevision),
-                pack_id: manifest.pack_id.clone(),
-                manifest_digest: manifest.manifest_digest.clone(),
-                revision_id: format!("rev_{}", uuid::Uuid::new_v4().simple()),
-                revision_number: existing_revisions.len() as u64 + 1,
-                revision_digest: String::new(),
-                base_digest,
-                content_digest,
-                diff_digest,
-                target_digest: workspace_hash.clone(),
-                resolved_dependency_digests: manifest.declared_dependencies.clone(),
-                created_at: now().to_rfc3339(),
-            };
-            revision.refresh_revision_digest();
-            store.write_revision(&revision)?;
-            if let Some(bytes) = &changes_bytes {
-                write_atomic(&paths.pack_changes(pack.id.as_str()), bytes)?;
-                write_atomic(
-                    &paths
-                        .pack_dir(pack.id.as_str())
-                        .join("revisions")
-                        .join(format!("{}.patch", revision.revision_id)),
-                    bytes,
-                )?;
-            }
-            revision
-        } else {
-            current.expect("a non-changing revision must have a current revision")
-        };
-
-        let outcome = ledger.record(
-            kind,
-            Some(pack.id.to_string()),
-            None,
-            workspace_hash.clone(),
-            metadata,
-        )?;
-        let operation_id = crate::support::common::OperationId::new(&outcome.event.event_id);
-        let mut lifecycle_record = if revision_changed {
-            PackLifecycleRecord {
-                schema_version: current_version(ContractId::PackLifecycle),
-                pack_id: pack.id.to_string(),
-                revision_id: revision.revision_id.clone(),
-                revision_digest: revision.revision_digest.clone(),
-                lifecycle: PackLifecycle::Draft,
-                updated_at: now(),
-                last_operation_id: operation_id.clone(),
-            }
-        } else {
-            store.read_lifecycle_in(crate::pack::PackLocation::Store, pack.id.as_str())?
-        };
-        if lifecycle_record.lifecycle != lifecycle {
-            if matches!(lifecycle, PackLifecycle::Approved | PackLifecycle::Rejected)
-                && lifecycle_record.lifecycle == PackLifecycle::Verified
-            {
-                lifecycle_record.transition(PackTransitionRequest {
-                    operation_id: operation_id.clone(),
-                    expected_revision_id: revision.revision_id.clone(),
-                    expected_revision_digest: revision.revision_digest.clone(),
-                    target: PackLifecycle::Reviewing,
-                })?;
-            }
-            lifecycle_record.transition(PackTransitionRequest {
-                operation_id,
-                expected_revision_id: revision.revision_id.clone(),
-                expected_revision_digest: revision.revision_digest.clone(),
-                target: lifecycle,
-            })?;
-        }
-        store.write_lifecycle_in(crate::pack::PackLocation::Store, &lifecycle_record)?;
-
-        if let Some(p) = patch {
-            let mut file_hashes = std::collections::BTreeMap::new();
-            for f in &p.files {
-                if matches!(f.change_kind, FileChangeKind::Deleted) {
-                    continue;
-                }
-                let fp = ws.root.join(f.path.as_str());
-                let bytes = std::fs::read(&fp).map_err(|error| {
-                    DraftError::storage(format!(
-                        "cannot read changed file {} while locking pack {}: {error}",
-                        fp.display(),
-                        pack.id
-                    ))
-                })?;
-                file_hashes.insert(f.path.to_string(), sha256_hex(&bytes));
-            }
-            let lock = PackLockfile {
-                schema_version: current_version(ContractId::PackLock),
-                pack_id: pack.id.to_string(),
-                workspace_hash,
-                file_hashes,
-                policy_version: crate::DRAFT_VERSION.to_string(),
-                risk_engine_version: crate::DRAFT_VERSION.to_string(),
-                verification_commands: Vec::new(),
-                lsif_version: crate::DRAFT_VERSION.to_string(),
-                test_selector_version: crate::DRAFT_VERSION.to_string(),
-                fuzz_selector_version: crate::DRAFT_VERSION.to_string(),
-                dependency_pack_hashes: Vec::new(),
-                receipt_digests: vec![sha256_hex(outcome.receipt.receipt_id.as_bytes())],
-            };
-            store.write_lockfile(&lock)?;
-        }
-        Ok(outcome.receipt.receipt_id)
-    }
-
-    /// Submit an imported pack: enforce the import gates, apply the embedded
-    /// content to the workspace (fail closed, nothing written on any
-    /// conflict), and promote the pack out of quarantine.
+    /// Plan a rollback: what would be restored, what would be removed, and what
+    /// could not be reached at all.
     ///
-    /// Submit hooks do not run for import submissions — there is no rendered submit
-    /// message/diff context for an imported pack.
-    fn submit_imported_pack(
-        &self,
-        ws: &Workspace,
-        store: &crate::pack::PackStore,
-        loc: crate::pack::PackLocation,
-        manifest: crate::pack::PackManifest,
-    ) -> DraftResult<SubmitRecord> {
-        use crate::pack::lifecycle::{PackLifecycle, PackTransitionRequest};
-        use crate::pack::QuarantineState;
-        let started = now();
-        let pack_id = manifest.pack_id.clone();
-        let dir = store.dir_for(loc, &pack_id);
-        let quarantine = store.read_quarantine(&pack_id)?;
-        let mut lifecycle = store.read_lifecycle_in(loc, &pack_id)?;
-        let revision = store.current_revision_in(loc, &pack_id)?;
-
-        // State gate with actionable, state-specific errors.
-        match quarantine.trust_evaluation {
-            QuarantineState::Approved => {}
-            QuarantineState::Quarantined => {
-                return Err(DraftError::new(
-                    DraftErrorKind::ReviewRequired,
-                    "imported packs must be locally verified and approved before submit",
-                )
-                .with_suggestion("run `draft verify <pck_id>`, then approve it"));
-            }
-            QuarantineState::Verified => {
-                return Err(DraftError::new(
-                    DraftErrorKind::ReviewRequired,
-                    "imported packs must be approved before submit",
-                ));
-            }
-            QuarantineState::Rejected => {
-                return Err(DraftError::invalid_config(
-                    "a rejected import cannot be submitted",
-                ));
-            }
-            QuarantineState::Promoted => {
-                return Err(DraftError::invalid_config(
-                    "this imported pack is already submitted",
-                ));
-            }
-        }
-        let verification: crate::review::verification::VerifyEvidence =
-            crate::contracts::read_persisted(&dir.join("verify.json"))?;
-        verification.validate_binding(&revision)?;
-        if lifecycle.lifecycle != PackLifecycle::Approved {
-            return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "the current immutable revision is not approved for submit",
-            ));
-        }
-
-        // Policy gates.
-        let policy = effective_policy(ws)?;
-        if policy.require_local_verify_for_imports && !verification.passed() {
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                "imported packs must be locally re-verified before submit",
-            )
-            .with_suggestion("run `draft verify <pck_id>` first"));
-        }
-        let risk_path = dir.join("risk.json");
-        let mut risk_level = "unknown".to_string();
-        if risk_path.exists() {
-            let risk: crate::review::risk::RiskReport =
-                crate::contracts::read_persisted(&risk_path)?;
-            risk.validate_binding(&revision)?;
-            risk_level = risk.risk_level.as_str().to_string();
-            if policy.block_on_critical_risk
-                && risk.risk_level == crate::review::risk::RiskLevel::Critical
-            {
-                return Err(DraftError::new(
-                    DraftErrorKind::RiskPolicyBlocked,
-                    "unresolved critical risk blocks submit",
-                ));
-            }
-        } else if policy.block_on_critical_risk {
-            return Err(DraftError::new(
-                DraftErrorKind::RiskPolicyBlocked,
-                "no local risk report exists for this imported pack",
-            )
-            .with_suggestion("run `draft verify <pck_id>` before submit"));
-        }
-        if policy.require_reverify_on_workspace_change {
-            let current = crate::workspace::source_view::workspace_hash(&ws.root)?;
-            if verification
-                .verification_key
-                .as_ref()
-                .map(|key| key.workspace_hash.as_str())
-                != Some(current.as_str())
-            {
-                return Err(DraftError::new(
-                    DraftErrorKind::VerificationFailed,
-                    "workspace content changed after the import was verified",
-                )
-                .with_suggestion("run `draft verify <pck_id>` again before submit"));
-            }
-        }
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        if !ledger.verify_all()?.all_ok {
-            return Err(DraftError::new(
-                DraftErrorKind::OperationLogCorrupt,
-                "canonical event, receipt, or transparency ledger failed verification",
-            )
-            .with_suggestion("run `draft receipt verify --all` or `draft doctor`"));
-        }
-
-        // Integrity + application plan (validate everything before writing).
-        let changes_bytes = fs::read(dir.join("changes.patch"))?;
-        if sha256_hex(&changes_bytes) != revision.diff_digest {
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                "imported changes.patch does not match the manifest changes_hash (tampering?)",
-            ));
-        }
-        let patch: PatchSet = serde_json::from_slice(&changes_bytes).map_err(|e| {
-            DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                format!("imported changes.patch is corrupt: {e}"),
-            )
-        })?;
-        let plan = plan_import_apply(ws, &dir, &patch)?;
-
-        // The apply is rollback-safe: checkpoint the workspace first.
-        self.checkpoint(&ws.root, &format!("pre-import-submit {pack_id}"))?;
-
-        ws.events()?.append(
-            "submit.started",
-            Some(pack_id.clone()),
-            serde_json::json!({ "imported": true }),
-        )?;
-        for (dest, bytes) in &plan.writes {
-            if let Some(parent) = dest.parent() {
-                ensure_dir(parent)?;
-            }
-            write_atomic(dest, bytes)?;
-        }
-        for dest in &plan.deletes {
-            if dest.is_file() {
-                fs::remove_file(dest)?;
-            }
-        }
-
-        // Project-state verification (SRS-FR-083–086), symmetric with the
-        // local submit path: the applied state must verify before promotion,
-        // receipts, or stable_head advancement.
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let applied_paths: Vec<String> = {
-            let mut rels = Vec::new();
-            for (p, _) in &plan.writes {
-                if let Ok(rel) = p.strip_prefix(&ws.root) {
-                    rels.push(rel.to_string_lossy().replace('\\', "/"));
-                }
-            }
-            for p in &plan.deletes {
-                if let Ok(rel) = p.strip_prefix(&ws.root) {
-                    rels.push(rel.to_string_lossy().replace('\\', "/"));
-                }
-            }
-            rels.sort();
-            rels.dedup();
-            rels
-        };
-        ledger.record(
-            crate::trust::event::EventKind::ProjectStateVerificationStarted,
-            Some(pack_id.clone()),
-            None,
-            crate::workspace::source_view::workspace_hash_cached(
-                &ws.root,
-                &paths.workspace_hash_cache(),
-            )?,
-            serde_json::json!({ "imported": true }),
-        )?;
-        let ps_report = crate::review::verification::verify_project_state(
-            &ws.root,
-            &paths,
-            ws.workspace_id.as_str(),
-            &applied_paths,
-            true,
-        )?;
-        if !ps_report.passed {
-            let failed_names = ps_report.failed_checks().join(", ");
-            ledger.record(
-                crate::trust::event::EventKind::ProjectStateVerificationFailed,
-                Some(pack_id.clone()),
-                None,
-                ps_report.workspace_hash.clone(),
-                serde_json::json!({
-                    "imported": true,
-                    "checks": ps_report.checks,
-                    "failed": ps_report.failed_checks(),
-                }),
-            )?;
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                format!(
-                    "project-state verification failed after applying the imported pack: {failed_names}"
-                ),
-            )
-            .with_suggestion(
-                "the workspace was checkpointed before apply; run `draft rollback <chk_id>` to restore it",
-            ));
-        }
-
-        // Advance the lifecycle of this exact immutable revision, then promote
-        // the separately approved quarantine record.
-        let wsh_after = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        let submitted = ledger.record(
-            crate::trust::event::EventKind::PackSubmitted,
-            Some(pack_id.clone()),
-            None,
-            wsh_after,
-            serde_json::json!({
-                "imported": true,
-                "applied": true,
-                "files_written": plan.writes.len(),
-                "files_deleted": plan.deletes.len(),
-            }),
-        )?;
-        lifecycle.transition(PackTransitionRequest {
-            operation_id: crate::support::common::OperationId::new(&submitted.event.event_id),
-            expected_revision_id: revision.revision_id.clone(),
-            expected_revision_digest: revision.revision_digest.clone(),
-            target: PackLifecycle::Submitted,
-        })?;
-        store.write_lifecycle_in(loc, &lifecycle)?;
-        if loc == crate::pack::PackLocation::Quarantine {
-            store.promote_from_quarantine(&pack_id)?;
-        }
-
-        // Return the same submit operation record to every caller.
-        let object_store = ObjectStore::new(ws.layout.clone());
-        let mut receipt = SubmitRecord {
-            schema_version: current_version(ContractId::SubmitRecord),
-            id: ReceiptId::generate(),
-            pack_id: PackId::new(pack_id.clone()),
-            actor_id: resolve_actor(&ws.layout.draft_dir)?.id,
-            native_submit_status: NativeSubmitStatus::Submitted,
-            hook_status: HookStatus::NotConfigured,
-            overall_status: SubmitOverallStatus::Submitted,
-            message_ref: object_store.put_bytes(manifest.name.as_bytes())?,
-            hook_results: Vec::new(),
-            hook_receipt_refs: Vec::new(),
-            object_refs: Vec::new(),
-            event_refs: Vec::new(),
-            risk_level,
-            risk_receipt_id: None,
-            started_at: started,
-            ended_at: now(),
-            record_digest: String::new(),
-            failure_reason: None,
-        };
-        receipt.record_digest = hash_json(&receipt)?;
-        write_submit_record(ws, &receipt)?;
-        ws.events()?.append(
-            "submit.completed",
-            Some(pack_id.clone()),
-            serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
-        )?;
-        let stable_store = crate::workspace::stable::StableHeadStore::new(paths.clone());
-        let previous_head = if stable_store.exists() {
-            Some(stable_store.read()?)
-        } else {
-            None
-        };
-        let submit_mode = ResolvedConfig::load(ws)?.pack_disposal;
-        let project_verified = ledger.record(
-            crate::trust::event::EventKind::ProjectStateVerified,
-            Some(pack_id.clone()),
-            None,
-            ps_report.workspace_hash.clone(),
-            serde_json::json!({
-                "imported": true,
-                "submit_receipt": receipt.id.to_string(),
-                "submit_mode": submit_mode.as_str(),
-                "checks": ps_report.checks,
-            }),
-        )?;
-        if submit_mode == crate::workspace::stable::SubmitMode::MergeAndDispose {
-            let stable_head = stable_store.advance(
-                &ws.root,
-                project_verified.receipt.receipt_id.clone(),
-                previous_head,
-                Some(hash_json(&serde_json::json!({
-                    "manifest": manifest,
-                    "patch": patch,
-                    "submit_receipt": receipt.id.to_string()
-                }))?),
-                Some(crate::workspace::stable::PackSummary {
-                    pack_id: pack_id.clone(),
-                    name: Some(manifest.name.clone()),
-                    affected_paths: {
-                        let mut paths = Vec::new();
-                        for (p, _) in &plan.writes {
-                            if let Ok(rel) = p.strip_prefix(&ws.root) {
-                                paths.push(rel.to_string_lossy().replace('\\', "/"));
-                            }
-                        }
-                        for p in &plan.deletes {
-                            if let Ok(rel) = p.strip_prefix(&ws.root) {
-                                paths.push(rel.to_string_lossy().replace('\\', "/"));
-                            }
-                        }
-                        paths.sort();
-                        paths.dedup();
-                        paths
-                    },
-                }),
-                submit_mode,
-            )?;
-            ledger.record(
-                crate::trust::event::EventKind::StableHeadAdvanced,
-                Some(stable_head.id.clone()),
-                None,
-                stable_head.workspace_hash.clone(),
-                serde_json::json!({
-                    "stable_head": stable_head.id,
-                    "project_state_receipt": project_verified.receipt.receipt_id,
-                    "submit_receipt": receipt.id.to_string()
-                }),
-            )?;
-        }
-        ledger.record(
-            crate::trust::event::EventKind::SubmitFinalized,
-            Some(pack_id.clone()),
-            None,
-            crate::workspace::source_view::workspace_hash(&ws.root)?,
-            serde_json::json!({ "submit_receipt": receipt.id.to_string(), "imported": true }),
-        )?;
-        let removed = dispose_pack_metadata(ws, &paths, &pack_id)?;
-        ledger.record(
-            crate::trust::event::EventKind::PackDisposed,
-            Some(pack_id),
-            None,
-            crate::workspace::source_view::workspace_hash(&ws.root)?,
-            serde_json::json!({ "removed_entries": removed, "imported": true }),
-        )?;
-        Ok(receipt)
-    }
-
-    pub fn submit_selected(
-        &self,
-        cwd: &Path,
-        pack_id: Option<&str>,
-        vars: BTreeMap<String, String>,
-    ) -> DraftResult<SubmitRecord> {
-        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        self.submit(cwd, &pack_id, vars)
-    }
-
-    pub fn submit_readiness_selected(
-        &self,
-        cwd: &Path,
-        pack_id: Option<&str>,
-    ) -> DraftResult<SubmitReadinessReport> {
-        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        let ws = self.open(cwd)?;
-        let pack = load_pack(&ws, &pack_id)?;
-        let patch = load_patch(&ws, &pack)?;
-        let policy = effective_policy(&ws)?;
-        submit_readiness(&ws, &pack, &patch, &policy)
-    }
-
+    /// Two things this deliberately does not do. It does not treat current state
+    /// as evidence about the target — current state says only where the project
+    /// is now. And it does not assume a resource is restorable because it was
+    /// once observed: an anchor is separate, contemporaneous evidence, and
+    /// without one the resource is reported as unrecoverable rather than
+    /// silently skipped.
     pub fn rollback_plan(&self, cwd: &Path, reference: &str) -> DraftResult<RollbackPlan> {
         let ws = self.open(cwd)?;
-        let snapshot = resolve_snapshot_reference(&ws, reference)?;
-        let current =
-            Snapshotter::new(&ws)?.create_snapshot(resolve_actor(&ws.layout.draft_dir)?)?;
-        let patch = diff_snapshot_values(&snapshot, &current)?;
+        let target = resolve_snapshot_reference(&ws, reference)?;
+        let current = self.observe(&ws)?;
+        let anchors = load_anchor_set(&ws, &target)?;
+        let recovery_status = anchors.status(&target);
+        let plan = crate::dcg::anchor::ResourceRestorePlan::plan(
+            crate::support::common::OperationId::generate(),
+            &target,
+            &anchors,
+            &current,
+        )?;
+
+        let mut affected_locators: Vec<ResourceLocator> = plan
+            .restore_targets
+            .iter()
+            .map(|restore| restore.target_locator.clone())
+            .chain(
+                plan.absence_targets
+                    .iter()
+                    .map(|absence| absence.current_locator.clone()),
+            )
+            .filter(|locator| {
+                locator.scheme != crate::extension::FILE_SCHEME || !is_draft_path(&locator.body)
+            })
+            .collect();
+        affected_locators.sort();
+        affected_locators.dedup();
+
+        let mut warnings = Vec::new();
+        if !plan.absence_targets.is_empty() {
+            warnings.push(format!(
+                "{} resource(s) will be removed because the target state proves they were absent",
+                plan.absence_targets.len()
+            ));
+        }
+        if !plan.restore_targets.is_empty() {
+            warnings.push(format!(
+                "{} resource(s) will be overwritten with their target state",
+                plan.restore_targets.len()
+            ));
+        }
+        // Say plainly, up front, that this rollback cannot reach the target —
+        // rather than letting it run and reporting a partial result afterwards.
+        if !plan.can_be_complete() {
+            warnings.push(
+                "this rollback cannot fully restore the target; see the recorded uncertainties"
+                    .to_string(),
+            );
+        }
+
         Ok(RollbackPlan {
             schema_version: current_version(ContractId::RollbackPlan),
             id: RollbackPlanId::generate(),
-            rollback_snapshot_id: snapshot.id,
-            affected_files: patch
-                .files
-                .into_iter()
-                .map(|f| f.path)
-                .filter(|p| !is_draft_path(p.as_str()))
+            rollback_snapshot_id: target.id.clone(),
+            target_snapshot_digest: target.snapshot_digest.clone(),
+            restored_resources: plan
+                .restore_targets
+                .iter()
+                .map(|restore| restore.resource_id.clone())
                 .collect(),
+            removed_resources: plan
+                .absence_targets
+                .iter()
+                .map(|absence| absence.current_resource_id.clone())
+                .collect(),
+            affected_locators,
+            known_uncertainties: plan.known_uncertainties.clone(),
+            recovery_status,
             destructive: true,
-            warnings: vec!["rollback will overwrite affected workspace files".to_string()],
+            warnings,
         })
     }
 
+    /// Restore a past state, then prove whether the target was actually reached.
+    ///
+    /// The proof is the point. A successful mutation means changes were applied;
+    /// only a fresh, complete observation whose every state digest equals the
+    /// target's establishes that the project *is* in that state.
     pub fn rollback(&self, cwd: &Path, reference: &str, yes: bool) -> DraftResult<RollbackRecord> {
         let ws = self.open(cwd)?;
         let plan = self.rollback_plan(cwd, reference)?;
@@ -6074,52 +2884,49 @@ impl App {
                 "rollback is destructive and requires explicit CLI invocation",
             ));
         }
-        ws.events()?.append(
-            "rollback.started",
-            Some(plan.id.to_string()),
-            serde_json::to_value(&plan).expect("Draft-owned records must serialize"),
+        let started = now();
+        let target = load_snapshot(&ws, &plan.rollback_snapshot_id)?;
+        let current = self.observe(&ws)?;
+        let anchors = load_anchor_set(&ws, &target)?;
+        let restore_plan = crate::dcg::anchor::ResourceRestorePlan::plan(
+            crate::support::common::OperationId::generate(),
+            &target,
+            &anchors,
+            &current,
         )?;
-        let snap = load_snapshot(&ws, &plan.rollback_snapshot_id)?;
-        restore_snapshot(&ws, &snap)?;
-        let mut receipt = RollbackRecord {
+        apply_restore_plan(&ws, &restore_plan, &anchors)?;
+
+        // Re-observe under live fencing and compare the complete state — every
+        // digest, every locator, and the absences too.
+        let observed = self.observe(&ws)?;
+        let outcome = crate::dcg::anchor::classify_rollback(&restore_plan, &target, &observed);
+
+        let mut record = RollbackRecord {
             schema_version: current_version(ContractId::RollbackRecord),
             id: ReceiptId::generate(),
             rollback_plan_id: plan.id.clone(),
             actor_id: resolve_actor(&ws.layout.draft_dir)?.id,
-            status: "completed".to_string(),
-            started_at: now(),
+            status: outcome.as_str().to_string(),
+            outcome: outcome.clone(),
+            started_at: started,
             ended_at: now(),
             record_digest: String::new(),
         };
-        write_rollback_record(&ws, &mut receipt)?;
+        write_rollback_record(&ws, &mut record)?;
         ws.events()?.append(
-            "rollback.completed",
-            Some(receipt.id.to_string()),
-            serde_json::to_value(&receipt).expect("Draft-owned records must serialize"),
+            EventKind::RecoveryPerformed,
+            Some(record.id.to_string()),
+            serde_json::to_value(&record).expect("Draft-owned records must serialize"),
         )?;
-        let workspace_hash = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        ledger.record_with_receipt_id(
-            crate::trust::event::EventKind::RollbackPerformed,
-            Some(reference.to_string()),
-            None,
-            workspace_hash,
-            serde_json::json!({
-                "rollback_record_id": receipt.id.to_string(),
-                "snapshot": snap.id.to_string(),
-                "rollback_plan": plan,
-            }),
-            receipt.id.to_string(),
-        )?;
-        Ok(receipt)
+        Ok(record)
     }
 
-    /// `draft rollback <target> --dry-run`: resolve the target and report what
+    /// `draft recover plan <target>`: resolve the target and report what
     /// would change and which safety checks pass, without mutating anything.
     pub fn rollback_dry_run(&self, cwd: &Path, reference: &str) -> DraftResult<DryRunReport> {
         let ws = self.open(cwd)?;
         let mut checks = Vec::new();
-        // Target id prefix must be chk_/pck_/rcp_ (validated by the resolver).
+        // Target id prefix must be chk_/chg_/rcp_ (validated by the resolver).
         let plan = match self.rollback_plan(cwd, reference) {
             Ok(plan) => {
                 checks.push(DoctorCheck::ok("target", format!("resolved {reference}")));
@@ -6132,13 +2939,40 @@ impl App {
         };
         let affected: Vec<String> = plan
             .as_ref()
-            .map(|p| {
-                p.affected_files
+            .map(|plan| {
+                plan.affected_locators
                     .iter()
-                    .map(|f| f.to_string())
+                    .map(|locator| locator.body.clone())
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // Rollback deletes where the target proves absence. A dry run must say
+        // so before anyone runs the real thing.
+        if let Some(plan) = plan.as_ref() {
+            checks.push(bool_check(
+                "removals-proved",
+                plan.known_uncertainties.iter().all(|uncertainty| {
+                    !matches!(
+                        uncertainty,
+                        crate::dcg::anchor::RollbackUncertainty::TargetStateUnknown { .. }
+                    )
+                }),
+                format!(
+                    "{} removal(s) backed by target coverage",
+                    plan.removed_resources.len()
+                ),
+                "some resources cannot be proved absent in the target; they will not be removed",
+            ));
+            checks.push(bool_check(
+                "recovery-material",
+                plan.recovery_status.is_fully_anchored(),
+                "every target resource has retained recovery material",
+                format!(
+                    "target is {} — rollback cannot be complete",
+                    plan.recovery_status.as_str()
+                ),
+            ));
+        }
         // No affected path may touch `.draft/` (already filtered, assert here).
         let draft_touch = affected.iter().any(|f| is_draft_path(f));
         checks.push(bool_check(
@@ -6158,1898 +2992,62 @@ impl App {
             target: reference.to_string(),
             would_proceed: allowed,
             resulting_state: if allowed {
-                "workspace restored to target".to_string()
+                "project restored to target and verified".to_string()
             } else {
                 "blocked".to_string()
             },
-            affected_files: affected,
+            affected_resources: affected,
             checks,
         })
     }
 
-    /// `draft submit --dry-run`: report whether the pack would submit and why,
-    /// without writing anything.
-    pub fn submit_dry_run(&self, cwd: &Path, pack_id: Option<&str>) -> DraftResult<DryRunReport> {
-        let pack_id = self.resolve_pack_arg(cwd, pack_id)?;
-        let ws = self.open(cwd)?;
-        {
-            let store = crate::pack::PackStore::new(
-                crate::workspace::layout::DraftLayout::for_root(&ws.root),
-            );
-            if let Some(loc) = store.locate(&pack_id) {
-                let manifest = store.read_manifest_in(loc, &pack_id)?;
-                if store.quarantine_record(&pack_id)?.is_some() {
-                    return self.import_submit_dry_run(&ws, &store, loc, manifest);
-                }
-            }
-        }
-        let pack = load_pack(&ws, &pack_id)?;
-        let patch = load_patch(&ws, &pack)?;
-        let policy = effective_policy(&ws)?;
-        let readiness = submit_readiness(&ws, &pack, &patch, &policy)?;
-        let mut checks = Vec::new();
-        let draft_touch = patch.files.iter().any(|f| is_draft_path(f.path.as_str()));
-        checks.push(bool_check(
-            "draft-exclusion",
-            !draft_touch,
-            ".draft/ not in candidate",
-            ".draft/ present in submit candidate",
-        ));
-        checks.push(bool_check(
-            "verified",
-            readiness.verification_receipt_id.is_some(),
-            "verification receipt present",
-            "not verified",
-        ));
-        checks.push(bool_check(
-            "approved",
-            readiness.approval_ref.is_some(),
-            "approval present",
-            "not approved",
-        ));
-        checks.push(match self.verify_events(&ws.root) {
-            Ok(_) => DoctorCheck::ok("event-chain", "intact"),
-            Err(e) => DoctorCheck::fail("event-chain", e.message),
-        });
-        let would = checks.iter().all(|c| c.ok);
-        Ok(DryRunReport {
-            action: "submit".to_string(),
-            target: pack_id,
-            would_proceed: would,
-            resulting_state: if would {
-                "submitted".to_string()
-            } else {
-                "blocked".to_string()
-            },
-            affected_files: patch.files.iter().map(|f| f.path.to_string()).collect(),
-            checks,
-        })
-    }
-
-    /// `draft submit --dry-run` for an imported pack: report the import gates
-    /// and whether the embedded content would apply cleanly.
-    fn import_submit_dry_run(
-        &self,
-        ws: &Workspace,
-        store: &crate::pack::PackStore,
-        loc: crate::pack::PackLocation,
-        manifest: crate::pack::PackManifest,
-    ) -> DraftResult<DryRunReport> {
-        let dir = store.dir_for(loc, &manifest.pack_id);
-        let lifecycle = store.read_lifecycle_in(loc, &manifest.pack_id)?;
-        let revision = store.current_revision_in(loc, &manifest.pack_id)?;
-        let quarantine = store.read_quarantine(&manifest.pack_id)?;
-        let verification: crate::review::verification::VerifyEvidence =
-            crate::contracts::read_persisted(&dir.join("verify.json"))?;
-        verification.validate_binding(&revision)?;
-        let mut checks = Vec::new();
-        checks.push(bool_check(
-            "locally-verified",
-            verification.passed(),
-            "local verification evidence present",
-            "imported pack is not locally verified",
-        ));
-        checks.push(bool_check(
-            "approved",
-            quarantine.trust_evaluation == crate::pack::QuarantineState::Approved
-                && lifecycle.lifecycle == crate::pack::lifecycle::PackLifecycle::Approved,
-            "import approved",
-            "imported pack is not approved",
-        ));
-        let workspace_unchanged = crate::workspace::source_view::workspace_hash(&ws.root)
-            .map(|hash| {
-                verification
-                    .verification_key
-                    .as_ref()
-                    .map(|key| key.workspace_hash.as_str())
-                    == Some(hash.as_str())
-            })
-            .unwrap_or(false);
-        checks.push(bool_check(
-            "workspace-unchanged",
-            workspace_unchanged,
-            "workspace matches verification state",
-            "workspace changed since local verification",
-        ));
-        let (applies, affected) = match fs::read(dir.join("changes.patch"))
-            .map_err(DraftError::from)
-            .and_then(|b| {
-                if sha256_hex(&b) != revision.diff_digest {
-                    return Err(DraftError::new(
-                        DraftErrorKind::VerificationFailed,
-                        "changes hash mismatch",
-                    ));
-                }
-                serde_json::from_slice::<PatchSet>(&b)
-                    .map_err(|e| DraftError::invalid_config(e.to_string()))
-            })
-            .and_then(|patch| plan_import_apply(ws, &dir, &patch).map(|plan| (patch, plan)))
-        {
-            Ok((patch, _plan)) => (
-                DoctorCheck::ok("applies-cleanly", "embedded content applies cleanly"),
-                patch.files.iter().map(|f| f.path.to_string()).collect(),
-            ),
-            Err(e) => (DoctorCheck::fail("applies-cleanly", e.message), Vec::new()),
-        };
-        checks.push(applies);
-        let would = checks.iter().all(|c| c.ok);
-        Ok(DryRunReport {
-            action: "submit".to_string(),
-            target: manifest.pack_id,
-            would_proceed: would,
-            resulting_state: if would {
-                "import applied and submitted".to_string()
-            } else {
-                "blocked".to_string()
-            },
-            affected_files: affected,
-            checks,
-        })
-    }
-
-    /// Resolve a pack reference (pck_id or unique name) to a canonical pack id.
-    fn resolve_canonical_pack_ref(&self, ws: &Workspace, reference: &str) -> DraftResult<String> {
-        if reference.starts_with("pck_") {
-            return Ok(reference.to_string());
-        }
-        let store =
-            crate::pack::PackStore::new(crate::workspace::layout::DraftLayout::for_root(&ws.root));
-        if let Some(m) = store.list()?.into_iter().find(|m| m.name == reference) {
-            return Ok(m.pack_id);
-        }
-        // Quarantined imports are addressable by name too.
-        if let Some(m) = store
-            .list_quarantined()?
-            .into_iter()
-            .find(|m| m.name == reference)
-        {
-            return Ok(m.pack_id);
-        }
-        Err(DraftError::not_found(format!(
-            "canonical pack '{reference}' was not found"
-        )))
-    }
-
-    /// `draft pack --export <pck_id|name> [--output <path>]`.
-    pub fn pack_export(
-        &self,
-        cwd: &Path,
-        reference: &str,
-        output: Option<&Path>,
-    ) -> DraftResult<PackExportReport> {
-        use crate::pack::archive::{
-            archive_content_digest, DraftpackHeader, Provenance, DRAFTPACK_FORMAT,
-        };
-        let ws = self.open(cwd)?;
-        let pack_id = self.resolve_canonical_pack_ref(&ws, reference)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = crate::pack::PackStore::new(paths.clone());
-        let manifest = store.read_manifest(&pack_id)?;
-        let revision = store.current_revision_in(crate::pack::PackLocation::Store, &pack_id)?;
-        let lifecycle = store.read_lifecycle_in(crate::pack::PackLocation::Store, &pack_id)?;
-
-        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-        entries.push(("manifest.json".into(), to_pretty(&manifest)?));
-        entries.push(("revision.json".into(), to_pretty(&revision)?));
-        entries.push(("lifecycle.json".into(), to_pretty(&lifecycle)?));
-        let lock = store.read_lockfile(&pack_id)?;
-        entries.push(("pack.lock.json".into(), to_pretty(&lock)?));
-        if paths.pack_changes(&pack_id).exists() {
-            let changes_bytes = fs::read(paths.pack_changes(&pack_id))?;
-            if sha256_hex(&changes_bytes) != revision.diff_digest {
-                return Err(DraftError::new(
-                    DraftErrorKind::CorruptData,
-                    "changes.patch does not match the immutable revision",
-                ));
-            }
-            // Embed the content-addressed objects referenced by the patch
-            // (new file contents + hunk bodies) so the pack is portable: an
-            // importing workspace can re-verify content and apply it on submit.
-            let patch: PatchSet = crate::contracts::decode_persisted(&changes_bytes)?;
-            let object_store = ObjectStore::new(ws.layout.clone());
-            let mut refs = std::collections::BTreeSet::new();
-            for f in &patch.files {
-                if let Some(h) = &f.old_hash {
-                    refs.insert(h.clone());
-                }
-                if let Some(h) = &f.new_hash {
-                    refs.insert(h.clone());
-                }
-                for hunk in &f.hunks {
-                    if !hunk.content_ref.is_empty() {
-                        refs.insert(hunk.content_ref.clone());
-                    }
-                }
-            }
-            for object_ref in refs {
-                let hex = object_ref.strip_prefix("b3:").ok_or_else(|| {
-                    DraftError::new(
-                        DraftErrorKind::CorruptData,
-                        format!("unsupported object ref '{object_ref}'"),
-                    )
-                })?;
-                let source_dir = store.dir_for(crate::pack::PackLocation::Store, &pack_id);
-                let embedded = source_dir.join("objects").join(hex);
-                let bytes = if embedded.exists() {
-                    read_imported_object(&source_dir, &object_ref)?
-                } else {
-                    object_store.get_bytes(&object_ref)?
-                };
-                entries.push((format!("objects/{hex}"), bytes));
-            }
-            entries.push(("changes.patch".into(), changes_bytes));
-        } else if revision.diff_digest != sha256_hex(b"") {
-            return Err(DraftError::new(
-                DraftErrorKind::CorruptData,
-                "pack revision references missing changes.patch",
-            ));
-        }
-        for (name, p) in [
-            ("risk.json", paths.pack_risk(&pack_id)),
-            ("verify.json", paths.pack_verify(&pack_id)),
-            ("lsif.json", paths.pack_lsif(&pack_id)),
-        ] {
-            if p.exists() {
-                entries.push((name.to_string(), fs::read(&p)?));
-            }
-        }
-        // Signed receipts referencing this pack are preserved as provenance.
-        let rstore = crate::trust::receipt::ReceiptStore::new(paths.clone());
-        let mut external_receipt_ids = Vec::new();
-        for r in rstore.list()? {
-            if r.subject_id.as_deref() == Some(pack_id.as_str()) {
-                entries.push((format!("receipts/{}.json", r.receipt_id), to_pretty(&r)?));
-                external_receipt_ids.push(r.receipt_id.clone());
-            }
-        }
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let provenance = Provenance {
-            schema_version: current_version(ContractId::DraftpackProvenance),
-            origin: "local".to_string(),
-            exported_by_actor: ledger.actor_id().to_string(),
-            source_workspace_hash: revision.target_digest.clone(),
-            external_receipt_ids,
-        };
-        entries.push(("provenance.json".into(), to_pretty(&provenance)?));
-        let header = DraftpackHeader {
-            schema_version: current_version(ContractId::Draftpack),
-            format: DRAFTPACK_FORMAT.to_string(),
-            draft_version: crate::DRAFT_VERSION.to_string(),
-            artifact_digest: archive_content_digest(&entries),
-            pack_id: manifest.pack_id.clone(),
-            name: manifest.name.clone(),
-            exported_at: now().to_rfc3339(),
-        };
-        entries.push(("draftpack.json".into(), to_pretty(&header)?));
-
-        let out = match output {
-            Some(p) => p.to_path_buf(),
-            None => {
-                ensure_dir(&paths.exports_dir())?;
-                paths
-                    .exports_dir()
-                    .join(format!("{}.draftpack", manifest.name))
-            }
-        };
-        crate::pack::archive::write_archive(&out, &entries)?;
-        let wsh = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        ledger.record(
-            crate::trust::event::EventKind::PackExported,
-            Some(pack_id.clone()),
-            None,
-            wsh,
-            serde_json::json!({ "output": out.display().to_string() }),
-        )?;
-        Ok(PackExportReport {
-            pack_id,
-            name: manifest.name,
-            output: out.display().to_string(),
-            bytes: fs::metadata(&out)?.len(),
-        })
-    }
-
-    /// `draft pack --import <path> [--name <unique>] [--dry-run]`.
-    pub fn pack_import(
-        &self,
-        cwd: &Path,
-        path: &Path,
-        new_name: Option<&str>,
-        dry_run: bool,
-    ) -> DraftResult<PackImportReport> {
-        use crate::pack::archive::{DraftpackHeader, DRAFTPACK_FORMAT};
-        use crate::pack::lifecycle::{PackLifecycle, PackLifecycleRecord};
-        use crate::pack::{
-            PackManifest, PackQuarantineRecord, PackRevision, PackStore, QuarantineState,
-        };
-        let ws = self.open(cwd)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = PackStore::new(paths.clone());
-
-        // Full security validation happens inside read_archive (fail closed).
-        let archive = crate::pack::archive::read_archive(path)?;
-        let header: DraftpackHeader = crate::contracts::decode_wire(
-            archive
-                .get("draftpack.json")
-                .ok_or_else(|| DraftError::invalid_config("archive is missing draftpack.json"))?,
-        )?;
-        if header.format != DRAFTPACK_FORMAT {
-            return Err(DraftError::invalid_config(format!(
-                "unsupported .draftpack format '{}'",
-                header.format
-            )));
-        }
-        let source_manifest: PackManifest = crate::contracts::decode_wire(
-            archive
-                .get("manifest.json")
-                .ok_or_else(|| DraftError::invalid_config("archive is missing manifest.json"))?,
-        )?;
-        source_manifest.ensure_supported()?;
-        let source_revision: PackRevision = crate::contracts::decode_wire(
-            archive
-                .get("revision.json")
-                .ok_or_else(|| DraftError::invalid_config("archive is missing revision.json"))?,
-        )?;
-        source_revision.validate(&source_manifest)?;
-        if let Some(bytes) = archive.get("risk.json") {
-            let risk: crate::review::risk::RiskReport = crate::contracts::decode_wire(bytes)?;
-            risk.validate_binding(&source_revision)
-                .map_err(|error| wire_binding_error("risk evidence", error))?;
-        }
-        if let Some(bytes) = archive.get("verify.json") {
-            let verification: crate::review::verification::VerifyEvidence =
-                crate::contracts::decode_wire(bytes)?;
-            verification
-                .validate_binding(&source_revision)
-                .map_err(|error| wire_binding_error("verification evidence", error))?;
-        }
-        // Content integrity: changes.patch is bound to the immutable revision.
-        if let Some(changes) = archive.get("changes.patch") {
-            let recomputed = sha256_hex(changes);
-            if recomputed != source_revision.diff_digest {
-                return Err(DraftError::invalid_config(
-                    "changes hash mismatch: revision.diff_digest does not match changes.patch",
-                ));
-            }
-        } else if source_revision.diff_digest != sha256_hex(b"") {
-            return Err(DraftError::invalid_config(
-                "archive is missing changes.patch for its declared revision",
-            ));
-        }
-
-        let target_name = new_name
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| source_manifest.name.clone());
-        // Uniqueness spans both saved packs and already-quarantined imports.
-        let name_taken =
-            store.name_taken(&target_name)? || quarantine_names(&paths)?.contains(&target_name);
-        if name_taken {
-            let hint = if new_name.is_some() {
-                format!("name '{target_name}' already exists; choose another --name")
-            } else {
-                format!("duplicate pack name '{target_name}'; import with --name <unique>")
-            };
-            return Err(DraftError::invalid_config(hint));
-        }
-
-        let mut target_id = source_manifest.pack_id.clone();
-        let mut remapped = false;
-        if store.exists(&target_id) || paths.quarantine_dir().join(&target_id).exists() {
-            target_id = format!("pck_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
-            remapped = true;
-        }
-        // Embedded objects are content-addressed: a byte payload that does not
-        // hash to its own entry name is tampering (fail closed).
-        for (entry_name, bytes) in archive
-            .entries
-            .iter()
-            .filter(|(k, _)| k.starts_with("objects/"))
-        {
-            let expected = entry_name.trim_start_matches("objects/");
-            let actual = blake3_hex(bytes);
-            if actual != expected {
-                return Err(DraftError::invalid_config(format!(
-                    "corrupt embedded object '{entry_name}': content hash mismatch"
-                )));
-            }
-        }
-
-        // External receipts are provenance only and never granted local trust,
-        // but a corrupt or wrong-schema receipt still rejects the artifact
-        // (fail closed on every embedded document).
-        let mut external_receipts = 0usize;
-        for (entry_name, bytes) in archive
-            .entries
-            .iter()
-            .filter(|(k, _)| k.starts_with("receipts/"))
-        {
-            crate::contracts::decode_wire::<crate::trust::receipt::ReceiptRecord>(bytes)
-                .map_err(|error| error.with_context(entry_name.clone()))?;
-            external_receipts += 1;
-        }
-
-        if dry_run {
-            return Ok(PackImportReport {
-                pack_id: target_id,
-                name: target_name,
-                quarantined: true,
-                remapped,
-                external_receipts,
-                applied: false,
-            });
-        }
-
-        // Derive a new local immutable identity from the origin manifest. A
-        // rename or id collision never mutates the origin contract in place.
-        let mut manifest = PackManifest {
-            schema_version: current_version(ContractId::PackManifest),
-            pack_id: target_id.clone(),
-            manifest_digest: String::new(),
-            name: target_name.clone(),
-            description: source_manifest.description.clone(),
-            intent: source_manifest.intent,
-            provenance: serde_json::json!({
-                "kind": "draftpack_import",
-                "source_pack_id": source_manifest.pack_id,
-                "source_manifest_digest": source_manifest.manifest_digest,
-                "artifact_digest": header.artifact_digest,
-            }),
-            author_id: source_manifest.author_id.clone(),
-            candidate_id: source_manifest.candidate_id.clone(),
-            declared_dependencies: source_manifest.declared_dependencies.clone(),
-            created_at: now().to_rfc3339(),
-        };
-        manifest.refresh_manifest_digest();
-        let mut revision = source_revision.clone();
-        revision.pack_id = target_id.clone();
-        revision.manifest_digest = manifest.manifest_digest.clone();
-        revision.revision_id = format!("rev_{}", uuid::Uuid::new_v4().simple());
-        revision.revision_number = 1;
-        revision.created_at = now().to_rfc3339();
-        revision.refresh_revision_digest();
-
-        // Extract canonical content into quarantine. Origin decisions and
-        // evidence remain provenance and cannot satisfy local gates.
-        let qdir = paths.quarantine_dir().join(&target_id);
-        ensure_dir(&qdir)?;
-        for (name, bytes) in &archive.entries {
-            if matches!(
-                name.as_str(),
-                "manifest.json" | "revision.json" | "lifecycle.json"
-            ) {
-                continue;
-            }
-            let local_name = if matches!(
-                name.as_str(),
-                "risk.json" | "verify.json" | "lsif.json" | "provenance.json" | "draftpack.json"
-            ) || name.starts_with("receipts/")
-            {
-                format!("origin/{name}")
-            } else {
-                name.clone()
-            };
-            let dest = crate::support::pathguard::safe_join(&qdir, &local_name)
-                .map_err(|v| DraftError::invalid_config(format!("unsafe entry {name}: {v}")))?;
-            if let Some(parent) = dest.parent() {
-                ensure_dir(parent)?;
-            }
-            write_atomic(&dest, bytes)?;
-        }
-        store.write_manifest_in(crate::pack::PackLocation::Quarantine, &manifest)?;
-        store.write_revision_in(crate::pack::PackLocation::Quarantine, &revision)?;
-        store.write_lifecycle_in(
-            crate::pack::PackLocation::Quarantine,
-            &PackLifecycleRecord {
-                schema_version: current_version(ContractId::PackLifecycle),
-                pack_id: target_id.clone(),
-                revision_id: revision.revision_id.clone(),
-                revision_digest: revision.revision_digest.clone(),
-                lifecycle: PackLifecycle::Draft,
-                updated_at: now(),
-                last_operation_id: crate::support::common::OperationId::new("op_import"),
-            },
-        )?;
-        store.write_quarantine(&PackQuarantineRecord {
-            schema_version: current_version(ContractId::PackQuarantine),
-            pack_id: target_id.clone(),
-            revision_id: revision.revision_id.clone(),
-            revision_digest: revision.revision_digest.clone(),
-            storage_location: "quarantine".into(),
-            source: path.display().to_string(),
-            artifact_digest: header.artifact_digest.clone(),
-            trust_evaluation: QuarantineState::Quarantined,
-            quarantined_at: now().to_rfc3339(),
-            promoted_at: None,
-        })?;
-
-        let wsh = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        ledger.record(
-            crate::trust::event::EventKind::PackImported,
-            Some(target_id.clone()),
-            None,
-            wsh,
-            serde_json::json!({
-                "source": path.display().to_string(),
-                "remapped": remapped,
-                "external_receipts": external_receipts,
-            }),
-        )?;
-        Ok(PackImportReport {
-            pack_id: target_id,
-            name: target_name,
-            quarantined: true,
-            remapped,
-            external_receipts,
-            applied: true,
-        })
-    }
-
-    /// `draft verify pck_<id> [--explain|--full|--fuzz]`: LSIF-backed risk +
-    /// evidence-based test/fuzz selection. Writes lsif.json/risk.json/verify.json
-    /// and records a signed PackVerified receipt.
-    pub fn verify_pack(
-        &self,
-        cwd: &Path,
-        pack_ref: &str,
-        full: bool,
-        fuzz: bool,
-    ) -> DraftResult<VerifyReport> {
-        use crate::pack::PackStore;
-        use crate::review::lsif::{LsifIndex, LSIF_BACKEND};
-        let ws = self.open(cwd)?;
-        let pack_id = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = PackStore::new(paths.clone());
-        let loc = store
-            .locate(&pack_id)
-            .unwrap_or(crate::pack::PackLocation::Store);
-        let manifest = store.read_manifest_in(loc, &pack_id)?;
-        let revision = store.current_revision_in(loc, &pack_id)?;
-        let mut lifecycle = store.read_lifecycle_in(loc, &pack_id)?;
-        if matches!(
-            lifecycle.lifecycle,
-            crate::pack::lifecycle::PackLifecycle::Rejected
-                | crate::pack::lifecycle::PackLifecycle::Submitted
-        ) {
-            return Err(DraftError::invalid_config(
-                "rejected or submitted revisions cannot be re-verified; reopen or create a successor",
-            ));
-        }
-
-        // Policy may escalate verification scope for sensitive intents
-        // (e.g. `security` requires the full suite and fuzzing).
-        let policy = effective_policy(&ws)?;
-        let intent_label = manifest.intent.as_str();
-        let full = full || policy.intent_requires_full_verify(intent_label);
-        let fuzz = fuzz || policy.intent_requires_fuzz(intent_label);
-
-        // Imported packs are verified from their embedded, content-addressed
-        // artifacts, never from origin evidence.
-        if store.quarantine_record(&pack_id)?.is_some() {
-            return self.verify_imported_pack(&ws, &paths, &store, loc, manifest, full, fuzz);
-        }
-        let pack = self.resolve_pack_ref(&ws, &pack_id)?;
-
-        // Changed files (content) — never include `.draft/`.
-        let patch = load_patch(&ws, &pack)?;
-        if sha256_hex(&to_pretty(&patch)?) != revision.diff_digest {
-            return Err(DraftError::new(
-                DraftErrorKind::CorruptData,
-                "current pack diff does not match its immutable revision",
-            ));
-        }
-        let mut changed = Vec::new();
-        for file in patch
-            .files
-            .iter()
-            .filter(|file| !is_draft_path(file.path.as_str()) && !file.binary)
-        {
-            let content = if matches!(file.change_kind, FileChangeKind::Deleted) {
-                String::new()
-            } else {
-                fs::read_to_string(ws.root.join(file.path.as_str())).map_err(|error| {
-                    DraftError::storage(format!(
-                        "cannot read changed text file {}: {error}",
-                        file.path
-                    ))
-                })?
-            };
-            changed.push((file.path.to_string(), content));
-        }
-        let changed_paths: Vec<String> = changed.iter().map(|(p, _)| p.clone()).collect();
-
-        // LSIF impact.
-        let lsif = LsifIndex::open(&paths)?;
-        lsif.index_pack(&pack_id, &changed)?;
-        let changed_symbols = lsif.symbols_touched_by_pack(&pack_id)?;
-        let public_api = lsif.public_api_symbols_changed(&pack_id)?;
-        let known: std::collections::BTreeSet<String> = changed_symbols.iter().cloned().collect();
-        for (rel, content) in scan_test_files(&ws.root)? {
-            lsif.record_refs(&rel, &content, &known)?;
-        }
-        let test_files = lsif.files_referencing_symbols(&changed_symbols)?;
-        let fuzz_targets = scan_fuzz_targets(&ws.root)?;
-
-        // Risk.
-        let ledger_events =
-            crate::trust::event::EventLog::workspace(paths.clone(), ws.workspace_id.to_string())
-                .read_all()?;
-        let all_manifests = store.list()?;
-        let risk_inputs = crate::review::risk::RiskInputs {
-            pack_id: pack_id.clone(),
-            revision_id: revision.revision_id.clone(),
-            revision_digest: revision.revision_digest.clone(),
-            dependency_digests: revision.resolved_dependency_digests.clone(),
-            intent: manifest.intent,
-            files_touched: changed.len(),
-            lines_changed: changed.iter().map(|(_, c)| c.lines().count()).sum(),
-            high_risk_paths: crate::review::risk::high_risk_paths(&changed_paths),
-            has_tests: !test_files.is_empty(),
-            has_fuzz: fuzz && !fuzz_targets.is_empty(),
-            public_api_changes: public_api.len(),
-            imported: store.quarantine_record(&pack_id)?.is_some(),
-            dependency_count: store.read_lockfile(&pack_id)?.dependency_pack_hashes.len(),
-            semantic_impact: changed_symbols.len(),
-            candidate_rollback_rate: manifest
-                .candidate_id
-                .as_deref()
-                .map(|c| candidate_rollback_rate(&ledger_events, &all_manifests, c))
-                .unwrap_or(0.0),
-        };
-        let risk = crate::review::risk::assess(&risk_inputs);
-
-        // Selection evidence.
-        let selection = crate::review::verification::SelectionInput {
-            pack_id: pack_id.clone(),
-            revision_id: revision.revision_id.clone(),
-            revision_digest: revision.revision_digest.clone(),
-            dependency_digests: revision.resolved_dependency_digests.clone(),
-            changed_files: changed_paths.clone(),
-            changed_symbols: changed_symbols.clone(),
-            test_files: test_files.clone(),
-            fuzz_targets: fuzz_targets.clone(),
-            full,
-            fuzz,
-        };
-        let mut evidence = crate::review::verification::plan(&selection);
-        let commands = verification_commands(&ws, &evidence)?;
-        crate::review::verification::execute(&mut evidence, &commands, &ws.root);
-
-        // Deterministic verification cache key (SRS-FR-144): associates this
-        // result with the exact workspace, config, toolchain, command set, and
-        // environment that produced it.
-        let wsh = crate::workspace::source_view::workspace_hash_cached(
-            &ws.root,
-            &paths.workspace_hash_cache(),
-        )?;
-        let verification_key = crate::review::verification::VerificationKey::compose(
-            wsh.clone(),
-            crate::workspace::config::config_hash(&paths)?,
-            crate::review::verification::toolchain_hash(&ws.root),
-            crate::review::verification::verification_command_hash(&commands),
-            crate::review::verification::environment_hash(),
-        );
-        evidence.verification_key = Some(verification_key.clone());
-
-        // Persist canonical evidence.
-        write_json(&paths.pack_risk(&pack_id), &risk)?;
-        write_json(&paths.pack_verify(&pack_id), &evidence)?;
-        crate::review::index::VerificationCacheManifest::record(
-            &paths,
-            crate::review::index::VerificationCacheEntry {
-                verification_key: verification_key.key.clone(),
-                pack_id: pack_id.clone(),
-                result_hash: evidence.result_hash.clone(),
-                passed: evidence.passed(),
-                recorded_at: now().to_rfc3339(),
-            },
-        )?;
-        crate::review::index::AffectedPathIndex::upsert(&paths, &pack_id, changed_paths.clone())?;
-        let lsif_summary = serde_json::json!({
-            "backend": LSIF_BACKEND,
-            "symbols_touched": changed_symbols,
-            "public_api_changed": public_api,
-            "tests_referencing": test_files,
-            "semantic_impact": changed_symbols.len(),
-        });
-        write_json(&paths.pack_lsif(&pack_id), &lsif_summary)?;
-
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let verification_outcome = ledger.record(
-            crate::trust::event::EventKind::PackVerified,
-            Some(pack_id.clone()),
-            None,
-            wsh,
-            serde_json::json!({
-                "risk_level": risk.risk_level.as_str(),
-                "result_hash": evidence.result_hash,
-            }),
-        )?;
-        if lifecycle.lifecycle == crate::pack::lifecycle::PackLifecycle::Draft {
-            lifecycle.transition(crate::pack::lifecycle::PackTransitionRequest {
-                operation_id: crate::support::common::OperationId::new(
-                    &verification_outcome.event.event_id,
-                ),
-                expected_revision_id: revision.revision_id.clone(),
-                expected_revision_digest: revision.revision_digest.clone(),
-                target: crate::pack::lifecycle::PackLifecycle::Verified,
-            })?;
-            store.write_lifecycle_in(loc, &lifecycle)?;
-        }
-        crate::review::workflow::WorkflowStore::for_root(&ws.root).write_evidence(
-            &crate::review::workflow::EvidenceRecord {
-                schema_version: current_version(ContractId::WorkflowEvidence),
-                id: EvidenceId::generate(),
-                task_id: None,
-                pack_id: Some(pack_id.clone()),
-                execution_id: None,
-                kind: "verification".to_string(),
-                state: if evidence.passed() {
-                    crate::review::workflow::EvidenceState::Fresh
-                } else {
-                    crate::review::workflow::EvidenceState::Failed
-                },
-                result: serde_json::json!({
-                    "risk_level": risk.risk_level.as_str(),
-                    "risk_score": risk.risk_score,
-                    "result_hash": evidence.result_hash,
-                    "selected_tests": evidence.selected_tests.len(),
-                    "selected_fuzz_targets": evidence.selected_fuzz_targets.len(),
-                }),
-                produced_at: now(),
-                stale_reason: None,
-                invalidated_by: vec![],
-                receipt_id: Some(verification_outcome.receipt.receipt_id),
-            },
-        )?;
-
-        Ok(VerifyReport {
-            pack_id,
-            risk_level: risk.risk_level.as_str().to_string(),
-            risk_score: risk.risk_score,
-            explanations: risk.explanations,
-            required_actions: risk.required_actions,
-            selected_tests: evidence.selected_tests,
-            selected_fuzz_targets: evidence.selected_fuzz_targets,
-            selection_reason: evidence.selection_reason,
-            coverage_basis: evidence.coverage_basis,
-            symbols_touched: changed_symbols.len(),
-            public_api_changed: public_api.len(),
-            result_hash: evidence.result_hash,
-        })
-    }
-
-    /// Locally re-verify an imported pack from its quarantined artifacts.
+    /// The command for a contributed operation, and the decision permitting it.
     ///
-    /// Fail closed on any integrity violation: the embedded `changes.patch`
-    /// must match the revision's `diff_digest`, and every referenced content
-    /// object must hash to its own name. Evidence (risk/verify/lsif) is then
-    /// produced by the same pipeline as local packs, with file contents read
-    /// from the embedded objects instead of the workspace.
-    #[allow(clippy::too_many_arguments)]
-    fn verify_imported_pack(
+    /// Returns `None` for the command when the artifact holds no grant. The
+    /// check is still selected — it is reported `Unavailable`, which is not a
+    /// pass and not a silent omission.
+    pub(crate) fn authorized_command(
         &self,
-        ws: &Workspace,
-        paths: &crate::workspace::layout::DraftLayout,
-        store: &crate::pack::PackStore,
-        loc: crate::pack::PackLocation,
-        manifest: crate::pack::PackManifest,
-        full: bool,
-        fuzz: bool,
-    ) -> DraftResult<VerifyReport> {
-        use crate::review::lsif::{LsifIndex, LSIF_BACKEND};
-        let pack_id = manifest.pack_id.clone();
-        let mut quarantine = store.read_quarantine(&pack_id)?;
-        let revision = store.current_revision_in(loc, &pack_id)?;
-        let mut lifecycle = store.read_lifecycle_in(loc, &pack_id)?;
-        if !crate::pack::can_quarantine_transition(
-            quarantine.trust_evaluation,
-            crate::pack::QuarantineState::Verified,
-        ) {
-            return Err(DraftError::invalid_config(format!(
-                "imported pack trust state '{:?}' cannot be verified",
-                quarantine.trust_evaluation
-            )));
-        }
-        if !matches!(
-            lifecycle.lifecycle,
-            crate::pack::lifecycle::PackLifecycle::Draft
-                | crate::pack::lifecycle::PackLifecycle::Verified
-        ) {
-            return Err(DraftError::invalid_config(
-                "reviewed, rejected, or submitted packs require an explicit reopen or successor before verification",
-            ));
-        }
-        let dir = store.dir_for(loc, &pack_id);
-
-        // Integrity gate: changes.patch must exist, match the manifest hash,
-        // and parse.
-        let changes_path = dir.join("changes.patch");
-        if !changes_path.exists() {
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                "imported pack has no changes.patch to verify",
-            ));
-        }
-        let changes_bytes = fs::read(&changes_path)?;
-        if sha256_hex(&changes_bytes) != revision.diff_digest {
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                "imported changes.patch does not match the immutable revision (tampering?)",
-            ));
-        }
-        let patch: PatchSet = serde_json::from_slice(&changes_bytes).map_err(|e| {
-            DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                format!("imported changes.patch is corrupt: {e}"),
-            )
-        })?;
-
-        // Reconstruct changed-file contents from the embedded objects
-        // (content-addressed; re-checked here against post-import tampering).
-        let mut changed: Vec<(String, String)> = Vec::new();
-        for f in &patch.files {
-            if is_draft_path(f.path.as_str()) {
-                continue;
-            }
-            let content = match &f.new_hash {
-                Some(h) => String::from_utf8_lossy(&read_imported_object(&dir, h)?).into_owned(),
-                None => String::new(),
-            };
-            changed.push((f.path.to_string(), content));
-        }
-        let changed_paths: Vec<String> = changed.iter().map(|(p, _)| p.clone()).collect();
-
-        // Same evidence pipeline as local packs.
-        let lsif = LsifIndex::open(paths)?;
-        lsif.index_pack(&pack_id, &changed)?;
-        let changed_symbols = lsif.symbols_touched_by_pack(&pack_id)?;
-        let public_api = lsif.public_api_symbols_changed(&pack_id)?;
-        let known: std::collections::BTreeSet<String> = changed_symbols.iter().cloned().collect();
-        for (rel, content) in scan_test_files(&ws.root)? {
-            lsif.record_refs(&rel, &content, &known)?;
-        }
-        let test_files = lsif.files_referencing_symbols(&changed_symbols)?;
-        let fuzz_targets = scan_fuzz_targets(&ws.root)?;
-
-        let dependency_count = revision.resolved_dependency_digests.len();
-        let risk_inputs = crate::review::risk::RiskInputs {
-            pack_id: pack_id.clone(),
-            revision_id: revision.revision_id.clone(),
-            revision_digest: revision.revision_digest.clone(),
-            dependency_digests: revision.resolved_dependency_digests.clone(),
-            intent: manifest.intent,
-            files_touched: changed.len(),
-            lines_changed: changed.iter().map(|(_, c)| c.lines().count()).sum(),
-            high_risk_paths: crate::review::risk::high_risk_paths(&changed_paths),
-            has_tests: !test_files.is_empty(),
-            has_fuzz: fuzz && !fuzz_targets.is_empty(),
-            public_api_changes: public_api.len(),
-            imported: true,
-            dependency_count,
-            semantic_impact: changed_symbols.len(),
-            candidate_rollback_rate: 0.0,
+        contributions: &crate::extension::ActiveContributions,
+        extension_id: &str,
+        operation: &crate::extension::MechanismOperation,
+    ) -> (
+        Option<draft_extension_contract::StructuredCommand>,
+        Option<String>,
+    ) {
+        let Some(command) = operation.executor.command() else {
+            return (None, None);
         };
-        let risk = crate::review::risk::assess(&risk_inputs);
-
-        let selection = crate::review::verification::SelectionInput {
-            pack_id: pack_id.clone(),
-            revision_id: revision.revision_id.clone(),
-            revision_digest: revision.revision_digest.clone(),
-            dependency_digests: revision.resolved_dependency_digests.clone(),
-            changed_files: changed_paths.clone(),
-            changed_symbols: changed_symbols.clone(),
-            test_files: test_files.clone(),
-            fuzz_targets: fuzz_targets.clone(),
-            full,
-            fuzz,
-        };
-        let mut evidence = crate::review::verification::plan(&selection);
-        let commands = verification_commands(ws, &evidence)?;
-        crate::review::verification::execute(&mut evidence, &commands, &ws.root);
-        let wsh = crate::workspace::source_view::workspace_hash_cached(
-            &ws.root,
-            &paths.workspace_hash_cache(),
-        )?;
-        let verification_key = crate::review::verification::VerificationKey::compose(
-            wsh.clone(),
-            crate::workspace::config::config_hash(paths)?,
-            crate::review::verification::toolchain_hash(&ws.root),
-            crate::review::verification::verification_command_hash(&commands),
-            crate::review::verification::environment_hash(),
-        );
-        evidence.verification_key = Some(verification_key.clone());
-
-        // Persist local evidence beside the pack (replacing origin evidence;
-        // the origin's signed receipts remain as provenance).
-        write_json(&dir.join("risk.json"), &risk)?;
-        write_json(&dir.join("verify.json"), &evidence)?;
-        crate::review::index::VerificationCacheManifest::record(
-            paths,
-            crate::review::index::VerificationCacheEntry {
-                verification_key: verification_key.key.clone(),
-                pack_id: pack_id.clone(),
-                result_hash: evidence.result_hash.clone(),
-                passed: evidence.passed(),
-                recorded_at: now().to_rfc3339(),
-            },
-        )?;
-        crate::review::index::AffectedPathIndex::upsert(paths, &pack_id, changed_paths.clone())?;
-        let lsif_summary = serde_json::json!({
-            "backend": LSIF_BACKEND,
-            "symbols_touched": changed_symbols,
-            "public_api_changed": public_api,
-            "tests_referencing": test_files,
-            "semantic_impact": changed_symbols.len(),
-        });
-        write_json(&dir.join("lsif.json"), &lsif_summary)?;
-
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let verification_outcome = ledger.record(
-            crate::trust::event::EventKind::PackVerified,
-            Some(pack_id.clone()),
-            None,
-            wsh,
-            serde_json::json!({
-                "imported": true,
-                "risk_level": risk.risk_level.as_str(),
-                "result_hash": evidence.result_hash,
-            }),
-        )?;
-        if lifecycle.lifecycle == crate::pack::lifecycle::PackLifecycle::Draft {
-            lifecycle.transition(crate::pack::lifecycle::PackTransitionRequest {
-                operation_id: crate::support::common::OperationId::new(
-                    &verification_outcome.event.event_id,
-                ),
-                expected_revision_id: revision.revision_id.clone(),
-                expected_revision_digest: revision.revision_digest.clone(),
-                target: crate::pack::lifecycle::PackLifecycle::Verified,
-            })?;
-            store.write_lifecycle_in(loc, &lifecycle)?;
-        }
-        quarantine.trust_evaluation = crate::pack::QuarantineState::Verified;
-        store.write_quarantine(&quarantine)?;
-        crate::review::workflow::WorkflowStore::for_root(&ws.root).write_evidence(
-            &crate::review::workflow::EvidenceRecord {
-                schema_version: current_version(ContractId::WorkflowEvidence),
-                id: EvidenceId::generate(),
-                task_id: None,
-                pack_id: Some(pack_id.clone()),
-                execution_id: None,
-                kind: "verification".to_string(),
-                state: if evidence.passed() {
-                    crate::review::workflow::EvidenceState::Fresh
-                } else {
-                    crate::review::workflow::EvidenceState::Failed
-                },
-                result: serde_json::json!({
-                    "imported": true,
-                    "risk_level": risk.risk_level.as_str(),
-                    "risk_score": risk.risk_score,
-                    "result_hash": evidence.result_hash,
-                    "selected_tests": evidence.selected_tests.len(),
-                    "selected_fuzz_targets": evidence.selected_fuzz_targets.len(),
-                }),
-                produced_at: now(),
-                stale_reason: None,
-                invalidated_by: vec![],
-                receipt_id: Some(verification_outcome.receipt.receipt_id),
-            },
-        )?;
-
-        Ok(VerifyReport {
-            pack_id,
-            risk_level: risk.risk_level.as_str().to_string(),
-            risk_score: risk.risk_score,
-            explanations: risk.explanations,
-            required_actions: risk.required_actions,
-            selected_tests: evidence.selected_tests,
-            selected_fuzz_targets: evidence.selected_fuzz_targets,
-            selection_reason: evidence.selection_reason,
-            coverage_basis: evidence.coverage_basis,
-            symbols_touched: changed_symbols.len(),
-            public_api_changed: public_api.len(),
-            result_hash: evidence.result_hash,
-        })
-    }
-
-    /// Index a pack into LSIF from the immutable content objects referenced by
-    /// its canonical patch. Workspace files are never used here: they may have
-    /// moved on, been deleted, or contain another pack's candidate content.
-    fn ensure_pack_indexed(
-        &self,
-        ws: &Workspace,
-        lsif: &crate::review::lsif::LsifIndex,
-        pack_id: &str,
-    ) -> DraftResult<Vec<String>> {
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = crate::pack::PackStore::new(paths.clone());
-        let location = store.locate(pack_id).ok_or_else(|| {
-            DraftError::new(
-                DraftErrorKind::CorruptData,
-                format!("canonical pack {pack_id} has no storage location"),
-            )
-        })?;
-        let pack_dir = store.dir_for(location, pack_id);
-        let patch_path = pack_dir.join("changes.patch");
-        let patch: PatchSet = crate::contracts::read_persisted(&patch_path)?;
-        let mut canonical = patch.clone();
-        canonical.patch_graph_hash.clear();
-        if patch.patch_graph_hash != hash_json(&canonical)? {
-            return Err(DraftError::new(
-                DraftErrorKind::CorruptData,
-                format!("canonical pack {pack_id} patch graph digest mismatch"),
-            ));
-        }
-        let object_store = ObjectStore::new(ws.layout.clone());
-        let mut content = Vec::with_capacity(patch.files.len());
-        for file in &patch.files {
-            let object_ref = if matches!(&file.change_kind, FileChangeKind::Deleted) {
-                file.old_hash.as_ref()
-            } else {
-                file.new_hash.as_ref()
-            };
-            let Some(object_ref) = object_ref else {
-                continue;
-            };
-            let embedded_path = object_ref
-                .strip_prefix("b3:")
-                .map(|digest| pack_dir.join("objects").join(digest));
-            let bytes = if embedded_path.as_ref().is_some_and(|path| path.exists()) {
-                read_imported_object(&pack_dir, object_ref)?
-            } else {
-                object_store.get_bytes(object_ref)?
-            };
-            content.push((
-                file.path.to_string(),
-                String::from_utf8_lossy(&bytes).into_owned(),
-            ));
-        }
-        lsif.index_pack(pack_id, &content)?;
-        lsif.symbols_touched_by_pack(pack_id)
-    }
-
-    /// `draft pack inspect <pck_id>`.
-    pub fn pack_inspect(&self, cwd: &Path, pack_ref: &str) -> DraftResult<PackInspectReport> {
-        let ws = self.open(cwd)?;
-        let pack_id = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = crate::pack::PackStore::new(paths.clone());
-        let loc = store
-            .locate(&pack_id)
-            .unwrap_or(crate::pack::PackLocation::Store);
-        let manifest = store.read_manifest_in(loc, &pack_id)?;
-        let lsif = crate::review::lsif::LsifIndex::open(&paths)?;
-        if store.quarantine_record(&pack_id)?.is_none() {
-            self.ensure_pack_indexed(&ws, &lsif, &pack_id)?;
-        }
-        // Imported packs were indexed from their embedded content at local
-        // verification; re-indexing from the workspace would erase that.
-        let symbols_touched = lsif.symbols_touched_by_pack(&pack_id)?;
-        let public_api_changed = lsif.public_api_symbols_changed(&pack_id)?;
-        let receipts = crate::trust::receipt::ReceiptStore::new(paths)
-            .list()?
-            .into_iter()
-            .filter(|r| r.subject_id.as_deref() == Some(pack_id.as_str()))
-            .map(|r| r.receipt_id)
-            .collect();
-        let lifecycle_record = store.read_lifecycle_in(loc, &pack_id)?;
-        let revision = store.current_revision_in(loc, &pack_id)?;
-        let quarantine = store.quarantine_record(&pack_id)?;
-        let verified = if matches!(
-            lifecycle_record.lifecycle,
-            crate::pack::lifecycle::PackLifecycle::Draft
-        ) {
-            false
-        } else {
-            let evidence_path = store.dir_for(loc, &pack_id).join("verify.json");
-            if !evidence_path.exists() {
-                false
-            } else {
-                let evidence: crate::review::verification::VerifyEvidence =
-                    crate::contracts::read_persisted(&evidence_path)?;
-                evidence.validate_binding(&revision)?;
-                evidence.passed()
-            }
-        };
-        Ok(PackInspectReport {
-            valid_actions: lifecycle_record
-                .lifecycle
-                .valid_actions()
-                .iter()
-                .map(|action| (*action).to_string())
-                .collect(),
-            lifecycle: lifecycle_record.lifecycle,
-            quarantine,
-            verified,
-            revision_id: lifecycle_record.revision_id,
-            symbols_touched,
-            public_api_changed,
-            receipts,
-            manifest,
-        })
-    }
-
-    /// Reopen a non-submitted pack as a new mutable revision. Existing
-    /// evidence remains on disk as history while its manifest bindings are
-    /// cleared so no prior verification or decision can authorize the new
-    /// revision.
-    pub fn pack_reopen(
-        &self,
-        cwd: &Path,
-        pack_ref: &str,
-        operation_id: &str,
-    ) -> DraftResult<PackReopenReport> {
-        let ws = self.open(cwd)?;
-        let pack_id = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = crate::pack::PackStore::new(paths);
-        let loc = store
-            .locate(&pack_id)
-            .ok_or_else(|| DraftError::not_found(format!("pack {pack_id} not found")))?;
-        let manifest = store.read_manifest_in(loc, &pack_id)?;
-        let operation_id = crate::support::common::OperationId::new(operation_id);
-        let envelope = store.read_lifecycle_in(loc, &pack_id)?;
-        let selected = store.current_revision_in(loc, &pack_id)?;
-        let new_revision_id = format!("rev_{}", uuid::Uuid::new_v4().simple());
-        let mut new_revision = crate::pack::PackRevision {
-            schema_version: current_version(ContractId::PackRevision),
-            pack_id: pack_id.clone(),
-            manifest_digest: manifest.manifest_digest.clone(),
-            revision_id: new_revision_id.clone(),
-            revision_number: store.revisions_in(loc, &pack_id)?.len() as u64 + 1,
-            revision_digest: String::new(),
-            base_digest: selected.base_digest.clone(),
-            content_digest: selected.content_digest.clone(),
-            diff_digest: selected.diff_digest.clone(),
-            target_digest: selected.target_digest.clone(),
-            resolved_dependency_digests: selected.resolved_dependency_digests.clone(),
-            created_at: now().to_rfc3339(),
-        };
-        new_revision.refresh_revision_digest();
-        store.write_revision_in(loc, &new_revision)?;
-        let reopened = envelope.reopen(
-            operation_id.clone(),
-            new_revision_id,
-            new_revision.revision_digest.clone(),
-        )?;
-
-        store.write_lifecycle_in(loc, &reopened)?;
-        if let Some(mut quarantine) = store.quarantine_record(&pack_id)? {
-            quarantine.revision_id = new_revision.revision_id.clone();
-            quarantine.revision_digest = new_revision.revision_digest.clone();
-            quarantine.trust_evaluation = crate::pack::QuarantineState::Quarantined;
-            store.write_quarantine(&quarantine)?;
-        }
-        let review_lock = store.dir_for(loc, &pack_id).join("review.lock.json");
-        if review_lock.exists() {
-            std::fs::remove_file(review_lock)?;
-        }
-        let revision = crate::workspace::source_view::WorkspaceRevision::derive(&ws.root)?;
-        crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?.record(
-            crate::trust::event::EventKind::PackReopened,
-            Some(pack_id.clone()),
-            None,
-            revision.content_digest,
-            serde_json::json!({
-                "operation_id": operation_id,
-                "revision_id": reopened.revision_id,
-                "revision_digest": reopened.revision_digest,
-                "evidence_invalidated": true,
-            }),
-        )?;
-        Ok(PackReopenReport {
-            pack_id,
-            lifecycle: PackLifecycle::Draft,
-            revision_id: reopened.revision_id,
-            operation_id: operation_id.to_string(),
-        })
-    }
-
-    /// `draft pack depends <pck_id>`.
-    pub fn pack_depends(&self, cwd: &Path, pack_ref: &str) -> DraftResult<PackDependsReport> {
-        let ws = self.open(cwd)?;
-        let pack_id = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = crate::pack::PackStore::new(paths.clone());
-        store.read_manifest(&pack_id)?;
-        let revision = store.current_revision_in(crate::pack::PackLocation::Store, &pack_id)?;
-        let lsif = crate::review::lsif::LsifIndex::open(&paths)?;
-        // Index this pack and every other pack so shared-symbol analysis is real.
-        let my_symbols = self.ensure_pack_indexed(&ws, &lsif, &pack_id)?;
-        for other in store.list()? {
-            if other.pack_id != pack_id {
-                self.ensure_pack_indexed(&ws, &lsif, &other.pack_id)?;
-            }
-        }
-        // Shortlist packs that touch any of this pack's symbols, then compute
-        // the exact shared-symbol overlap only for those.
-        let mut shared_symbol_packs = std::collections::BTreeMap::new();
-        for other_id in lsif.packs_touching_symbols(&my_symbols)? {
-            if other_id == pack_id {
-                continue;
-            }
-            let shared = lsif.possible_semantic_conflicts(&pack_id, &other_id)?;
-            if !shared.is_empty() {
-                shared_symbol_packs.insert(other_id, shared);
-            }
-        }
-        let lock = store.read_lockfile(&pack_id)?;
-        Ok(PackDependsReport {
-            pack_id,
-            base_workspace_hash: revision.base_digest,
-            changed_files: lock.file_hashes.keys().cloned().collect(),
-            shared_symbol_packs,
-            declared_dependencies: revision.resolved_dependency_digests,
-        })
-    }
-
-    /// `draft pack conflicts <a> <b>`: textual, semantic, policy, verification,
-    /// and dependency conflicts.
-    pub fn pack_conflicts(
-        &self,
-        cwd: &Path,
-        a_ref: &str,
-        b_ref: &str,
-    ) -> DraftResult<PackConflictsReport> {
-        let ws = self.open(cwd)?;
-        let a = self.resolve_canonical_pack_ref(&ws, a_ref)?;
-        let b = self.resolve_canonical_pack_ref(&ws, b_ref)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let store = crate::pack::PackStore::new(paths.clone());
-        let ma = store.read_manifest(&a)?;
-        let mb = store.read_manifest(&b)?;
-        let lock_a = store.read_lockfile(&a)?;
-        let lock_b = store.read_lockfile(&b)?;
-        let mut conflicts = Vec::new();
-
-        // Textual: same file changed with different content.
-        for (path, ha) in &lock_a.file_hashes {
-            if let Some(hb) = lock_b.file_hashes.get(path) {
-                if ha != hb {
-                    conflicts.push(ConflictFinding {
-                        kind: "textual".to_string(),
-                        detail: format!("both change '{path}' with different content"),
-                        blocking: true,
-                    });
-                }
-            }
-        }
-
-        // Semantic: both touch the same symbols (via LSIF).
-        let lsif = crate::review::lsif::LsifIndex::open(&paths)?;
-        self.ensure_pack_indexed(&ws, &lsif, &a)?;
-        self.ensure_pack_indexed(&ws, &lsif, &b)?;
-        let shared = lsif.possible_semantic_conflicts(&a, &b)?;
-        if !shared.is_empty() {
-            conflicts.push(ConflictFinding {
-                kind: "semantic".to_string(),
-                detail: format!("both touch symbols: {}", shared.join(", ")),
-                blocking: true,
-            });
-        }
-
-        // Policy: intent mismatch that policy would treat as incompatible.
-        if ma.intent != mb.intent
-            && (ma.intent == crate::pack::PackIntent::Security
-                || mb.intent == crate::pack::PackIntent::Security)
-        {
-            conflicts.push(ConflictFinding {
-                kind: "policy".to_string(),
-                detail: format!(
-                    "composing '{}' with '{}' intent requires stronger verification",
-                    ma.intent.as_str(),
-                    mb.intent.as_str()
-                ),
-                blocking: false,
-            });
-        }
-
-        // Verification: an unverified pack cannot be trusted for composition.
-        for m in [&ma, &mb] {
-            let lifecycle = store
-                .read_lifecycle_in(crate::pack::PackLocation::Store, &m.pack_id)?
-                .lifecycle;
-            if lifecycle == crate::pack::lifecycle::PackLifecycle::Draft {
-                conflicts.push(ConflictFinding {
-                    kind: "verification".to_string(),
-                    detail: format!("pack '{}' is not verified", m.pack_id),
-                    blocking: false,
-                });
-            }
-        }
-
-        // Dependency: one pack already declares the other as a dependency.
-        for (m, other, lock) in [(&ma, &b, &lock_a), (&mb, &a, &lock_b)] {
-            if lock.dependency_pack_hashes.iter().any(|d| d == other) {
-                conflicts.push(ConflictFinding {
-                    kind: "dependency".to_string(),
-                    detail: format!("'{}' depends on '{other}'", m.pack_id),
-                    blocking: false,
-                });
-            }
-        }
-
-        let blocking = conflicts.iter().any(|c| c.blocking);
-        Ok(PackConflictsReport {
-            pack_a: a,
-            pack_b: b,
-            conflicts,
-            blocking,
-        })
-    }
-
-    /// `draft pack compose <a> <b> --name <name>`: create a new pack combining
-    /// two others. Blocking conflicts prevent composition; the result is marked
-    /// unverified and must be re-verified.
-    pub fn pack_compose(
-        &self,
-        cwd: &Path,
-        a_ref: &str,
-        b_ref: &str,
-        name: &str,
-    ) -> DraftResult<PackComposeReport> {
-        use crate::pack::lifecycle::{PackLifecycle, PackLifecycleRecord};
-        use crate::pack::{PackLockfile, PackManifest, PackRevision, PackStore};
-        let ws = self.open(cwd)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let wsh = crate::workspace::source_view::workspace_hash_cached(
-            &ws.root,
-            &paths.workspace_hash_cache(),
-        )?;
-        let base_stable_head = crate::workspace::stable::StableHeadStore::new(paths.clone())
-            .read()?
-            .id;
-        let conflict_report = self.pack_conflicts(cwd, a_ref, b_ref)?;
-        let a = conflict_report.pack_a.clone();
-        let b = conflict_report.pack_b.clone();
-        let store = PackStore::new(paths.clone());
-        // Canonical composition validation (SRS-FR-028–036): the hunk-aware
-        // conflict report is authoritative; the composition object carries
-        // dependency order and a deterministic composition_hash.
-        let manifests = vec![store.read_manifest(&a)?, store.read_manifest(&b)?];
-        let locks: Vec<PackLockfile> = [&a, &b]
+        // Command-bearing contributions arrive already withheld when the
+        // artifact is not authorized to run them, so reaching one here means the
+        // grant exists.
+        let withheld = contributions
+            .withheld
             .iter()
-            .map(|id| store.read_lockfile(id))
-            .collect::<DraftResult<_>>()?;
-        let blocking_conflicts: Vec<String> = conflict_report
-            .conflicts
-            .iter()
-            .filter(|c| c.blocking)
-            .map(|c| format!("{}: {}", c.kind, c.detail))
-            .collect();
-        ledger.record(
-            crate::trust::event::EventKind::CompositionCreated,
-            Some(format!("{a}+{b}")),
-            None,
-            wsh.clone(),
-            serde_json::json!({ "sources": [a.clone(), b.clone()], "base_stable_head": base_stable_head }),
-        )?;
-        let composition = crate::pack::composition::validate(
-            &base_stable_head,
-            &manifests,
-            &locks,
-            Some(blocking_conflicts.clone()),
-        )?;
-        if composition.status == crate::pack::composition::CompositionStatus::Failed {
-            ledger.record(
-                crate::trust::event::EventKind::CompositionFailed,
-                Some(composition.id.clone()),
-                None,
-                wsh.clone(),
-                serde_json::to_value(&composition).expect("Draft-owned records must serialize"),
-            )?;
-            return Err(DraftError::new(
-                DraftErrorKind::ConflictDetected,
-                format!(
-                    "cannot compose — blocking conflicts: {}",
-                    composition.conflicts.join("; ")
-                ),
-            ));
-        }
-        ledger.record(
-            crate::trust::event::EventKind::CompositionVerified,
-            Some(composition.id.clone()),
-            None,
-            wsh.clone(),
-            serde_json::to_value(&composition).expect("Draft-owned records must serialize"),
-        )?;
-        if store.name_taken(name)? {
-            return Err(DraftError::invalid_config(format!(
-                "pack name '{name}' already exists"
-            )));
-        }
-        let ma = store.read_manifest(&a)?;
-        let mb = store.read_manifest(&b)?;
-        let ra = store.current_revision_in(crate::pack::PackLocation::Store, &a)?;
-        let rb = store.current_revision_in(crate::pack::PackLocation::Store, &b)?;
-        let read_source_patch =
-            |pack_id: &str, revision: &crate::pack::PackRevision| -> DraftResult<PatchSet> {
-                let path = paths.pack_changes(pack_id);
-                let bytes = fs::read(&path).map_err(|error| {
-                    DraftError::new(
-                        DraftErrorKind::CorruptData,
-                        format!(
-                            "canonical source pack {pack_id} is missing {}: {error}",
-                            path.display()
-                        ),
-                    )
-                })?;
-                if sha256_hex(&bytes) != revision.diff_digest {
-                    return Err(DraftError::new(
-                        DraftErrorKind::CorruptData,
-                        format!("canonical source pack {pack_id} changes digest mismatch"),
-                    ));
-                }
-                let patch: PatchSet = crate::contracts::decode_persisted(&bytes)?;
-                let mut canonical = patch.clone();
-                canonical.patch_graph_hash.clear();
-                if patch.patch_graph_hash != hash_json(&canonical)? {
-                    return Err(DraftError::new(
-                        DraftErrorKind::CorruptData,
-                        format!("canonical source pack {pack_id} patch graph digest mismatch"),
-                    ));
-                }
-                Ok(patch)
-            };
-        let patch_a = read_source_patch(&a, &ra)?;
-        let patch_b = read_source_patch(&b, &rb)?;
-        let nonempty_patches = [&patch_a, &patch_b]
-            .into_iter()
-            .filter(|patch| !patch.files.is_empty())
-            .collect::<Vec<_>>();
-        if let Some(first) = nonempty_patches.first() {
-            if nonempty_patches
-                .iter()
-                .any(|patch| patch.base_snapshot_id != first.base_snapshot_id)
-            {
-                return Err(DraftError::new(
-                    DraftErrorKind::ConflictDetected,
-                    "canonical composition requires source changes with the same immutable base",
-                ));
-            }
-        }
-        let base_snapshot_id = nonempty_patches
-            .first()
-            .map(|patch| patch.base_snapshot_id.clone())
-            .unwrap_or_else(|| patch_a.base_snapshot_id.clone());
-        let result_snapshot_id = nonempty_patches
-            .last()
-            .map(|patch| patch.result_snapshot_id.clone())
-            .unwrap_or_else(|| patch_a.result_snapshot_id.clone());
-        let mut files_by_path: BTreeMap<(WorkspacePath, Option<WorkspacePath>), FilePatch> =
-            BTreeMap::new();
-        for file in patch_a.files.iter().chain(&patch_b.files) {
-            let key = (file.path.clone(), file.old_path.clone());
-            if let Some(existing) = files_by_path.get(&key) {
-                if hash_json(existing)? != hash_json(file)? {
-                    return Err(DraftError::new(
-                        DraftErrorKind::ConflictDetected,
-                        format!(
-                            "canonical composition contains incompatible changes for '{}'",
-                            file.path
-                        ),
-                    ));
-                }
-            } else {
-                files_by_path.insert(key, file.clone());
-            }
-        }
-        let mut combined_patch = PatchSet {
-            schema_version: current_version(ContractId::PatchSet),
-            id: PatchSetId::generate(),
-            base_snapshot_id,
-            result_snapshot_id,
-            files: files_by_path.into_values().collect(),
-            patch_graph_hash: String::new(),
-        };
-        combined_patch.patch_graph_hash = hash_json(&combined_patch)?;
-        let changes_bytes = to_pretty(&combined_patch)?;
-
-        // Make the composed pack self-contained even when a source was a
-        // promoted import whose objects live inside that source pack.
-        let object_store = ObjectStore::new(ws.layout.clone());
-        let mut composed_objects = BTreeMap::new();
-        for (source_id, patch) in [(&a, &patch_a), (&b, &patch_b)] {
-            let source_dir = store.dir_for(crate::pack::PackLocation::Store, source_id);
-            let mut refs = BTreeSet::new();
-            for file in &patch.files {
-                refs.extend(file.old_hash.iter().cloned());
-                refs.extend(file.new_hash.iter().cloned());
-                refs.extend(
-                    file.hunks
-                        .iter()
-                        .filter(|hunk| !hunk.content_ref.is_empty())
-                        .map(|hunk| hunk.content_ref.clone()),
-                );
-            }
-            for object_ref in refs {
-                let hex = object_ref.strip_prefix("b3:").ok_or_else(|| {
-                    DraftError::new(
-                        DraftErrorKind::CorruptData,
-                        format!("unsupported object ref '{object_ref}'"),
-                    )
-                })?;
-                let embedded = source_dir.join("objects").join(hex);
-                let bytes = if embedded.exists() {
-                    read_imported_object(&source_dir, &object_ref)?
-                } else {
-                    object_store.get_bytes(&object_ref)?
-                };
-                composed_objects.insert(hex.to_string(), bytes);
-            }
-        }
-        let new_id = format!("pck_{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
-
-        // Combined change set from both lockfiles.
-        let mut file_hashes = std::collections::BTreeMap::new();
-        for id in [&a, &b] {
-            let lock = store.read_lockfile(id)?;
-            for (f, h) in lock.file_hashes {
-                file_hashes.insert(f, h);
-            }
-        }
-        let outcome = ledger.record(
-            crate::trust::event::EventKind::PackComposed,
-            Some(new_id.clone()),
-            None,
-            wsh.clone(),
-            serde_json::json!({
-                "sources": [a, b],
-                "name": name,
-                "composition_id": composition.id,
-                "composition_hash": composition.composition_hash,
-                "dependency_order": composition.dependency_order,
-            }),
-        )?;
-        let mut manifest = PackManifest {
-            schema_version: current_version(ContractId::PackManifest),
-            pack_id: new_id.clone(),
-            manifest_digest: String::new(),
-            name: name.to_string(),
-            description: format!("composed from {a} + {b}"),
-            intent: ma.intent,
-            provenance: serde_json::json!({"composed_from": [a, b]}),
-            author_id: ledger.actor_id().to_string(),
-            candidate_id: None,
-            declared_dependencies: vec![ma.manifest_digest.clone(), mb.manifest_digest.clone()],
-            created_at: now().to_rfc3339(),
-        };
-        manifest.refresh_manifest_digest();
-        store.write_manifest(&manifest)?;
-        let composed_dir = store.dir_for(crate::pack::PackLocation::Store, &new_id);
-        for (digest, bytes) in composed_objects {
-            write_atomic(&composed_dir.join("objects").join(digest), &bytes)?;
-        }
-        let mut revision = PackRevision {
-            schema_version: current_version(ContractId::PackRevision),
-            pack_id: new_id.clone(),
-            manifest_digest: manifest.manifest_digest.clone(),
-            revision_id: format!("rev_{}", uuid::Uuid::new_v4().simple()),
-            revision_number: 1,
-            revision_digest: String::new(),
-            base_digest: crate::support::hashing::domain_hash(
-                "draft-pack-composition-base",
-                [ra.base_digest.as_bytes(), rb.base_digest.as_bytes()],
-            ),
-            content_digest: crate::support::hashing::domain_hash(
-                "draft-pack-composition-content",
-                [ra.content_digest.as_bytes(), rb.content_digest.as_bytes()],
-            ),
-            diff_digest: sha256_hex(&changes_bytes),
-            target_digest: wsh.clone(),
-            resolved_dependency_digests: vec![
-                ra.revision_digest.clone(),
-                rb.revision_digest.clone(),
-            ],
-            created_at: now().to_rfc3339(),
-        };
-        revision.refresh_revision_digest();
-        store.write_revision(&revision)?;
-        write_atomic(&paths.pack_changes(&new_id), &changes_bytes)?;
-        store.write_lifecycle_in(
-            crate::pack::PackLocation::Store,
-            &PackLifecycleRecord {
-                schema_version: current_version(ContractId::PackLifecycle),
-                pack_id: new_id.clone(),
-                revision_id: revision.revision_id.clone(),
-                revision_digest: revision.revision_digest.clone(),
-                lifecycle: PackLifecycle::Draft,
-                updated_at: now(),
-                last_operation_id: crate::support::common::OperationId::new(
-                    &outcome.event.event_id,
-                ),
-            },
-        )?;
-        let lock = PackLockfile {
-            schema_version: current_version(ContractId::PackLock),
-            pack_id: new_id.clone(),
-            workspace_hash: wsh,
-            file_hashes,
-            policy_version: crate::DRAFT_VERSION.to_string(),
-            risk_engine_version: crate::DRAFT_VERSION.to_string(),
-            verification_commands: Vec::new(),
-            lsif_version: crate::DRAFT_VERSION.to_string(),
-            test_selector_version: crate::DRAFT_VERSION.to_string(),
-            fuzz_selector_version: crate::DRAFT_VERSION.to_string(),
-            dependency_pack_hashes: vec![a.clone(), b.clone()],
-            receipt_digests: vec![sha256_hex(outcome.receipt.receipt_id.as_bytes())],
-        };
-        store.write_lockfile(&lock)?;
-        Ok(PackComposeReport {
-            pack_id: new_id,
-            name: name.to_string(),
-            dependencies: vec![a, b],
-            requires_reverification: true,
-            composition_hash: composition.composition_hash,
-        })
-    }
-
-    // ---- Thin read/act methods for local review surfaces ----------------
-
-    /// All canonical pack manifests, including quarantined imports (for the
-    /// Console pack list and other local review surfaces).
-    pub fn list_canonical_packs(&self, cwd: &Path) -> DraftResult<Vec<crate::pack::PackManifest>> {
-        let ws = self.open(cwd)?;
-        let store =
-            crate::pack::PackStore::new(crate::workspace::layout::DraftLayout::for_root(&ws.root));
-        let mut packs = store.list()?;
-        packs.extend(store.list_quarantined()?);
-        packs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-        Ok(packs)
-    }
-
-    /// A pack's canonical stored diff.
-    pub fn pack_diff_text(&self, cwd: &Path, pack_ref: &str) -> DraftResult<String> {
-        let ws = self.open(cwd)?;
-        let pid = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
-        let store =
-            crate::pack::PackStore::new(crate::workspace::layout::DraftLayout::for_root(&ws.root));
-        let loc = store.locate(&pid).ok_or_else(|| {
-            DraftError::not_found(format!("canonical pack '{pid}' was not found"))
-        })?;
-        let p = store.dir_for(loc, &pid).join("changes.patch");
-        fs::read_to_string(&p)
-            .map_err(|error| DraftError::storage(format!("cannot read {}: {error}", p.display())))
-    }
-
-    /// A pack's stored risk report (or null).
-    pub fn pack_risk_json(&self, cwd: &Path, pack_ref: &str) -> DraftResult<Value> {
-        let ws = self.open(cwd)?;
-        let pid = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
-        let store =
-            crate::pack::PackStore::new(crate::workspace::layout::DraftLayout::for_root(&ws.root));
-        let loc = store.locate(&pid).ok_or_else(|| {
-            DraftError::not_found(format!("canonical pack '{pid}' was not found"))
-        })?;
-        let p = store.dir_for(loc, &pid).join("risk.json");
-        if p.exists() {
-            let risk: crate::review::risk::RiskReport = crate::contracts::read_persisted(&p)?;
-            serde_json::to_value(risk).map_err(|error| {
-                DraftError::new(
-                    DraftErrorKind::Internal,
-                    format!("serialize risk report: {error}"),
-                )
-            })
+            .any(|withheld| withheld.extension_id == extension_id);
+        if withheld {
+            (None, None)
         } else {
-            Ok(Value::Null)
-        }
-    }
-
-    /// Signed receipts referencing a pack.
-    pub fn pack_receipts(
-        &self,
-        cwd: &Path,
-        pack_ref: &str,
-    ) -> DraftResult<Vec<crate::trust::receipt::ReceiptRecord>> {
-        let ws = self.open(cwd)?;
-        let pid = self.resolve_canonical_pack_ref(&ws, pack_ref)?;
-        Ok(crate::trust::receipt::ReceiptStore::new(
-            crate::workspace::layout::DraftLayout::for_root(&ws.root),
-        )
-        .list()?
-        .into_iter()
-        .filter(|r| r.subject_id.as_deref() == Some(pid.as_str()))
-        .collect())
-    }
-
-    /// The canonical hash-chained event log.
-    pub fn canonical_events(
-        &self,
-        cwd: &Path,
-    ) -> DraftResult<Vec<crate::trust::event::EventRecord>> {
-        let ws = self.open(cwd)?;
-        crate::trust::event::EventLog::workspace(
-            crate::workspace::layout::DraftLayout::for_root(&ws.root),
-            ws.workspace_id.to_string(),
-        )
-        .read_all()
-    }
-
-    /// Approve or reject a pack and record the canonical signed decision.
-    pub fn decide_pack(
-        &self,
-        cwd: &Path,
-        pack_ref: &str,
-        approve: bool,
-        reason: Option<String>,
-    ) -> DraftResult<String> {
-        let ws = self.open(cwd)?;
-        // Imported packs also advance their separate quarantine trust record.
-        match self.resolve_canonical_pack_ref(&ws, pack_ref) {
-            Ok(pack_id) => {
-                let store = crate::pack::PackStore::new(
-                    crate::workspace::layout::DraftLayout::for_root(&ws.root),
-                );
-                if let Some(loc) = store.locate(&pack_id) {
-                    let manifest = store.read_manifest_in(loc, &pack_id)?;
-                    if store.quarantine_record(&pack_id)?.is_some() {
-                        return self
-                            .decide_imported_pack(&ws, &store, loc, manifest, approve, reason);
-                    }
-                }
-            }
-            Err(error) if error.kind == DraftErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-        let decision = if approve {
-            DecisionKind::Approve
-        } else {
-            DecisionKind::Reject
-        };
-        self.decide_selected(cwd, Some(pack_ref), decision, reason)?;
-        let pack = self.resolve_pack_ref(&ws, pack_ref)?;
-        self.sync_canonical_pack(
-            &ws,
-            &pack,
-            None,
-            PackSyncSpec {
-                kind: if approve {
-                    crate::trust::event::EventKind::PackApproved
-                } else {
-                    crate::trust::event::EventKind::PackRejected
-                },
-                intent: crate::pack::PackIntent::Feature,
-                lifecycle: if approve {
-                    crate::pack::lifecycle::PackLifecycle::Approved
-                } else {
-                    crate::pack::lifecycle::PackLifecycle::Rejected
-                },
-                metadata: serde_json::json!({ "via": "console" }),
-            },
-        )?;
-        Ok(pack.id.to_string())
-    }
-
-    /// Approve or reject an imported pack while keeping quarantine trust state
-    /// separate from the canonical review lifecycle.
-    fn decide_imported_pack(
-        &self,
-        ws: &Workspace,
-        store: &crate::pack::PackStore,
-        loc: crate::pack::PackLocation,
-        manifest: crate::pack::PackManifest,
-        approve: bool,
-        reason: Option<String>,
-    ) -> DraftResult<String> {
-        use crate::pack::lifecycle::{PackLifecycle, PackTransitionRequest};
-        use crate::pack::QuarantineState;
-        let mut quarantine = store.read_quarantine(&manifest.pack_id)?;
-        let revision = store.current_revision_in(loc, &manifest.pack_id)?;
-        let mut lifecycle = store.read_lifecycle_in(loc, &manifest.pack_id)?;
-        let target = if approve {
-            QuarantineState::Approved
-        } else {
-            QuarantineState::Rejected
-        };
-        if approve && quarantine.trust_evaluation == QuarantineState::Quarantined {
-            return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "imported packs must be locally verified before approval",
+            (
+                Some(command.clone()),
+                Some(format!("authorized:{extension_id}")),
             )
-            .with_suggestion("run `draft verify <pck_id>` first"));
         }
-        if !crate::pack::can_quarantine_transition(quarantine.trust_evaluation, target) {
-            return Err(DraftError::invalid_config(format!(
-                "imported pack in trust state '{:?}' cannot be {}",
-                quarantine.trust_evaluation,
-                if approve { "approved" } else { "rejected" }
-            )));
-        }
-        if approve && lifecycle.lifecycle != PackLifecycle::Verified {
-            return Err(DraftError::new(
-                DraftErrorKind::ReviewRequired,
-                "only the currently verified immutable revision may be approved",
-            ));
-        }
-
-        let wsh = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        let outcome = ledger.record(
-            if approve {
-                crate::trust::event::EventKind::PackApproved
-            } else {
-                crate::trust::event::EventKind::PackRejected
-            },
-            Some(manifest.pack_id.clone()),
-            None,
-            wsh,
-            serde_json::json!({
-                "via": "console",
-                "imported": true,
-                "reason": reason,
-            }),
-        )?;
-        if lifecycle.lifecycle == PackLifecycle::Verified {
-            let operation_id = crate::support::common::OperationId::new(&outcome.event.event_id);
-            lifecycle.transition(PackTransitionRequest {
-                operation_id: operation_id.clone(),
-                expected_revision_id: revision.revision_id.clone(),
-                expected_revision_digest: revision.revision_digest.clone(),
-                target: PackLifecycle::Reviewing,
-            })?;
-            lifecycle.transition(PackTransitionRequest {
-                operation_id,
-                expected_revision_id: revision.revision_id.clone(),
-                expected_revision_digest: revision.revision_digest.clone(),
-                target: if approve {
-                    PackLifecycle::Approved
-                } else {
-                    PackLifecycle::Rejected
-                },
-            })?;
-            store.write_lifecycle_in(loc, &lifecycle)?;
-        }
-        quarantine.trust_evaluation = target;
-        store.write_quarantine(&quarantine)?;
-        Ok(manifest.pack_id)
     }
 
-    /// Import a `.draftpack` provided as bytes (Console upload).
-    pub fn pack_import_bytes(
-        &self,
-        cwd: &Path,
-        bytes: &[u8],
-        name: Option<&str>,
-    ) -> DraftResult<PackImportReport> {
-        let tmp = std::env::temp_dir().join(format!(
-            "draft-import-{}.draftpack",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::write(&tmp, bytes)
-            .map_err(|e| DraftError::storage(format!("write temp import: {e}")))?;
-        let result = self.pack_import(cwd, &tmp, name, false);
-        let _ = std::fs::remove_file(&tmp);
-        result
+    /// The canonical hash-chained Activity Ledger.
+    pub fn canonical_events(&self, cwd: &Path) -> DraftResult<Vec<ActivityEntry>> {
+        let ws = self.open(cwd)?;
+        crate::read_model::activity::entries(ws.events()?.log())
     }
 
+    /// Every signed receipt this project holds.
     pub fn receipts(&self, cwd: &Path) -> DraftResult<Vec<Value>> {
         let ws = self.open(cwd)?;
-        crate::trust::receipt::ReceiptStore::new(ws.layout)
-            .list()?
+        crate::receipt::ReceiptEnvelopeStore::for_layout(&ws.layout)
+            .read_all()?
             .into_iter()
-            .map(|receipt| serde_json::to_value(receipt).map_err(DraftError::from))
+            .map(|envelope| serde_json::to_value(envelope).map_err(DraftError::from))
             .collect()
     }
 
@@ -8059,9 +3057,9 @@ impl App {
             draft_size_bytes: dir_size(&ws.layout.draft_dir)?,
             repo_size_bytes: dir_size_excluding_draft(&ws.root)?,
             objects_size_bytes: dir_size(&ws.layout.objects_dir())?,
-            packs_size_bytes: dir_size(&ws.layout.packs_dir())?,
+            changes_size_bytes: dir_size(&ws.layout.changes_content_dir())?,
             receipts_size_bytes: dir_size(&ws.layout.receipts_dir())?,
-            events_size_bytes: fs::metadata(ws.layout.event_log())
+            events_size_bytes: fs::metadata(ws.layout.activity_log())
                 .map(|m| m.len())
                 .unwrap_or(0),
             draft_repo_ratio: storage_ratio(
@@ -8075,101 +3073,11 @@ impl App {
         })
     }
 
-    pub fn doctor_index(&self, cwd: &Path, refresh: bool) -> DraftResult<Value> {
-        let ws = self.open(cwd)?;
-        if refresh || !ws.layout.index_file().exists() {
-            rebuild_index(&ws)?;
-            crate::task::TaskStore::for_root(&ws.root).rebuild_index()?;
-        }
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let indexes = vec![
-            index_status("file", ws.layout.index_file(), &[ws.layout.snapshots_dir()])?,
-            index_status(
-                "symbol",
-                paths.lsif_index_db(),
-                std::slice::from_ref(&ws.root),
-            )?,
-            index_status("task", paths.task_name_index(), &[paths.tasks_dir()])?,
-            index_status("pack", paths.stable_graph_index(), &[paths.packs_dir()])?,
-            index_status(
-                "receipt",
-                paths.receipts_dir().join("index.json"),
-                &[paths.receipts_dir()],
-            )?,
-            index_status(
-                "search",
-                paths.indexes_dir().join("search.json"),
-                std::slice::from_ref(&ws.root),
-            )?,
-            index_status("activity", paths.event_index(), &[paths.event_log()])?,
-        ];
-        let state = if indexes.iter().any(|i| i["state"] == "failed") {
-            "failed"
-        } else if indexes.iter().any(|i| i["state"] == "missing") {
-            "missing"
-        } else if indexes.iter().any(|i| i["state"] == "stale") {
-            "stale"
-        } else {
-            "fresh"
-        };
-        Ok(serde_json::json!({
-            "state": state,
-            "scope": "project",
-            "refreshed": refresh,
-            "indexes": indexes,
-        }))
-    }
-
-    pub fn doctor_index_global(&self, refresh: bool) -> DraftResult<Value> {
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
-        if refresh {
-            home.create_all()?;
-        }
-        let indexes = vec![
-            index_status(
-                "registry",
-                home.registry_dir().join("projects.index"),
-                &[home.registry_dir().join("projects.jsonl")],
-            )?,
-            index_status(
-                "receipt",
-                home.global_receipt_index(),
-                &[home.receipts_dir()],
-            )?,
-            index_status(
-                "candidate",
-                home.indexes_dir().join("candidates.json"),
-                &[home.candidates_json()],
-            )?,
-            index_status(
-                "activity",
-                home.indexes_dir().join("activity.json"),
-                &[home.logs_dir()],
-            )?,
-        ];
-        let state = if indexes.iter().any(|i| i["state"] == "failed") {
-            "failed"
-        } else if indexes.iter().any(|i| i["state"] == "missing") {
-            "missing"
-        } else if indexes.iter().any(|i| i["state"] == "stale") {
-            "stale"
-        } else {
-            "fresh"
-        };
-        Ok(serde_json::json!({
-            "state": state,
-            "scope": "global",
-            "root": home.root(),
-            "refreshed": refresh,
-            "indexes": indexes,
-        }))
-    }
-
     pub fn storage_gc(&self, cwd: &Path) -> DraftResult<StorageMaintenanceReport> {
         let ws = self.open(cwd)?;
         let removed = garbage_collect_objects(&ws)?;
         ws.events()?.append(
-            "storage.gc_completed",
+            EventKind::MaintenanceCompleted,
             None,
             serde_json::json!({ "removed": removed }),
         )?;
@@ -8182,28 +3090,28 @@ impl App {
 
     pub fn gc(&self, cwd: &Path) -> DraftResult<crate::app::maintenance::GcReport> {
         let ws = self.open(cwd)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let _lock = FileGuard::acquire(&paths.lock_file("gc"), Duration::from_secs(30))?;
-        let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-        ledger.record(
-            crate::trust::event::EventKind::GcStarted,
-            None,
-            None,
-            crate::workspace::source_view::workspace_hash(&ws.root)?,
-            serde_json::json!({}),
-        )?;
+        let paths = crate::project::layout::DraftLayout::for_root(&ws.root);
+        let _lock =
+            ProcessFileLock::acquire_exclusive(&paths.lock_file("gc"), Duration::from_secs(30))?;
+        let activity = ws.events()?;
+        activity.append(EventKind::MaintenanceStarted, None, serde_json::json!({}))?;
         match crate::app::maintenance::run(&paths) {
             Ok(report) => {
-                ledger.record(
-                    crate::trust::event::EventKind::GcCompleted,
+                activity.append(
+                    EventKind::MaintenanceCompleted,
                     None,
-                    None,
-                    crate::workspace::source_view::workspace_hash(&ws.root)?,
                     serde_json::to_value(&report).expect("GC report is serializable"),
                 )?;
                 Ok(report)
             }
-            Err(e) => Err(e),
+            Err(error) => {
+                activity.append(
+                    EventKind::MaintenanceFailed,
+                    None,
+                    serde_json::json!({ "reason": error.message }),
+                )?;
+                Err(error)
+            }
         }
     }
 
@@ -8211,65 +3119,56 @@ impl App {
         // Recovery must remain possible when obsolete profile state blocks all
         // normal operations. Close never reads or applies that state.
         let ws = self.open_workspace(cwd, true)?;
-        let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-        let _lock = FileGuard::acquire(&paths.lock_file("close"), Duration::from_secs(30))?;
-        let home = crate::workspace::home::DraftGlobalStore::locate()?;
+        let paths = crate::project::layout::DraftLayout::for_root(&ws.root);
+        let _lock =
+            ProcessFileLock::acquire_exclusive(&paths.lock_file("close"), Duration::from_secs(30))?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
         let retired_profile_present =
             crate::trust::identity::reject_retired_profile_state(Some(&paths.draft_dir)).is_err()
                 || crate::trust::identity::global::reject_retired_actor_profile(&home).is_err()
-                || crate::workspace::config::reject_retired_profile_config(&paths.config_toml())
+                || crate::project::config::reject_retired_profile_config(&paths.config_toml())
                     .is_err()
-                || crate::workspace::config::reject_retired_profile_config(&home.config_toml())
+                || crate::project::config::reject_retired_profile_config(&home.config_toml())
                     .is_err();
-        let pending_packs = unsafe_pending_pack_count(&paths)?;
-        if pending_packs > 0 && !force {
+        let pending_changes = unsafe_pending_change_count(&paths)?;
+        if pending_changes > 0 && !force {
             if !retired_profile_present {
-                let ledger =
-                    crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-                let _ = ledger.record(
-                    crate::trust::event::EventKind::CloseFailed,
+                let _ = ws.events()?.append(
+                    EventKind::MaintenanceFailed,
                     None,
-                    None,
-                    crate::workspace::source_view::workspace_hash(&ws.root)?,
                     serde_json::json!({
-                        "reason": "pending packs",
-                        "pending_packs": pending_packs
+                        "reason": "pending changes",
+                        "pending_changes": pending_changes
                     }),
                 );
             }
             return Err(DraftError::new(
                 DraftErrorKind::RiskPolicyBlocked,
-                format!("draft close refused: {pending_packs} pending pack(s) remain"),
+                format!("draft maintenance remove-project refused: {pending_changes} open change(s) remain"),
             )
-            .with_suggestion("submit, delete, or export pending packs first; use --force only when you intend to discard Draft metadata"));
+            .with_suggestion(
+                "Promote the work you want to keep, then remove the project; use --force only \
+                 when you intend to discard it.",
+            ));
         }
         if !retired_profile_present {
-            let ledger =
-                crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-            ledger.record(
-                crate::trust::event::EventKind::CloseStarted,
-                None,
-                None,
-                crate::workspace::source_view::workspace_hash(&ws.root)?,
-                serde_json::json!({ "forced": force, "pending_packs": pending_packs }),
-            )?;
-            ledger.record(
-                crate::trust::event::EventKind::CloseCompleted,
-                None,
-                None,
-                crate::workspace::source_view::workspace_hash(&ws.root)?,
-                serde_json::json!({ "forced": force, "pending_packs": pending_packs }),
-            )?;
+            let activity = ws.events()?;
+            let detail = serde_json::json!({
+                "forced": force,
+                "pending_changes": pending_changes,
+            });
+            activity.append(EventKind::MaintenanceStarted, None, detail.clone())?;
+            activity.append(EventKind::ProjectClosed, None, detail)?;
         }
         let draft_dir = ws.layout.draft_dir.display().to_string();
-        crate::workspace::registry::ProjectRegistry::global()?.remove(ws.workspace_id.as_str())?;
+        crate::project::registry::ProjectRegistry::global()?.remove(ws.workspace_id.as_str())?;
         std::fs::remove_dir_all(&ws.layout.draft_dir)
             .map_err(|e| DraftError::storage(format!("remove .draft: {e}")))?;
         Ok(CloseReport {
             closed: true,
             forced: force,
             draft_dir,
-            pending_packs,
+            pending_changes,
         })
     }
 
@@ -8277,7 +3176,7 @@ impl App {
         let ws = self.open(cwd)?;
         let compacted = compact_loose_objects(&ws)?;
         ws.events()?.append(
-            "storage.compacted",
+            EventKind::MaintenanceCompleted,
             None,
             serde_json::json!({ "compacted": compacted }),
         )?;
@@ -8303,7 +3202,7 @@ impl App {
             }
         }
         ws.events()?.append(
-            "storage.pruned",
+            EventKind::MaintenanceCompleted,
             None,
             serde_json::json!({ "removed": removed }),
         )?;
@@ -8316,35 +3215,40 @@ impl App {
 
     pub fn storage_doctor(&self, cwd: &Path) -> DraftResult<StorageDoctorReport> {
         let ws = self.open(cwd)?;
-        let chain = ws.events()?.verify_chain()?;
+        let chain = self.verify_events(&ws.root)?;
         let object_errors = verify_objects(&ws)?;
         let receipt_errors = verify_receipts(&ws)?;
         let draft_exclusion_errors = verify_draft_hard_exclusion(&ws)?;
         Ok(StorageDoctorReport {
-            event_chain_ok: chain.ok,
-            event_chain_error: chain.error,
+            activity_chain_ok: chain.ok,
+            activity_chain_error: chain.error,
             draft_hard_excluded: draft_exclusion_errors.is_empty(),
             draft_exclusion_errors,
             objects_ok: object_errors.is_empty(),
             object_errors,
             receipts_ok: receipt_errors.is_empty(),
             receipt_errors,
-            receipts: list_with_extension(&ws.layout.receipts_dir(), "json")?.len(),
-            packs: self.pack_list(cwd)?.len(),
+            receipts: crate::receipt::ReceiptEnvelopeStore::for_layout(&ws.layout)
+                .list_ids()?
+                .len(),
+            changes: self.dcg_changes(cwd)?.len(),
         })
     }
 
     pub fn receipt_show(&self, cwd: &Path, id: &str) -> DraftResult<Value> {
         validate_receipt_id(id)?;
         let ws = self.open(cwd)?;
-        let p = ws.layout.receipts_dir().join(format!("{}.json", id));
-        Ok(serde_json::from_str(&fs::read_to_string(&p).map_err(
-            |e| DraftError::not_found(format!("cannot read receipt {id}: {e}")),
-        )?)?)
+        let receipt = draft_dcg_contract::ids::ReceiptId::parse(id)
+            .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?;
+        let envelope = crate::receipt::ReceiptEnvelopeStore::for_layout(&ws.layout)
+            .get(&receipt)?
+            .ok_or_else(|| DraftError::not_found(format!("no receipt '{id}'")))?;
+        Ok(serde_json::to_value(envelope)?)
     }
 
-    pub fn events(&self, cwd: &Path) -> DraftResult<Vec<crate::trust::event::EventRecord>> {
-        self.open(cwd)?.events()?.read_all()
+    pub fn events(&self, cwd: &Path) -> DraftResult<Vec<ActivityEntry>> {
+        let ws = self.open(cwd)?;
+        crate::read_model::activity::entries(ws.events()?.log())
     }
 
     pub fn events_page(
@@ -8355,47 +3259,2449 @@ impl App {
         page: Option<usize>,
         limit: Option<usize>,
         filter: Option<&str>,
-    ) -> DraftResult<Vec<crate::trust::event::EventRecord>> {
-        self.open(cwd)?
-            .events()?
-            .read_page(top, bottom, page, limit, filter)
-    }
-
-    pub fn verify_events(&self, cwd: &Path) -> DraftResult<HashChainStatus> {
-        self.open(cwd)?.events()?.verify_chain()
-    }
-
-    pub fn replay_events(&self, cwd: &Path) -> DraftResult<EventReplayReport> {
+    ) -> DraftResult<Vec<ActivityEntry>> {
         let ws = self.open(cwd)?;
-        let events = ws.events()?.read_all()?;
-        let mut by_type = BTreeMap::new();
-        for event in &events {
-            *by_type.entry(event.event_type.clone()).or_insert(0usize) += 1;
-        }
-        let chain = ws.events()?.verify_chain()?;
-        Ok(EventReplayReport {
-            workspace_id: ws.workspace_id.to_string(),
-            events: events.len(),
-            by_type,
-            chain_ok: chain.ok,
-            error: chain.error,
-        })
+        // `bottom` asks for the oldest end; anything else reads newest first,
+        // which is what a person watching a project actually wants.
+        crate::read_model::activity::page(ws.events()?.log(), !bottom || top, page, limit, filter)
+    }
+
+    pub fn replay_events(&self, cwd: &Path) -> DraftResult<ActivityReplay> {
+        let ws = self.open(cwd)?;
+        let activity = ws.events()?;
+        let chain = activity.log().verify_chain();
+        crate::read_model::activity::replay(activity.log(), ws.workspace_id.as_str(), chain)
     }
 
     pub fn index_rebuild(&self, cwd: &Path) -> DraftResult<IndexReport> {
         let ws = self.open(cwd)?;
         rebuild_index(&ws)
     }
+
+    /// One Activity event, by id.
+    pub fn event_show(&self, cwd: &Path, event_id: &str) -> DraftResult<ActivityEntry> {
+        let ws = self.open(cwd)?;
+        crate::read_model::activity::entry(ws.events()?.log(), event_id)
+    }
+
+    // ---------------------------------------------------------------------
+    // The DCG application boundary.
+    //
+    // Every surface reaches promotion, publication and the authorization
+    // chain through these and nothing else. They own transport-independent
+    // input translation and delegate every decision to the domain: a surface
+    // that reached past them would be a second opinion about what the project
+    // accepts.
+    // ---------------------------------------------------------------------
+
+    /// Open a Change: the record, its definition, and its resolved scope.
+    ///
+    /// All three, because a Change without a definition declares nothing and a
+    /// definition without a resolution has no exact boundary — and a reviewer
+    /// approving an unbounded scope would be approving something nobody stated.
+    ///
+    /// Idempotent: the Change id is derived from the intent and the accepted
+    /// Baseline, so a retried call converges on the Change it already opened.
+    /// Write an accepted Baseline to `out` as a signed DraftPack.
+    ///
+    /// A DraftPack carries a Baseline out of this installation so another can
+    /// verify it *without trusting the sender*: the signed manifest lists every
+    /// member with its exact digest, so a recipient checks the bytes it
+    /// actually received against what this project said it was sending.
+    pub fn export_baseline(
+        &self,
+        cwd: &Path,
+        baseline: Option<&str>,
+        out: Option<&Path>,
+    ) -> DraftResult<crate::draftpack::ExportReport> {
+        let workspace = self.open(cwd)?;
+        let baseline = match baseline {
+            Some(value) => parse_baseline_id(value)?,
+            None => {
+                crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+                    DraftError::new(
+                        DraftErrorKind::NotFound,
+                        "this project accepts no Baseline, so there is nothing to export",
+                    )
+                })?
+            }
+        };
+
+        let members = crate::draftpack::members_for_baseline(&workspace.layout, &baseline)?;
+        let actor = crate::app::baseline::actor_id_of(&workspace.layout)?;
+        let home = crate::project::home::DraftGlobalStore::locate()?;
+        let (_, keypair) = crate::trust::identity::global::active_signer(&home)?;
+        let signer = draft_dcg_contract::receipt::ReceiptSignerBinding::new(
+            actor.clone(),
+            keypair.public_key_id(),
+            "ed25519",
+        )
+        .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?;
+        let producer = draft_dcg_contract::ProducerIdentity::new(
+            draft_dcg_contract::identifier::NamespacedId::parse("draft.core/draftpack")
+                .expect("a frozen literal is valid"),
+            crate::DRAFT_VERSION,
+        )
+        .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?;
+
+        // Receipts travel embedded so a recipient can check the attestations
+        // without contacting us. They are evidence of what was attested, never
+        // a grant of local trust over there.
+        let receipts = crate::receipt::ReceiptEnvelopeStore::for_layout(&workspace.layout)
+            .read_all()
+            .unwrap_or_default();
+
+        let out = out.map(Path::to_path_buf).unwrap_or_else(|| {
+            workspace.layout.exports_dir().join(format!(
+                "{}.draftpack",
+                baseline.digest().to_string().replace(':', "-")
+            ))
+        });
+
+        crate::draftpack::export(
+            &baseline,
+            workspace.workspace_id.clone(),
+            members,
+            receipts,
+            actor,
+            crate::support::clock::Clock::now(&crate::support::clock::SystemClock),
+            producer,
+            signer,
+            &keypair,
+            &out,
+        )
+    }
+
+    /// Validate an untrusted `.draftpack` and place it in quarantine.
+    ///
+    /// A pack that verifies is a well-formed, authentically signed set of
+    /// claims. It is not an accepted Baseline here: whether the signing key is
+    /// trusted in *this* project is this project's question, and answering it
+    /// from inside the archive would let a sender vouch for itself.
+    pub fn import_baseline(
+        &self,
+        cwd: &Path,
+        artifact: &Path,
+        dry_run: bool,
+    ) -> DraftResult<crate::draftpack::ImportReport> {
+        let workspace = self.open(cwd)?;
+        crate::draftpack::import(&workspace.layout, artifact, dry_run)
+    }
+
+    /// One Change: its lifecycle, its current definition and scope, and every
+    /// revision sealed against it.
+    ///
+    /// The definition and the resolution are returned together because they
+    /// answer two different questions — what the Change is *for*, and what it
+    /// may *touch* — and a reader given only one of them cannot tell whether
+    /// work was in bounds.
+    pub fn dcg_change(&self, cwd: &Path, change: &str) -> DraftResult<Value> {
+        let workspace = self.open(cwd)?;
+        let change_id = parse_change_id(change)?;
+        let view = crate::app::workflow::change_views(&workspace)?
+            .into_iter()
+            .find(|view| view.change == change_id)
+            .ok_or_else(|| {
+                DraftError::new(DraftErrorKind::NotFound, format!("no Change '{change}'"))
+            })?;
+
+        let definitions = crate::dcg::definition::DefinitionStore::new(
+            workspace.layout.definitions_dir(),
+            workspace.layout.scope_resolutions_dir(),
+        );
+        let definition = definitions.definition(&view.current_definition)?;
+        // The resolution of the *current* definition, if the revisions name
+        // one. A Change with no sealed revision has a declared scope but no
+        // resolved one yet, and saying so is more useful than an empty set.
+        let scope = match view.revisions.first() {
+            Some(revision) => definitions.resolution(&revision.scope)?,
+            None => None,
+        };
+
+        Ok(serde_json::json!({
+            "change": view.change.to_string(),
+            "lifecycle": view.lifecycle,
+            "current_definition": view.current_definition,
+            "definition": definition,
+            "scope_resolution": scope,
+            "revisions": view.revisions,
+        }))
+    }
+
+    /// Stop work on a Change, keeping everything recorded about it.
+    ///
+    /// Deliberately not a delete. "We tried this and stopped" is frequently
+    /// the most useful thing in a project's history, and a Change whose work
+    /// is already in an accepted Baseline is refused rather than rewritten.
+    pub fn dcg_abandon_change(
+        &self,
+        cwd: &Path,
+        change: &str,
+    ) -> DraftResult<crate::dcg::change::Change> {
+        let workspace = self.open(cwd)?;
+        crate::app::promotion::change_store(&workspace.layout).abandon(&parse_change_id(change)?)
+    }
+
+    /// Resume an abandoned Change.
+    pub fn dcg_reopen_change(
+        &self,
+        cwd: &Path,
+        change: &str,
+    ) -> DraftResult<crate::dcg::change::Change> {
+        let workspace = self.open(cwd)?;
+        crate::app::promotion::change_store(&workspace.layout).reopen(&parse_change_id(change)?)
+    }
+
+    /// What the project's authoritative state looks like right now.
+    ///
+    /// The read side of §2.56. A surface offering an action records this
+    /// alongside the offer; the same surface re-reads it immediately before
+    /// the mutation and compares. Both halves go through here, so an offer and
+    /// its revalidation can never be derived from two different notions of
+    /// "current".
+    pub fn read_model_watermark(
+        &self,
+        cwd: &Path,
+        change: Option<&str>,
+    ) -> DraftResult<crate::read_model::ReadModelWatermark> {
+        let workspace = self.open(cwd)?;
+        let change = change.map(parse_change_id).transpose()?;
+        crate::read_model::freshness::current_watermark(
+            &workspace.layout,
+            &workspace.workspace_id,
+            change.as_ref(),
+        )
+    }
+
+    /// Judge a precondition against authoritative state read now.
+    ///
+    /// Deliberately not a comparison with whatever the caller sent back: a
+    /// request that agrees with the descriptor it was issued proves the client
+    /// echoed what it was given, and nothing about whether the project moved
+    /// in between. That is exactly the window a stale action lands in.
+    pub fn revalidate_precondition(
+        &self,
+        cwd: &Path,
+        change: Option<&str>,
+        precondition: &crate::read_model::RequestPrecondition,
+    ) -> DraftResult<crate::read_model::ActionOutcome> {
+        let current = self.read_model_watermark(cwd, change)?;
+        Ok(crate::read_model::check(precondition, &current))
+    }
+
+    /// What this project currently accepts.
+    ///
+    /// The control record is the single place that answers it — the accepted
+    /// Baseline, the policy and security state in force, and whether the
+    /// project is open to new work at all — so a reader is never assembling
+    /// that answer from four stores that may disagree.
+    pub fn project_control(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<crate::project::control::ProjectControlState> {
+        let workspace = self.open(cwd)?;
+        crate::project::control::ProjectControlStore::new(workspace.layout.project_control_dir())
+            .read_unlocked()?
+            .ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::CorruptData,
+                    "this project has no control record",
+                )
+            })
+    }
+
+    /// Close this project to new work.
+    ///
+    /// A lifecycle transition, never a deletion: the history stays readable and
+    /// verifiable, and every receipt this project issued keeps meaning what it
+    /// meant. Removing Draft's metadata is `draft maintenance remove-project`,
+    /// which is a different act with a different consequence.
+    ///
+    /// Closing an already-closed project is refused rather than treated as a
+    /// no-op, because "closed" is a fact somebody recorded once and a second
+    /// recording would claim it happened twice.
+    pub fn project_close(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<crate::project::control::ProjectControlState> {
+        use crate::project::control::{ProjectControlStore, ProjectLifecycle};
+
+        let workspace = self.open(cwd)?;
+        let store = ProjectControlStore::new(workspace.layout.project_control_dir());
+        let closed = store.with_locked_control(|guard| {
+            let current = guard.current()?.ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::CorruptData,
+                    "this project has no control record",
+                )
+            })?;
+            if !current.is_active() {
+                return Err(DraftError::new(
+                    DraftErrorKind::Validation,
+                    "this project is already closed",
+                ));
+            }
+            let expected = guard.current_state()?;
+            let closed = current.advanced(|state| {
+                state.project_lifecycle = ProjectLifecycle::Closed;
+            });
+            guard.compare_exchange_locked(&expected, &closed)?;
+            Ok(closed)
+        })?;
+
+        // Recorded after the transition committed. An event announcing a close
+        // that the compare-exchange then refused would be a durable claim about
+        // a state the project was never in.
+        crate::app::activity::ProjectActivity::new(
+            workspace.layout.clone(),
+            &workspace.workspace_id,
+        )
+        .append(
+            crate::activity::EventKind::ProjectClosed,
+            Some(workspace.workspace_id.to_string()),
+            serde_json::json!({ "generation": closed.generation }),
+        )?;
+        Ok(closed)
+    }
+
+    /// How two Changes relate over the resources they both touch.
+    ///
+    /// Answered from the newest sealed revision on each side. A revision is
+    /// what a Change actually did — its `touched` set is checked against the
+    /// scope it was sealed within — whereas a declared scope is only what it
+    /// was allowed to do. Answering with the second would report every Change
+    /// scoped to a shared directory as interfering.
+    ///
+    /// Computed rather than stored, because the answer is only true of the two
+    /// revisions as they are now: sealing a further revision invalidates a
+    /// composability claim made earlier, and a cached one would keep asserting
+    /// it.
+    ///
+    /// Resources only one side touched are absent from the result. Silence is
+    /// the answer for them, and listing them would bury the ones that actually
+    /// interfere.
+    pub fn dcg_compare_changes(&self, cwd: &Path, left: &str, right: &str) -> DraftResult<Value> {
+        let workspace = self.open(cwd)?;
+        let left_id = parse_change_id(left)?;
+        let right_id = parse_change_id(right)?;
+        if left_id == right_id {
+            return Err(DraftError::new(
+                DraftErrorKind::Validation,
+                "a Change does not interfere with itself",
+            ));
+        }
+
+        let views = crate::app::workflow::change_views(&workspace)?;
+        let newest = |id: &draft_dcg_contract::ids::ChangeId| {
+            views
+                .iter()
+                .find(|view| &view.change == id)
+                .ok_or_else(|| {
+                    DraftError::new(DraftErrorKind::NotFound, format!("no Change '{id}'"))
+                })
+                .and_then(|view| {
+                    view.revisions.first().cloned().ok_or_else(|| {
+                        DraftError::new(
+                            DraftErrorKind::NotFound,
+                            format!(
+                                "Change {id} has sealed no revision, so what it touches is \
+                                     not yet a fact"
+                            ),
+                        )
+                        .with_suggestion("Seal a revision on both Changes, then compare them.")
+                    })
+                })
+        };
+        let left_revision = newest(&left_id)?;
+        let right_revision = newest(&right_id)?;
+
+        // Where both sides recorded a representation, the neutral claim
+        // algebra decides how they interfere; where either did not, it falls
+        // back to whole-resource state. Either way the conservative direction
+        // wins: two revisions that cannot be shown separable are reported as
+        // interfering rather than assumed composable.
+        let representations = representation_store(&workspace.layout);
+        let left_bundle = representations.get(&left_revision.id)?;
+        let right_bundle = representations.get(&right_revision.id)?;
+        let interference = crate::evidence::representation::interference(
+            &left_revision.touched,
+            left_bundle.as_ref(),
+            &right_revision.touched,
+            right_bundle.as_ref(),
+        );
+        let shared: Vec<String> = interference
+            .iter()
+            .map(|finding| finding.resource_id.to_string())
+            .collect();
+
+        // Sealed against different Baselines, the two `touched` sets describe
+        // work done from different starting points. Disjoint sets no longer
+        // prove composability, so the answer is *indeterminate* rather than
+        // yes — a distinction that fails closed.
+        let same_base = left_revision.base_baseline == right_revision.base_baseline;
+        let relation = if !shared.is_empty() {
+            "conflicting"
+        } else if same_base {
+            "independent"
+        } else {
+            "indeterminate"
+        };
+
+        Ok(serde_json::json!({
+            "left": {
+                "change": left_id.to_string(),
+                "revision": left_revision.id.to_string(),
+                "base_baseline": left_revision.base_baseline.to_string(),
+            },
+            "right": {
+                "change": right_id.to_string(),
+                "revision": right_revision.id.to_string(),
+                "base_baseline": right_revision.base_baseline.to_string(),
+            },
+            "relation": relation,
+            "composable": relation == "independent",
+            "shared_resources": shared,
+            "interference": interference,
+        }))
+    }
+
+    pub fn dcg_open_change(
+        &self,
+        cwd: &Path,
+        intent: &str,
+        scope: &[String],
+    ) -> DraftResult<crate::dcg::change::Change> {
+        let workspace = self.open(cwd)?;
+        let base = crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+            DraftError::new(
+                DraftErrorKind::NotFound,
+                "this project accepts no baseline, so there is nothing to change from",
+            )
+        })?;
+
+        let mut declared = BTreeSet::new();
+        for value in scope {
+            declared.insert(parse_scope_entry(value));
+        }
+
+        let change_id = derived_id("chg_", &format!("{base}|{intent}"))
+            .and_then(|value| parse_change_id(&value))?;
+        let actor = crate::app::baseline::actor_id_of(&workspace.layout)?;
+
+        let definition = crate::dcg::definition::ChangeDefinition {
+            change: change_id.clone(),
+            intent: intent.to_string(),
+            scope_declaration: declared,
+            created_by: actor.clone(),
+            // Frozen at the epoch so the definition digest — and therefore the
+            // Change's identity — depends on what the change is, not on when
+            // the command happened to run. Two identical requests are one
+            // Change; that is what makes the retry converge.
+            created_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+        };
+
+        // What the Change could legitimately land on: the accepted Baseline
+        // plus what the project holds now. Resolution narrows the declaration
+        // to these and may never exceed it.
+        let (_, observed) = self.dcg_observe_state(&workspace)?;
+        let resolvable = self.dcg_resolvable_resources(&workspace, observed.keys())?;
+        let resolution = crate::dcg::definition::ScopeResolution::resolve(
+            &definition,
+            base,
+            &resolvable,
+            draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+        )?;
+
+        let definitions = crate::dcg::definition::DefinitionStore::new(
+            workspace.layout.definitions_dir(),
+            workspace.layout.scope_resolutions_dir(),
+        );
+        let definition_digest = definitions.put_definition(&definition)?;
+        definitions.put_resolution(&resolution)?;
+
+        let store = crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir());
+        if let Some(existing) = store.read_unlocked(&change_id)? {
+            return Ok(existing);
+        }
+        let change = crate::dcg::change::Change {
+            generation: 0,
+            id: change_id,
+            project: workspace.workspace_id.clone(),
+            current_definition: definition_digest,
+            lifecycle: crate::dcg::change::ChangeLifecycle::Active,
+        };
+        store.create(&change)?;
+        Ok(change)
+    }
+
+    /// Seal the workspace's current state as a revision of a Change.
+    ///
+    /// The state root is observed rather than asserted, so a revision always
+    /// says what the project actually looked like. Sealing the same state
+    /// twice produces the same revision id and converges — a re-run after a
+    /// dropped connection is not a second revision to review.
+    pub fn dcg_seal(
+        &self,
+        cwd: &Path,
+        change: &str,
+    ) -> DraftResult<crate::dcg::revision::ChangeRevision> {
+        let workspace = self.open(cwd)?;
+        let change_id = parse_change_id(change)?;
+        let store = crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir());
+        let record = store.read_unlocked(&change_id)?.ok_or_else(|| {
+            DraftError::new(
+                DraftErrorKind::NotFound,
+                format!("change '{change_id}' does not exist"),
+            )
+        })?;
+        if !record.lifecycle.accepts_work() {
+            return Err(DraftError::new(
+                DraftErrorKind::ConflictDetected,
+                format!(
+                    "change '{change_id}' is {:?}, so no further revision may be sealed against it",
+                    record.lifecycle
+                ),
+            ));
+        }
+
+        let definitions = crate::dcg::definition::DefinitionStore::new(
+            workspace.layout.definitions_dir(),
+            workspace.layout.scope_resolutions_dir(),
+        );
+        let definition = definitions
+            .definition(&record.current_definition)?
+            .ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    format!("change '{change_id}' names a definition that is not stored"),
+                )
+            })?;
+        let base = crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+            DraftError::new(
+                DraftErrorKind::NotFound,
+                "this project accepts no baseline to seal against",
+            )
+        })?;
+        // Observed before the scope is resolved, because a Change that adds a
+        // Resource can only be bounded by what the project holds now. The full
+        // run rather than the state alone: the representation recorded below
+        // names the exact observations it read, and re-observing to derive it
+        // would explain a different moment.
+        let (outcome, snapshot) = self.dcg_observe_run(&workspace)?;
+        let (state_root, _) = outcome.authoritative()?.build_roots()?;
+        let observed: BTreeMap<
+            draft_dcg_contract::ids::ResourceId,
+            draft_dcg_contract::ResourceStateDigest,
+        > = outcome
+            .observations
+            .iter()
+            .map(|observation| (observation.resource.clone(), observation.state.clone()))
+            .collect();
+        let resolution = crate::dcg::definition::ScopeResolution::resolve(
+            &definition,
+            base.clone(),
+            &self.dcg_resolvable_resources(&workspace, observed.keys())?,
+            draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+        )?;
+        definitions.put_resolution(&resolution)?;
+
+        // What the revision actually changed, not merely what it may touch.
+        // A resolution says where work was allowed to land; a reviewer reading
+        // `touched` is being told what did land, and answering the first
+        // question with the second would report every scoped file as edited.
+        let accepted = crate::dcg::baseline::BaselineStore::new(workspace.layout.baselines_dir())
+            .composition(&base)?
+            .ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::CorruptData,
+                    format!("baseline '{base}' is accepted but its composition is not stored"),
+                )
+            })?;
+        let touched: BTreeSet<_> = resolution
+            .resources
+            .iter()
+            .filter(|resource| {
+                // Absent from the observation is a deletion, and a state that
+                // differs is an edit. Both are changes; equality is not.
+                observed.get(*resource) != accepted.accepted_state_of(resource)
+            })
+            .cloned()
+            .collect();
+        // A revision proposes a change. Sealing a workspace that holds exactly
+        // what the Baseline accepts would create something to verify, gate,
+        // decide and promote that says nothing — and a promotion of it would
+        // move the Baseline onto the state it already had.
+        if touched.is_empty() {
+            return Err(DraftError::new(
+                DraftErrorKind::Validation,
+                format!(
+                    "change '{change_id}' has nothing to seal: within its scope the workspace \
+                     holds exactly the state baseline '{base}' already accepts"
+                ),
+            )
+            .with_suggestion(
+                "Make the change this Change declares, or widen its scope to the Resources you \
+                 actually edited.",
+            ));
+        }
+
+        let revision_id = derived_id("rev_", &format!("{change_id}|{}", state_root.digest()))
+            .and_then(|value| parse_revision_id(&value))?;
+        let revision = crate::dcg::revision::ChangeRevision::seal(
+            revision_id,
+            &definition,
+            &resolution,
+            state_root,
+            touched,
+            crate::app::baseline::actor_id_of(&workspace.layout)?,
+            draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+        )?;
+        crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir())
+            .put(&revision)?;
+
+        // The explanation is derived from the same observations the revision
+        // was sealed over, so it is about this revision and no other. Recorded
+        // here rather than on demand because a later derivation would read a
+        // workspace that has since moved — which is the whole reason Evidence
+        // re-checks the state root before it records anything.
+        self.record_representation(&workspace, &revision, &outcome, &snapshot, &observed)?;
+        Ok(revision)
+    }
+
+    /// Derive and store the representation of a freshly sealed revision.
+    fn record_representation(
+        &self,
+        workspace: &Workspace,
+        revision: &crate::dcg::revision::ChangeRevision,
+        outcome: &crate::dcg::observe::ObservationOutcome,
+        snapshot: &Snapshot,
+        observed: &BTreeMap<
+            draft_dcg_contract::ids::ResourceId,
+            draft_dcg_contract::ResourceStateDigest,
+        >,
+    ) -> DraftResult<()> {
+        use draft_extension_contract::PresentationSurface;
+
+        let mut observations = BTreeSet::new();
+        for observation in &outcome.observations {
+            observations.insert(observation.reference().map_err(|error| {
+                DraftError::new(DraftErrorKind::CorruptData, error.to_string())
+            })?);
+        }
+
+        let accepted = match crate::dcg::baseline::current_baseline(&workspace.layout)? {
+            Some(baseline) => {
+                crate::dcg::baseline::BaselineStore::new(workspace.layout.baselines_dir())
+                    .composition(&baseline)?
+                    .map(|composition| composition.accepted_state)
+                    .unwrap_or_default()
+            }
+            None => BTreeMap::new(),
+        };
+
+        // Which contributed presentation, if any, claims each touched
+        // Resource. Resolution is by specificity and ties are never arbitrated,
+        // so an ambiguous Resource falls back to the neutral rendering exactly
+        // as an unclaimed one does.
+        let contributions = self.active_contributions();
+        let classification =
+            crate::evidence::classification::classify_snapshot(snapshot, &contributions);
+        let classes = classification.by_resource();
+        let mut strategies = BTreeMap::new();
+        for state in &snapshot.resources {
+            if !revision.touched.contains(&state.resource_id) {
+                continue;
+            }
+            let view = crate::extension::ResourceView {
+                locator_scheme: state.locator.scheme.as_str(),
+                locator_body: state.locator.body.as_str(),
+                media_type: state.media_type.as_deref(),
+                form: state.form,
+                attributes: &state.attributes,
+                content_size: state.content_size,
+            };
+            let empty = BTreeSet::new();
+            if let crate::extension::Resolution::Resolved {
+                value,
+                contributors,
+            } = contributions.presentation_for(
+                PresentationSurface::ChangeView,
+                &view,
+                classes.get(&state.resource_id).unwrap_or(&empty),
+            ) {
+                strategies.insert(
+                    state.resource_id.clone(),
+                    crate::app::representation::ResolvedStrategy {
+                        strategy_id: value.presentation_id.clone(),
+                        engine: format!("{:?}", value.engine),
+                        contributed_by: contributors.first().map(|id| id.to_string()),
+                    },
+                );
+            }
+        }
+
+        let bundle =
+            crate::app::representation::derive(crate::app::representation::RepresentationInputs {
+                revision,
+                observations,
+                observed,
+                accepted: &accepted,
+                strategies: &strategies,
+                producer: dcg_producer("draft.core/representation")?,
+            })?;
+        crate::app::representation::record(&representation_store(&workspace.layout), &bundle)
+    }
+
+    /// Every piece of Evidence recorded about one exact revision.
+    pub fn dcg_evidence_for(
+        &self,
+        cwd: &Path,
+        revision: &str,
+    ) -> DraftResult<Vec<crate::evidence::Evidence>> {
+        let workspace = self.open(cwd)?;
+        let revision = parse_revision_id(revision)?;
+        Ok(
+            crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout)
+                .evidence
+                .list()?
+                .into_iter()
+                .filter(|evidence| evidence.covers(&revision))
+                .collect(),
+        )
+    }
+
+    /// One piece of Evidence.
+    pub fn dcg_evidence(
+        &self,
+        cwd: &Path,
+        evidence: &str,
+    ) -> DraftResult<Option<crate::evidence::Evidence>> {
+        let workspace = self.open(cwd)?;
+        let id = draft_dcg_contract::ids::EvidenceId::parse(evidence)
+            .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?;
+        crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout)
+            .evidence
+            .get(&id)
+    }
+
+    /// Restate what a Change is for.
+    ///
+    /// An intent lives in the Change's definition, and a definition is an
+    /// immutable fact — so this mints a new one and moves the Change's pointer
+    /// at it, rather than editing what a reviewer may already have read. The
+    /// declared scope is carried across unchanged: amending an intent is not a
+    /// way to widen what the work may touch.
+    ///
+    /// Any scope already resolved against the old definition is left stale by
+    /// construction: sealing verifies the resolution against the definition in
+    /// force, so a Change amended after resolution is re-resolved rather than
+    /// silently sealed under a boundary nobody approved.
+    pub fn dcg_amend_intent(
+        &self,
+        cwd: &Path,
+        change: &str,
+        intent: &str,
+    ) -> DraftResult<crate::dcg::definition::ChangeDefinition> {
+        let workspace = self.open(cwd)?;
+        let change_id = parse_change_id(change)?;
+        let store = crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir());
+        let record = store.read_unlocked(&change_id)?.ok_or_else(|| {
+            DraftError::new(DraftErrorKind::NotFound, format!("no Change '{change}'"))
+        })?;
+        let definitions = crate::dcg::definition::DefinitionStore::new(
+            workspace.layout.definitions_dir(),
+            workspace.layout.scope_resolutions_dir(),
+        );
+        let current = definitions
+            .definition(&record.current_definition)?
+            .ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    format!("change '{change_id}' names a definition that is not stored"),
+                )
+            })?;
+        if current.intent == intent {
+            return Ok(current);
+        }
+        let amended = crate::dcg::definition::ChangeDefinition {
+            change: change_id.clone(),
+            intent: intent.to_string(),
+            scope_declaration: current.scope_declaration.clone(),
+            created_by: crate::app::baseline::actor_id_of(&workspace.layout)?,
+            created_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+        };
+        definitions.put_definition(&amended)?;
+        let digest = amended.digest()?;
+        let next = record.amend_definition(digest.clone())?;
+
+        let activity = crate::app::activity::ProjectActivity::new(
+            workspace.layout.clone(),
+            &workspace.workspace_id,
+        );
+        let actor = crate::trust::identity::resolve_actor(&workspace.layout.draft_dir)?;
+        let fact = crate::app::activity::DomainAuditFact::new(
+            crate::activity::EventKind::ChangeDefinitionAmended,
+            actor.id.to_string(),
+            draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+        )
+        .about(change_id.to_string())
+        .with(serde_json::json!({ "definition": digest.to_string() }));
+        let payload = crate::app::activity::payload_of(&fact);
+        let transaction_id = format!("change-definition-{change_id}-{}", next.generation);
+        let event_id = crate::activity::log::event_id_for(&format!(
+            "{transaction_id}|{}",
+            crate::support::hashing::canonical_json(&payload)
+        ));
+        crate::app::activity::commit_audited_mutation(
+            crate::app::activity::AuditedStores {
+                records: store.records(),
+                journals: &crate::support::mutation_journal::MutationJournalStore::new(
+                    workspace.layout.journals_dir(),
+                ),
+                ledger: activity.log(),
+            },
+            change_id.as_str(),
+            &transaction_id,
+            &crate::support::record_guard::ExpectedRecordState::of(&record)?,
+            &next,
+            crate::support::mutation_journal::AuditFactEnvelope {
+                activity_event_id: event_id,
+                payload,
+            },
+        )?;
+        Ok(amended)
+    }
+
+    /// What this revision reaches, through contributed elements and relations.
+    ///
+    /// Extraction runs against the Resources the revision touched, and nothing
+    /// is inferred: an element exists because an authorized extractor said so.
+    /// Resources nothing can extract from are reported as such rather than
+    /// silently contributing "no elements".
+    pub fn dcg_impact(
+        &self,
+        cwd: &Path,
+        revision: &str,
+    ) -> DraftResult<crate::app::impact::ImpactReport> {
+        let workspace = self.open(cwd)?;
+        crate::app::impact::index_revision(self, &workspace, &parse_revision_id(revision)?)
+    }
+
+    /// What the evidence about a revision actually speaks for.
+    ///
+    /// Conservative by construction. A Resource is covered only where evidence
+    /// read an observation of that exact Resource; adjacency, directory layout
+    /// and dependency produce no coverage at all.
+    pub fn dcg_coverage(
+        &self,
+        cwd: &Path,
+        revision: &str,
+    ) -> DraftResult<crate::app::impact::CoverageReport> {
+        let workspace = self.open(cwd)?;
+        crate::app::impact::coverage_of(&workspace, &parse_revision_id(revision)?)
+    }
+
+    /// Compose the newest sealed revisions of several Changes.
+    pub fn dcg_compose(
+        &self,
+        cwd: &Path,
+        changes: &[String],
+    ) -> DraftResult<crate::dcg::compose::Composition> {
+        let workspace = self.open(cwd)?;
+        let ids = changes
+            .iter()
+            .map(|value| parse_change_id(value))
+            .collect::<DraftResult<Vec<_>>>()?;
+        crate::app::composition::compose(&workspace, &ids)
+    }
+
+    /// Take a composition apart into revisions that can move separately.
+    pub fn dcg_disperse(
+        &self,
+        cwd: &Path,
+        changes: &[String],
+    ) -> DraftResult<Vec<crate::dcg::compose::DispersedRevision>> {
+        let workspace = self.open(cwd)?;
+        let ids = changes
+            .iter()
+            .map(|value| parse_change_id(value))
+            .collect::<DraftResult<Vec<_>>>()?;
+        crate::app::composition::disperse(&workspace, &ids)
+    }
+
+    /// Every other Change whose newest revision interferes with this one's.
+    pub fn dcg_conflicts(
+        &self,
+        cwd: &Path,
+        change: &str,
+    ) -> DraftResult<Vec<crate::dcg::compose::PairwiseRelation>> {
+        let workspace = self.open(cwd)?;
+        crate::app::composition::conflicts(&workspace, &parse_change_id(change)?)
+    }
+
+    /// What a Change was built on: the Baseline it was sealed from, and the
+    /// promotions that produced that Baseline's lineage.
+    ///
+    /// Lineage, not proximity. A Change depends on the accepted history it was
+    /// worked from; two Changes touching neighbouring Resources depend on
+    /// nothing of each other, and `conflicts` is the question that asks about
+    /// them.
+    pub fn dcg_depends(&self, cwd: &Path, change: &str) -> DraftResult<Value> {
+        let workspace = self.open(cwd)?;
+        let member = crate::app::composition::member(&workspace, &parse_change_id(change)?)?;
+        let baselines = crate::dcg::baseline::BaselineStore::new(workspace.layout.baselines_dir());
+        let lineage = baselines.lineage(&member.base_baseline)?;
+        let mut ancestry = Vec::new();
+        for baseline in &lineage {
+            let record = baselines.record(baseline)?;
+            ancestry.push(serde_json::json!({
+                "baseline": baseline.to_string(),
+                "origin": record.map(|record| record.origin),
+            }));
+        }
+        Ok(serde_json::json!({
+            "change": member.change.to_string(),
+            "revision": member.revision.to_string(),
+            "base_baseline": member.base_baseline.to_string(),
+            "lineage": ancestry,
+        }))
+    }
+
+    /// Select the Change subsequent commands default to.
+    ///
+    /// A convenience, never an authority: every command that acts still names
+    /// the exact revision it acts on, and selecting one cannot widen what any
+    /// of them may do.
+    pub fn dcg_select_change(&self, cwd: &Path, change: &str) -> DraftResult<String> {
+        let workspace = self.open(cwd)?;
+        let id = parse_change_id(change)?;
+        crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir())
+            .read_unlocked(&id)?
+            .ok_or_else(|| {
+                DraftError::new(DraftErrorKind::NotFound, format!("no Change '{change}'"))
+            })?;
+        crate::support::fsutil::write_atomic(
+            &workspace.layout.selected_change_file(),
+            id.as_str().as_bytes(),
+        )?;
+        Ok(id.to_string())
+    }
+
+    /// Everything recorded about a Change and its newest revision at once.
+    ///
+    /// `show` answers what the Change is; this answers what has happened to
+    /// it. Kept separate because the first is cheap and the second reads every
+    /// judgement, explanation and conflict in the project.
+    pub fn dcg_inspect(&self, cwd: &Path, change: &str) -> DraftResult<Value> {
+        let workspace = self.open(cwd)?;
+        let change_id = parse_change_id(change)?;
+        let summary = self.dcg_change(cwd, change)?;
+        let newest = crate::app::workflow::change_views(&workspace)?
+            .into_iter()
+            .find(|view| view.change == change_id)
+            .and_then(|view| view.revisions.first().cloned());
+        let (authorization, representation) = match &newest {
+            Some(revision) => (
+                Some(crate::app::workflow::authorization_view(
+                    &workspace,
+                    &change_id,
+                    &revision.id,
+                )?),
+                representation_store(&workspace.layout).get(&revision.id)?,
+            ),
+            None => (None, None),
+        };
+        Ok(serde_json::json!({
+            "change": summary,
+            "newest_revision": newest.as_ref().map(|revision| revision.id.to_string()),
+            "authorization": authorization,
+            "representation": representation,
+            "conflicts": crate::app::composition::conflicts(&workspace, &change_id)
+                .unwrap_or_default(),
+        }))
+    }
+
+    /// The receipts issued for a Change's promotions.
+    pub fn dcg_change_receipts(&self, cwd: &Path, change: &str) -> DraftResult<Vec<Value>> {
+        let workspace = self.open(cwd)?;
+        let change_id = parse_change_id(change)?;
+        let revisions: BTreeSet<String> = crate::app::workflow::change_views(&workspace)?
+            .into_iter()
+            .find(|view| view.change == change_id)
+            .map(|view| {
+                view.revisions
+                    .iter()
+                    .map(|revision| revision.id.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        // A promotion receipt names the revision it accepted, so the Change's
+        // receipts are exactly those naming one of its revisions. Matching on
+        // the Change id instead would miss nothing today and quietly include
+        // another Change's work the moment a payload carried both.
+        Ok(self
+            .receipts(cwd)?
+            .into_iter()
+            .filter(|envelope| {
+                let rendered = crate::support::hashing::canonical_json(envelope);
+                revisions.iter().any(|revision| rendered.contains(revision))
+            })
+            .collect())
+    }
+
+    /// One Resource's accepted state, and what established it.
+    pub fn dcg_resource_state(&self, cwd: &Path, resource: &str) -> DraftResult<Value> {
+        let workspace = self.open(cwd)?;
+        let resource_id = crate::dcg::resource::ResourceId::parse(resource)
+            .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?;
+        let Some(baseline) = crate::dcg::baseline::current_baseline(&workspace.layout)? else {
+            return Err(DraftError::new(
+                DraftErrorKind::NotFound,
+                "this project accepts no baseline, so no Resource has an accepted state",
+            ));
+        };
+        let composition =
+            crate::dcg::baseline::BaselineStore::new(workspace.layout.baselines_dir())
+                .composition(&baseline)?
+                .ok_or_else(|| {
+                    DraftError::new(
+                        DraftErrorKind::CorruptData,
+                        format!("baseline '{baseline}' is accepted but its composition is missing"),
+                    )
+                })?;
+        let accepted = composition.accepted_state.get(&resource_id);
+        let provenance = composition.resource_provenance.get(&resource_id);
+        if accepted.is_none() && provenance.is_none() {
+            return Err(DraftError::new(
+                DraftErrorKind::NotFound,
+                format!("baseline '{baseline}' accepts no state for Resource '{resource_id}'"),
+            ));
+        }
+        // What the workspace holds now, alongside what is accepted. A reader
+        // shown only one of the two cannot tell whether the Resource has moved.
+        let observed = self
+            .dcg_observe_state(&workspace)
+            .ok()
+            .and_then(|(_, observed)| observed.get(&resource_id).cloned());
+        Ok(serde_json::json!({
+            "resource": resource_id.to_string(),
+            "baseline": baseline.to_string(),
+            "accepted_state": accepted.map(ToString::to_string),
+            "accepted_provider_provenance": provenance,
+            "matches_accepted": observed.as_ref() == accepted,
+            "observed_state": observed.as_ref().map(ToString::to_string),
+        }))
+    }
+
+    /// Every Baseline this project has accepted, newest first.
+    pub fn dcg_baselines(&self, cwd: &Path) -> DraftResult<Vec<Value>> {
+        let workspace = self.open(cwd)?;
+        let store = crate::dcg::baseline::BaselineStore::new(workspace.layout.baselines_dir());
+        let Some(current) = crate::dcg::baseline::current_baseline(&workspace.layout)? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for baseline in store.lineage(&current)? {
+            let record = store.record(&baseline)?;
+            out.push(serde_json::json!({
+                "baseline": baseline.to_string(),
+                "accepted": baseline == current,
+                "record": record,
+            }));
+        }
+        Ok(out)
+    }
+
+    /// What one Change is for, from the definition currently in force.
+    pub fn dcg_change_intent(
+        &self,
+        cwd: &Path,
+        change: &str,
+    ) -> DraftResult<crate::app::change_detail::ChangeIntentView> {
+        let workspace = self.open(cwd)?;
+        crate::app::change_detail::intent(&workspace, &parse_change_id(change)?)
+    }
+
+    /// What one Change may touch, declared and resolved.
+    pub fn dcg_change_scope(
+        &self,
+        cwd: &Path,
+        change: &str,
+    ) -> DraftResult<crate::app::change_detail::ChangeScopeView> {
+        let workspace = self.open(cwd)?;
+        crate::app::change_detail::scope(&workspace, &parse_change_id(change)?)
+    }
+
+    /// Where an interrupted promotion of one Change stands.
+    pub fn dcg_change_recovery(
+        &self,
+        cwd: &Path,
+        change: &str,
+    ) -> DraftResult<crate::app::change_detail::ChangeRecoveryView> {
+        let workspace = self.open(cwd)?;
+        crate::app::change_detail::recovery(&workspace, &parse_change_id(change)?)
+    }
+
+    /// Every Baseline in the accepted lineage, newest first, in full.
+    pub fn dcg_baseline_details(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<Vec<crate::app::baseline_detail::BaselineDetailView>> {
+        crate::app::baseline_detail::list(&self.open(cwd)?)
+    }
+
+    /// One Baseline: its three roots, lineage, composition and deliveries.
+    pub fn dcg_baseline_detail(
+        &self,
+        cwd: &Path,
+        baseline: &str,
+    ) -> DraftResult<crate::app::baseline_detail::BaselineDetailView> {
+        let workspace = self.open(cwd)?;
+        crate::app::baseline_detail::detail(&workspace, &parse_baseline_id(baseline)?)
+    }
+
+    /// Every binding, definition and profile this project holds.
+    pub fn provider_catalog(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<crate::app::provider::ProviderCatalogView> {
+        crate::app::provider::catalog(&self.open(cwd)?)
+    }
+
+    /// Every provider binding this project has, withdrawn ones included.
+    pub fn provider_list(&self, cwd: &Path) -> DraftResult<Vec<crate::app::provider::BindingView>> {
+        crate::app::provider::list(&self.open(cwd)?)
+    }
+
+    /// One provider binding, with the immutable facts it points at.
+    pub fn provider_show(
+        &self,
+        cwd: &Path,
+        binding: &str,
+    ) -> DraftResult<crate::app::provider::BindingView> {
+        let workspace = self.open(cwd)?;
+        crate::app::provider::show(&workspace, &parse_binding_id(binding)?)
+    }
+
+    /// Attach this project to a provider.
+    pub fn provider_bind(
+        &self,
+        cwd: &Path,
+        name: &str,
+        contract: &draft_dcg_contract::semantics::ResourceStateSemanticsContract,
+        definition: &crate::project::provider_definition::ProviderSemanticDefinition,
+        profile: &crate::project::provider_definition::ProviderOperationalProfile,
+    ) -> DraftResult<crate::project::provider::ProviderBinding> {
+        let workspace = self.open(cwd)?;
+        crate::app::provider::bind(&workspace, name, contract, definition, profile)
+    }
+
+    /// Point a binding at a different semantic definition.
+    pub fn provider_redefine(
+        &self,
+        cwd: &Path,
+        binding: &str,
+        contract: &draft_dcg_contract::semantics::ResourceStateSemanticsContract,
+        definition: &crate::project::provider_definition::ProviderSemanticDefinition,
+    ) -> DraftResult<crate::project::provider::ProviderBinding> {
+        let workspace = self.open(cwd)?;
+        crate::app::provider::redefine(
+            &workspace,
+            &parse_binding_id(binding)?,
+            contract,
+            definition,
+        )
+    }
+
+    /// Point a binding at a different operational profile.
+    pub fn provider_profile(
+        &self,
+        cwd: &Path,
+        binding: &str,
+        profile: &crate::project::provider_definition::ProviderOperationalProfile,
+    ) -> DraftResult<crate::project::provider::ProviderBinding> {
+        let workspace = self.open(cwd)?;
+        crate::app::provider::reprofile(&workspace, &parse_binding_id(binding)?, profile)
+    }
+
+    /// Withdraw a binding from new work. Deletes nothing.
+    pub fn provider_unbind(
+        &self,
+        cwd: &Path,
+        binding: &str,
+    ) -> DraftResult<crate::project::provider::ProviderBinding> {
+        let workspace = self.open(cwd)?;
+        crate::app::provider::unbind(&workspace, &parse_binding_id(binding)?)
+    }
+
+    /// Reactivate a withdrawn binding.
+    pub fn provider_rebind(
+        &self,
+        cwd: &Path,
+        binding: &str,
+    ) -> DraftResult<crate::project::provider::ProviderBinding> {
+        let workspace = self.open(cwd)?;
+        crate::app::provider::rebind(&workspace, &parse_binding_id(binding)?)
+    }
+
+    /// Every authority grant this project has issued, with its standing.
+    pub fn authority_list(&self, cwd: &Path) -> DraftResult<Vec<crate::app::authority::GrantView>> {
+        crate::app::authority::list(&self.open(cwd)?)
+    }
+
+    /// One authority grant, with its standing.
+    pub fn authority_show(
+        &self,
+        cwd: &Path,
+        grant: &str,
+    ) -> DraftResult<crate::app::authority::GrantView> {
+        let workspace = self.open(cwd)?;
+        crate::app::authority::show(&workspace, &parse_grant_id(grant)?)
+    }
+
+    /// Withdraw an authority grant.
+    pub fn authority_revoke(
+        &self,
+        cwd: &Path,
+        grant: &str,
+        reason: &str,
+    ) -> DraftResult<crate::authority::revocation::AuthorityRevocation> {
+        let workspace = self.open(cwd)?;
+        crate::app::authority::revoke(&workspace, &parse_grant_id(grant)?, reason)
+    }
+
+    /// Record what was later established about an uncertain delivery.
+    ///
+    /// The primary outcome is never rewritten. This writes a Resolution beside
+    /// it under current authority, because an interpretation is a new decision
+    /// however old the outcome is.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dcg_resolve_outcome(
+        &self,
+        cwd: &Path,
+        purpose: &str,
+        request_id: &str,
+        outcome: Option<&str>,
+        succeeded: Option<&str>,
+        failed: Option<&str>,
+        rationale: &str,
+    ) -> DraftResult<String> {
+        let workspace = self.open(cwd)?;
+        let baseline =
+            crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    "this project accepts no baseline, so there is no delivery to resolve",
+                )
+            })?;
+        let resolution =
+            match (succeeded, failed) {
+                (Some(reference), None) => {
+                    draft_dcg_contract::publication::PublicationResolutionKind::ResolvedSucceeded {
+                        external_reference: reference.to_string(),
+                    }
+                }
+                (None, Some(reason)) => {
+                    draft_dcg_contract::publication::PublicationResolutionKind::ResolvedFailed {
+                        reason: reason.to_string(),
+                    }
+                }
+                _ => return Err(DraftError::new(
+                    DraftErrorKind::Validation,
+                    "say which: --mark-succeeded <external-reference> or --mark-failed <reason>",
+                )),
+            };
+        let request = crate::app::publish::PublishRequest {
+            baseline,
+            purpose: draft_dcg_contract::publication::PublicationPurposeId::parse(purpose)
+                .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?,
+            semantics: crate::app::publish::filesystem_delivery_semantics(),
+            retry_authorization: None,
+            republish_intent: None,
+            request_id: request_id.to_string(),
+        };
+        let expected = match outcome {
+            Some(value) => Some(
+                draft_dcg_contract::publication::PublicationOutcomeDigest::new(
+                    draft_dcg_contract::Digest::parse(value).map_err(|error| {
+                        DraftError::new(DraftErrorKind::Validation, error.to_string())
+                    })?,
+                ),
+            ),
+            None => None,
+        };
+        let digest = crate::app::publish::resolve_outcome(
+            &workspace,
+            &request,
+            expected.as_ref(),
+            resolution,
+            rationale,
+        )?;
+        Ok(digest.digest().to_string())
+    }
+
+    /// Deliver an already-published Baseline again, under a stated intent.
+    ///
+    /// A republish is a different Publication, not a retry of the old one: the
+    /// intent is part of the request key, so the second delivery has its own
+    /// identity, its own attempts and its own history. Retrying the *same*
+    /// Publication is `publish retry`, and needs an authorization rather than
+    /// an intent.
+    pub fn dcg_republish(
+        &self,
+        cwd: &Path,
+        baseline: Option<&str>,
+        purpose: &str,
+        intent: &str,
+        request_id: &str,
+    ) -> DraftResult<crate::app::publish::PublishOutcome> {
+        let workspace = self.open(cwd)?;
+        let baseline = match baseline {
+            Some(value) => parse_baseline_id(value)?,
+            None => {
+                crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+                    DraftError::new(
+                        DraftErrorKind::NotFound,
+                        "this project accepts no baseline, so there is nothing to republish",
+                    )
+                })?
+            }
+        };
+        let request = crate::app::publish::PublishRequest {
+            baseline,
+            purpose: draft_dcg_contract::publication::PublicationPurposeId::parse(purpose)
+                .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?,
+            semantics: crate::app::publish::filesystem_delivery_semantics(),
+            retry_authorization: None,
+            republish_intent: Some(
+                draft_dcg_contract::publication::RepublishIntentId::parse(intent).map_err(
+                    |error| DraftError::new(DraftErrorKind::Validation, error.to_string()),
+                )?,
+            ),
+            request_id: request_id.to_string(),
+        };
+        let publication = crate::app::publish::ensure_publication(&workspace, &request)?;
+        crate::app::publish::publish(&workspace, &request, || {
+            crate::app::publish::deliver_to_filesystem(&workspace, &publication)
+        })
+    }
+
+    /// The explanation recorded for one sealed revision, if any.
+    pub fn dcg_representation(
+        &self,
+        cwd: &Path,
+        revision: &str,
+    ) -> DraftResult<Option<crate::evidence::representation::ChangeRepresentationBundle>> {
+        let workspace = self.open(cwd)?;
+        representation_store(&workspace.layout).get(&parse_revision_id(revision)?)
+    }
+
+    /// Every explanation this project has recorded.
+    pub fn dcg_representations(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<Vec<crate::evidence::representation::ChangeRepresentationBundle>> {
+        let workspace = self.open(cwd)?;
+        representation_store(&workspace.layout).list()
+    }
+
+    /// Run the project's checks against a sealed revision and record Evidence.
+    ///
+    /// The workspace is observed and its state root compared against the
+    /// revision's before anything is recorded. That is what makes the Evidence
+    /// genuinely about *this* revision: checks that ran over different content
+    /// say nothing about the work that was sealed, and would carry a judgement
+    /// across an edit nobody reviewed.
+    pub fn dcg_verify(&self, cwd: &Path, revision: &str) -> DraftResult<crate::evidence::Evidence> {
+        let workspace = self.open(cwd)?;
+        let revision_id = parse_revision_id(revision)?;
+        let sealed = crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir())
+            .get(&revision_id)?
+            .ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    format!("revision '{revision_id}' has not been sealed"),
+                )
+            })?;
+
+        let (observed, snapshot) = self.dcg_observe_run(&workspace)?;
+        let (state_root, _) = observed.authoritative()?.build_roots()?;
+        if state_root != sealed.project_state_root {
+            return Err(DraftError::new(
+                DraftErrorKind::ConflictDetected,
+                format!(
+                    "the workspace no longer holds the state revision '{revision_id}' sealed;                      evidence gathered now would be about different content"
+                ),
+            )
+            .with_suggestion("Seal a new revision, then verify that one."));
+        }
+
+        let mut inputs = BTreeSet::new();
+        for observation in &observed.observations {
+            inputs.insert(observation.reference().map_err(|error| {
+                DraftError::new(DraftErrorKind::CorruptData, error.to_string())
+            })?);
+        }
+
+        // The project's own checks, then every contributed check whose
+        // predicate matches an observed resource. Both go through the same
+        // runner and the same aggregation the rest of Draft uses — a second
+        // runner here would be a second definition of what passing means.
+        //
+        // A check that cannot run is still selected and still reported, so a
+        // missing capability can never shrink the required set.
+        let configuration = read_or_default::<crate::evidence::verification::VerificationConfig>(
+            &workspace.layout.verify_toml(),
+        )?;
+        let mut selected: Vec<crate::evidence::verification::SelectedCheck> = configuration
+            .checks
+            .iter()
+            .filter(|check| check.enabled)
+            .map(|check| {
+                Ok(crate::evidence::verification::SelectedCheck {
+                    check_id: crate::evidence::verification::project_check_id(&check.name)?,
+                    display_name: check.name.clone(),
+                    requirement: check.requirement,
+                    selection: crate::extension::CheckSelection::Whole,
+                    reason: "configured by this project".to_string(),
+                    producer: crate::evidence::verification::project_producer(),
+                    command: Some(check.command.clone()),
+                    authorization_decision: Some(PROJECT_CONFIGURED_DECISION.to_string()),
+                    ambiguous: false,
+                })
+            })
+            .collect::<DraftResult<_>>()?;
+        // What installed extensions contribute for the resources this revision
+        // was sealed over. Without this, a project whose verification lives in
+        // a language extension would get "nothing applied" and never learn its
+        // checks had not run.
+        let contributions = self.active_contributions();
+        let classification =
+            crate::evidence::classification::classify_snapshot(&snapshot, &contributions);
+        let classes = classification.by_resource();
+        let mut seen: BTreeSet<String> = selected
+            .iter()
+            .map(|check| check.check_id.qualified())
+            .collect();
+        let mut uncovered = Vec::new();
+        for state in &snapshot.resources {
+            let empty = BTreeSet::new();
+            let resource_classes = classes.get(&state.resource_id).unwrap_or(&empty);
+            let view = crate::extension::ResourceView {
+                locator_scheme: state.locator.scheme.as_str(),
+                locator_body: state.locator.body.as_str(),
+                media_type: state.media_type.as_deref(),
+                form: state.form,
+                attributes: &state.attributes,
+                content_size: state.content_size,
+            };
+            let applicable = contributions.checks_for(&view, resource_classes);
+            if applicable.is_empty() {
+                uncovered.push(state.locator.clone());
+                continue;
+            }
+            for (check_id, contributed) in applicable {
+                // `Whole` checks run once for the revision however many
+                // resources match; `Exploratory` ones run only when asked for,
+                // and nothing asks here.
+                if matches!(
+                    contributed.check.selection,
+                    crate::extension::CheckSelection::Exploratory
+                ) {
+                    continue;
+                }
+                if !seen.insert(check_id.qualified()) {
+                    continue;
+                }
+                let (command, decision) = self.authorized_command(
+                    &contributions,
+                    contributed.extension_id,
+                    &contributed.check.operation,
+                );
+                selected.push(crate::evidence::verification::SelectedCheck {
+                    check_id: check_id.clone(),
+                    display_name: contributed.check.display_name.clone(),
+                    requirement: contributed.check.requirement,
+                    selection: contributed.check.selection,
+                    reason: format!(
+                        "contributed by {} for {}",
+                        contributed.extension_id, state.locator.body
+                    ),
+                    producer: producer_ref_for(&contributions, contributed.extension_id),
+                    command,
+                    authorization_decision: decision,
+                    ambiguous: contributed.ambiguous,
+                });
+            }
+        }
+
+        let run = crate::evidence::verification::run_checks(&selected, &workspace.root);
+        let mut state = crate::evidence::verification::aggregate(&run.results);
+
+        // "Draft asked and nothing applied" and "nothing existed to ask" are
+        // different facts, and only one of them is fixed by installing
+        // something. Both refuse the gate; only one tells the reader why.
+        if matches!(
+            state,
+            crate::evidence::verification::VerificationState::NotApplicable { .. }
+        ) && !uncovered.is_empty()
+        {
+            state = crate::evidence::verification::VerificationState::Unavailable {
+                gaps: vec![crate::extension::CapabilityGap::new(
+                    crate::extension::ExtensionCapabilityKind::Verification,
+                    uncovered.iter().map(|l| l.body.clone()).collect::<Vec<_>>(),
+                    "no installed extension contributes a check for these resources",
+                )],
+            };
+        }
+
+        // Each of the five verification states has one honest counterpart.
+        // Collapsing "nothing could be asked" into a pass is the mistake this
+        // mapping exists to make impossible.
+        let outcome = if inputs.is_empty() {
+            // Evidence that read nothing established nothing, whatever the
+            // checks said.
+            crate::evidence::EvidenceOutcome::Unavailable
+        } else {
+            match state {
+                crate::evidence::verification::VerificationState::Passed => {
+                    crate::evidence::EvidenceOutcome::Passed
+                }
+                crate::evidence::verification::VerificationState::Failed { .. } => {
+                    crate::evidence::EvidenceOutcome::Failed
+                }
+                crate::evidence::verification::VerificationState::Unavailable { .. } => {
+                    crate::evidence::EvidenceOutcome::Unavailable
+                }
+                crate::evidence::verification::VerificationState::NotEvaluated { .. } => {
+                    crate::evidence::EvidenceOutcome::NotEvaluated
+                }
+                crate::evidence::verification::VerificationState::NotApplicable { .. } => {
+                    crate::evidence::EvidenceOutcome::NotApplicable
+                }
+            }
+        };
+
+        let producer = dcg_producer("draft.core/verify")?;
+        // The rules this ran under: the project's own `verify.toml` *and* the
+        // checks that were actually selected. A contributed check is part of
+        // the configuration as much as a configured one — hashing only the
+        // file would let installing or removing an extension change which
+        // checks ran while the digest said the rules had not moved, which is
+        // the one thing this field exists to tell a reader.
+        let mut rules = std::fs::read(workspace.layout.verify_toml()).unwrap_or_default();
+        // Sorted, because a digest that depended on the order checks happened
+        // to be selected in would move without the rules moving.
+        let mut rule_lines: Vec<String> = selected
+            .iter()
+            .map(|check| format!("{} {:?}", check.check_id.qualified(), check.requirement))
+            .collect();
+        rule_lines.sort();
+        for line in rule_lines {
+            rules.push(b'\n');
+            rules.extend_from_slice(line.as_bytes());
+        }
+        let configuration = draft_dcg_contract::Digest::of_bytes(&rules);
+
+        // An immutable fact's identity is its content, and every field the
+        // Evidence stores goes into it. Two verifications that read the same
+        // observations under the same configuration and reached the same
+        // answer are one fact, so a re-run converges on it. One that reached a
+        // different answer — because a capability arrived, or the rules moved
+        // — is a *different* fact, and gets its own identity rather than
+        // trying to rewrite the first. Deriving the id from the revision alone
+        // made every verification of a revision claim one identity, so the
+        // second answer could only ever be refused as a rewrite.
+        let mut identity = format!("{revision_id}|{producer:?}|{configuration}|{outcome:?}");
+        for input in &inputs {
+            identity.push('|');
+            identity.push_str(&format!("{}:{}", input.id, input.digest));
+        }
+
+        let evidence = crate::evidence::Evidence {
+            id: derived_id("evd_", &identity).and_then(|value| {
+                draft_dcg_contract::ids::EvidenceId::parse(&value)
+                    .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+            })?,
+            revision: revision_id,
+            inputs,
+            producer,
+            configuration,
+            outcome,
+            context: dcg_evaluation_context(),
+        };
+        crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout)
+            .evidence
+            .put(&evidence)?;
+        Ok(evidence)
+    }
+
+    /// Record a risk judgement over a revision's evidence.
+    pub fn dcg_assess(
+        &self,
+        cwd: &Path,
+        revision: &str,
+        risk: &str,
+        rationale: &str,
+    ) -> DraftResult<crate::evidence::assessment::Assessment> {
+        let workspace = self.open(cwd)?;
+        let revision_id = parse_revision_id(revision)?;
+        let stores = crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout);
+
+        let inputs: BTreeSet<_> = stores
+            .evidence
+            .list()?
+            .into_iter()
+            .filter(|value| value.covers(&revision_id))
+            .map(|value| value.id)
+            .collect();
+
+        let assessment = crate::evidence::assessment::Assessment {
+            id: derived_id("asm_", &format!("{revision_id}|{risk}")).and_then(|value| {
+                draft_dcg_contract::ids::AssessmentId::parse(&value)
+                    .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+            })?,
+            revision: revision_id,
+            inputs,
+            risk: parse_risk(risk)?,
+            rationale: rationale.to_string(),
+            producer: dcg_producer("draft.core/assess")?,
+            configuration: draft_dcg_contract::Digest::of_bytes(
+                std::fs::read(workspace.layout.risk_toml())
+                    .unwrap_or_default()
+                    .as_slice(),
+            ),
+            context: dcg_evaluation_context(),
+        };
+        crate::app::authorization::assess(&stores, &assessment)?;
+        Ok(assessment)
+    }
+
+    /// Evaluate the project's gate over a revision.
+    ///
+    /// The requirement set is the project's, not the caller's. A caller that
+    /// could choose which conditions applied would be choosing what counts as
+    /// satisfied, which is the whole of what a gate decides.
+    pub fn dcg_evaluate_gate(
+        &self,
+        cwd: &Path,
+        revision: &str,
+        waivers: &[String],
+    ) -> DraftResult<crate::gate::GateEvaluation> {
+        let workspace = self.open(cwd)?;
+        let revision_id = parse_revision_id(revision)?;
+        let sealed = crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir())
+            .get(&revision_id)?
+            .ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    format!("revision '{revision_id}' has not been sealed"),
+                )
+            })?;
+        let stores = crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout);
+
+        let assessments: BTreeSet<_> = stores
+            .assessments
+            .list()?
+            .into_iter()
+            .filter(|value| value.covers(&revision_id))
+            .map(|value| value.id)
+            .collect();
+
+        // The identity of an immutable fact is its content, and a gate's
+        // content is the facts it reads. Deriving it from the revision alone
+        // gave a revision exactly one evaluation for all time — so recording
+        // an assessment and re-evaluating, which is the whole loop a person
+        // runs, tried to rewrite the first evaluation and was refused. A
+        // re-evaluation over the same facts still converges on the same
+        // evaluation; one over new facts is a new fact.
+        let mut identity = format!("{revision_id}|{}|{}", sealed.definition, sealed.scope);
+        for assessment in &assessments {
+            identity.push('|');
+            identity.push_str(assessment.as_str());
+        }
+        for waiver in waivers {
+            identity.push('|');
+            identity.push_str(waiver);
+        }
+
+        let request = crate::app::authorization::GateRequest {
+            id: derived_id("gate_", &identity)?,
+            revision: revision_id,
+            // The exact definition and scope the revision was sealed against,
+            // taken from the revision itself. A gate that named a different
+            // pair would be evaluating a boundary nobody worked within.
+            definition: sealed.definition.clone(),
+            scope: sealed.scope.clone(),
+            assessments,
+            requirements: crate::app::authorization::GateRequirements {
+                required: vec![(
+                    "draft.gate/verified".to_string(),
+                    draft_dcg_contract::Digest::of_bytes(b"draft.gate/verified.v1"),
+                )],
+                max_risk: crate::evidence::assessment::AssessedRisk::Medium,
+            },
+            waivers: waivers.iter().cloned().collect(),
+            context: dcg_evaluation_context(),
+        };
+        crate::app::authorization::evaluate_gate(&stores, &request)
+    }
+
+    /// Grant this project's actor authority to publish from it.
+    ///
+    /// Publishing is its own capability. Somebody permitted to accept work
+    /// into a Baseline has not thereby been permitted to announce it to the
+    /// outside world, and collapsing the two would make every approver an
+    /// unwitting publisher — so the grant is issued explicitly and recorded as
+    /// a fact the attempt can cite.
+    ///
+    /// Granted over the project, not over an individual Publication: a
+    /// Publication's id is derived from what it delivers, so a per-Publication
+    /// grant would have to be re-issued for every send and nobody would read
+    /// what they were approving.
+    ///
+    /// Idempotent. The grant id is derived from the actor and the project, so
+    /// re-running converges on the grant already issued rather than minting a
+    /// second one that says the same thing.
+    pub fn dcg_grant_publish(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<crate::authority::grant::AuthorityGrant> {
+        self.authority_grant(cwd, "draft.publish/v1", None)
+    }
+
+    /// Grant one capability over this project.
+    ///
+    /// The capability is named rather than assumed. Publishing and operating
+    /// are different permissions, and a grant that did not say which would
+    /// make every reader of the record guess what was permitted.
+    ///
+    /// Reserved `draft.*` capabilities are implemented, never minted: one this
+    /// build does not recognise is refused here rather than recorded as a
+    /// permission nothing will ever check.
+    ///
+    /// Idempotent. The grant id is derived from the capability, the project
+    /// and the grantee, so re-running converges on the grant already issued
+    /// rather than minting a second one that says the same thing.
+    pub fn authority_grant(
+        &self,
+        cwd: &Path,
+        capability: &str,
+        grantee: Option<&str>,
+    ) -> DraftResult<crate::authority::grant::AuthorityGrant> {
+        let workspace = self.open(cwd)?;
+        let granter = crate::app::baseline::actor_id_of(&workspace.layout)?;
+        let actor = match grantee {
+            Some(value) => draft_dcg_contract::ids::ActorId::parse(value)
+                .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?,
+            None => granter.clone(),
+        };
+        let capability = draft_dcg_contract::capability::CapabilityId::parse(capability)
+            .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?;
+        if !capability.is_acceptable() {
+            return Err(DraftError::new(
+                DraftErrorKind::Validation,
+                format!(
+                    "'{capability}' is in Draft's reserved namespace but is not a capability this                      build implements; granting it would record a permission nothing checks"
+                ),
+            ));
+        }
+        let subject = crate::publication::authority::publish_subject(&workspace.workspace_id)?;
+        let stores = crate::publication::authority::AuthorityStores::for_layout(&workspace.layout)?;
+
+        let grant = crate::authority::grant::AuthorityGrant {
+            id: derived_id(
+                "auth_",
+                &format!("{capability}|{}|{actor}", workspace.workspace_id),
+            )
+            .and_then(|value| {
+                draft_dcg_contract::ids::AuthorityGrantId::parse(&value)
+                    .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+            })?,
+            grantee: actor.clone(),
+            capability,
+            subject,
+            granted_by: granter,
+            // Frozen, so the grant's identity depends on who may do what to
+            // which project rather than on when the command ran. That is what
+            // makes re-running converge instead of issuing a second grant.
+            granted_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+            // Deliberately explicit rather than a missing field: a permission
+            // that outlives every deadline is a decision somebody made.
+            expires_at: None,
+        };
+        stores.grants.put(&grant)?;
+        let reference = grant.reference()?;
+
+        // Adopt it into the project's security state, under the control lock
+        // and against the generation the read observed. A grant sitting in the
+        // store that the state does not name confers nothing — which is what
+        // makes "issued" and "in force" separate, checkable facts.
+        stores.control.with_locked_control(|control| {
+            let current = control.current()?.ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    "this project has no control record to grant against",
+                )
+            })?;
+            let security = stores
+                .security_states
+                .get(&current.project_security_state)?
+                .unwrap_or_default();
+            if security.is_active(&reference) {
+                return Ok(());
+            }
+
+            let granted = security.grant(reference.clone());
+            crate::app::security::structurally_valid(&granted)?;
+            // Every reference re-resolved and re-verified before it is
+            // committed: a state naming a fact that does not resolve would
+            // make the project's authority unreadable at the next dispatch.
+            let resolvers = crate::app::security::SecurityResolvers {
+                grants: &stores.grants,
+                revocations: &stores.revocations,
+            };
+            let failures = crate::app::security::unresolved(&resolvers, &granted)?;
+            if let Some((reference, resolution)) = failures.first() {
+                return Err(DraftError::new(
+                    DraftErrorKind::CorruptData,
+                    format!(
+                        "security fact {} would be committed but resolves as {resolution:?}",
+                        reference.digest
+                    ),
+                ));
+            }
+
+            let digest = stores.security_states.put(&granted)?;
+            let expected = crate::support::record_guard::ExpectedRecordState::of(&current)?;
+            let advanced = current.advanced(|next| {
+                next.project_security_state = digest;
+            });
+            control.compare_exchange_locked(&expected, &advanced)
+        })?;
+        Ok(grant)
+    }
+
+    /// Grant an exception to one gate condition on one exact revision.
+    ///
+    /// Bound to the revision, not the Change: an exception accepted for the
+    /// work as it stood is not an exception for whatever it becomes. The gate
+    /// records a waived condition as satisfied *and names the waiver*, so
+    /// "somebody allowed this" never reads as "this passed".
+    pub fn dcg_waive(
+        &self,
+        cwd: &Path,
+        revision: &str,
+        condition: &str,
+        reason: &str,
+        expires_in_days: u32,
+    ) -> DraftResult<crate::gate::waiver::GateWaiver> {
+        if expires_in_days == 0 {
+            return Err(DraftError::new(
+                DraftErrorKind::Validation,
+                "a waiver that expires immediately waives nothing",
+            ));
+        }
+        let workspace = self.open(cwd)?;
+        let revision_id = parse_revision_id(revision)?;
+        // Granted at the same instant every other DCG fact is evaluated at, so
+        // a waiver and the gate that reads it agree about what "now" is.
+        let waived_at = dcg_evaluation_context().evaluated_at;
+        let waiver = crate::gate::waiver::GateWaiver {
+            id: derived_id("wvr_", &format!("{revision_id}|{condition}"))?,
+            revision: revision_id,
+            condition: condition.to_string(),
+            reason: reason.to_string(),
+            waived_by: crate::app::baseline::actor_id_of(&workspace.layout)?,
+            waived_at,
+            expires_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(
+                waived_at.as_unix_nanos()
+                    + i64::from(expires_in_days) * 24 * 60 * 60 * 1_000_000_000,
+            ),
+            authority: project_decision_authority(&workspace)?,
+        };
+        crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout)
+            .waivers
+            .put(&waiver)?;
+        Ok(waiver)
+    }
+
+    /// The Resources the accepted Baseline holds.
+    /// Every Resource a Change opened now could legitimately be scoped to.
+    ///
+    /// The accepted Baseline and the observed project, together. A Resource in
+    /// the Baseline may be edited or deleted; one only in the workspace may be
+    /// introduced. Excluding the second would make adding a file
+    /// unrepresentable — the declaration would resolve to nothing and the work
+    /// would fall outside every scope a reviewer reads.
+    fn dcg_resolvable_resources<'a>(
+        &self,
+        workspace: &Workspace,
+        observed: impl IntoIterator<Item = &'a draft_dcg_contract::ids::ResourceId>,
+    ) -> DraftResult<BTreeSet<draft_dcg_contract::ids::ResourceId>> {
+        let mut resources = self.dcg_accepted_resources(workspace)?;
+        resources.extend(observed.into_iter().cloned());
+        Ok(resources)
+    }
+
+    fn dcg_accepted_resources(
+        &self,
+        workspace: &Workspace,
+    ) -> DraftResult<BTreeSet<draft_dcg_contract::ids::ResourceId>> {
+        let Some(baseline) = crate::dcg::baseline::current_baseline(&workspace.layout)? else {
+            return Ok(BTreeSet::new());
+        };
+        let store = crate::dcg::baseline::BaselineStore::new(workspace.layout.baselines_dir());
+        Ok(store
+            .composition(&baseline)?
+            .map(|value| value.resource_provenance.keys().cloned().collect())
+            .unwrap_or_default())
+    }
+
+    /// Observe the workspace and canonicalize it into an observation run.
+    fn dcg_observe_run(
+        &self,
+        workspace: &Workspace,
+    ) -> DraftResult<(crate::dcg::observe::ObservationOutcome, Snapshot)> {
+        let stores = crate::app::baseline::AcceptanceStores::for_layout(&workspace.layout);
+        let binding =
+            crate::app::baseline::ensure_filesystem_binding(&stores, &workspace.workspace_id)?;
+        let (snapshot, context) = self.observe_for_acceptance(workspace)?;
+        let observed_at = draft_dcg_contract::value::Timestamp::from_unix_nanos(
+            snapshot
+                .created_at
+                .timestamp_nanos_opt()
+                .unwrap_or_default(),
+        );
+        let enumeration = crate::dcg::accept::canonicalize(&snapshot, observed_at, observed_at)?;
+        let observer = crate::dcg::observe::ObservingBinding {
+            binding: binding.id.clone(),
+            semantic_definition: binding.current_semantic_definition.clone(),
+            producer: dcg_producer("draft.core/filesystem-observer")?,
+            observation_context: draft_dcg_contract::Digest::of_bytes(context.as_bytes()),
+        };
+        let outcome = crate::dcg::observe::record(&observer, &enumeration)?;
+        // Durable before anything cites them: evidence may not name an
+        // observation that does not exist.
+        stores.observations.put_run(&outcome.run)?;
+        for observation in &outcome.observations {
+            stores.observations.put(observation)?;
+        }
+        Ok((outcome, snapshot))
+    }
+
+    /// The state root the workspace would produce now, and what it holds.
+    fn dcg_observe_state(
+        &self,
+        workspace: &Workspace,
+    ) -> DraftResult<(
+        draft_dcg_contract::roots::ProjectStateRoot,
+        BTreeMap<draft_dcg_contract::ids::ResourceId, draft_dcg_contract::ResourceStateDigest>,
+    )> {
+        let (outcome, _) = self.dcg_observe_run(workspace)?;
+        let authoritative = outcome.authoritative()?;
+        let (state_root, _) = authoritative.build_roots()?;
+        let observed = outcome
+            .observations
+            .iter()
+            .map(|observation| (observation.resource.clone(), observation.state.clone()))
+            .collect();
+        Ok((state_root, observed))
+    }
+
+    /// The project's whole workflow state, with server-computed availability.
+    pub fn dcg_project(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<crate::app::workflow::ProjectWorkflowView> {
+        crate::app::workflow::project_view(&self.open(cwd)?)
+    }
+
+    /// The Baseline the project currently accepts.
+    pub fn dcg_baseline(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<Option<crate::app::workflow::BaselineView>> {
+        crate::app::workflow::baseline_view(&self.open(cwd)?)
+    }
+
+    /// Every Change and the revisions sealed against it.
+    pub fn dcg_changes(&self, cwd: &Path) -> DraftResult<Vec<crate::app::workflow::ChangeView>> {
+        crate::app::workflow::change_views(&self.open(cwd)?)
+    }
+
+    /// Everything decided about one revision, and what may legally follow.
+    pub fn dcg_authorization(
+        &self,
+        cwd: &Path,
+        change: &str,
+        revision: &str,
+    ) -> DraftResult<crate::app::workflow::AuthorizationView> {
+        let workspace = self.open(cwd)?;
+        crate::app::workflow::authorization_view(
+            &workspace,
+            &parse_change_id(change)?,
+            &parse_revision_id(revision)?,
+        )
+    }
+
+    /// Record an immutable Decision about a revision.
+    ///
+    /// The gate is resolved and handed to the domain rather than re-checked
+    /// here: whether an approval may be made over it is `app::authorization`'s
+    /// judgement, and repeating it would be a second rule to keep in step.
+    /// Record that somebody examined one exact revision.
+    ///
+    /// A Review is not a Decision and does not authorize anything. It records
+    /// the act of looking, which is what makes "under review" representable at
+    /// all — and what makes an approval with no review behind it visible.
+    ///
+    /// Derived from the revision and reviewer, so re-recording the same review
+    /// converges instead of accumulating one entry per invocation.
+    pub fn dcg_review(
+        &self,
+        cwd: &Path,
+        revision: &str,
+        comments: &[String],
+    ) -> DraftResult<crate::dcg::review::Review> {
+        let workspace = self.open(cwd)?;
+        let revision = parse_revision_id(revision)?;
+        let reviewer = crate::app::baseline::actor_id_of(&workspace.layout)?;
+        let now = crate::support::clock::Clock::now(&crate::support::clock::SystemClock);
+
+        let stores = crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout);
+        let id = derived_id("rvw_", &format!("{revision}|{reviewer}"))?;
+        let id = draft_dcg_contract::ids::ReviewId::parse(id)
+            .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?;
+
+        // The store is create-once, so a second review by the same reviewer of
+        // the same revision must be byte-identical. Merging the new comments
+        // into the existing record is what makes that true, rather than
+        // refusing a reviewer who wrote a second note.
+        let existing = stores.reviews.get(&id)?;
+        let started_at = existing.as_ref().map_or(now, |review| review.started_at);
+        let mut all: Vec<crate::dcg::review::ReviewComment> =
+            existing.map(|review| review.comments).unwrap_or_default();
+        for body in comments {
+            if all.iter().any(|comment| comment.body == *body) {
+                continue;
+            }
+            all.push(crate::dcg::review::ReviewComment {
+                author: reviewer.clone(),
+                body: body.clone(),
+                written_at: now,
+            });
+        }
+
+        let review = crate::dcg::review::Review {
+            id,
+            revision,
+            reviewer,
+            started_at,
+            comments: all,
+        };
+        stores.reviews.put(&review)?;
+        Ok(review)
+    }
+
+    pub fn dcg_decide(
+        &self,
+        cwd: &Path,
+        revision: &str,
+        gate: Option<&str>,
+        approve: bool,
+        reason: Option<&str>,
+    ) -> DraftResult<crate::dcg::decision::Decision> {
+        let workspace = self.open(cwd)?;
+        let revision = parse_revision_id(revision)?;
+        let stores = crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout);
+
+        let evaluation = match gate {
+            Some(id) => stores.gates.get(id)?,
+            None => stores
+                .gates
+                .list()?
+                .into_iter()
+                .filter(|value| value.covers(&revision))
+                .find(crate::gate::GateEvaluation::is_satisfied),
+        };
+
+        let outcome = if approve {
+            crate::dcg::decision::DecisionOutcome::Approved
+        } else {
+            crate::dcg::decision::DecisionOutcome::Rejected {
+                reason: reason
+                    .unwrap_or("rejected without a stated reason")
+                    .to_string(),
+            }
+        };
+        let request = crate::app::authorization::DecisionRequest {
+            id: decision_id_for(&revision, approve)?,
+            revision,
+            outcome,
+            decided_by: crate::app::baseline::actor_id_of(&workspace.layout)?,
+            decided_at: crate::support::clock::Clock::now(&crate::support::clock::SystemClock),
+            // The grant this project decides under. One fact, cited by the
+            // decision it authorizes: an approval resting on nothing is not a
+            // permission, and the store refuses one.
+            authority: [project_decision_authority(&workspace)?]
+                .into_iter()
+                .collect(),
+        };
+        crate::app::authorization::decide(&stores, &request, evaluation.as_ref())
+    }
+
+    /// Promote an authorized revision, advancing the project's Baseline.
+    ///
+    /// `expected_parent` states the Baseline the caller believed was accepted.
+    /// A promotion decided against state that has since moved is refused
+    /// rather than rebased, which is what makes a stale surface action fail
+    /// safely instead of silently accepting work onto a parent nobody judged
+    /// it against.
+    pub fn dcg_promote(
+        &self,
+        cwd: &Path,
+        change: &str,
+        revision: &str,
+        decision: &str,
+        gate: &str,
+        expected_parent: Option<&str>,
+    ) -> DraftResult<crate::app::promotion::PromotionOutcome> {
+        let workspace = self.open(cwd)?;
+        let expected_parent = match expected_parent {
+            Some(value) => Some(parse_baseline_id(value)?),
+            None => None,
+        };
+        let request = crate::app::promotion::PromotionRequest {
+            change: parse_change_id(change)?,
+            revision: parse_revision_id(revision)?,
+            decision: parse_decision_id(decision)?,
+            gate: gate.to_string(),
+            expected_parent,
+        };
+        crate::app::promotion::promote(self, &workspace, &request)
+    }
+
+    /// One promotion, projected from its own durable records.
+    pub fn dcg_promotion(
+        &self,
+        cwd: &Path,
+        promotion: &str,
+    ) -> DraftResult<Option<crate::app::workflow::PromotionView>> {
+        let workspace = self.open(cwd)?;
+        crate::app::workflow::promotion_view(&workspace, &parse_promotion_id(promotion)?)
+    }
+
+    /// Publish a promoted Baseline through the publication engine.
+    ///
+    /// `request_id` is the caller's identity for this attempt. Retrying under
+    /// the same id converges on what that attempt concluded; it is the reason
+    /// an HTTP retry or a re-run command cannot deliver twice.
+    ///
+    /// Neither the recovery class nor the delivery semantics are parameters.
+    /// The semantics are declared by the binding the route names, and the
+    /// recovery class is derived from those — a caller that could assert
+    /// either would be choosing what happens after a crash it cannot see.
+    pub fn dcg_publish(
+        &self,
+        cwd: &Path,
+        baseline: Option<&str>,
+        purpose: &str,
+        request_id: &str,
+        retry_authorization: Option<&str>,
+    ) -> DraftResult<crate::app::publish::PublishOutcome> {
+        let workspace = self.open(cwd)?;
+        let baseline = match baseline {
+            Some(value) => parse_baseline_id(value)?,
+            None => {
+                crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+                    DraftError::new(
+                        DraftErrorKind::NotFound,
+                        "this project accepts no baseline, so there is nothing to publish",
+                    )
+                })?
+            }
+        };
+        let request = crate::app::publish::PublishRequest {
+            baseline,
+            purpose: draft_dcg_contract::publication::PublicationPurposeId::parse(purpose)
+                .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?,
+            semantics: crate::app::publish::filesystem_delivery_semantics(),
+            retry_authorization: match retry_authorization {
+                Some(value) => Some(
+                    draft_dcg_contract::publication::PublicationRetryAuthorizationDigest::new(
+                        draft_dcg_contract::Digest::parse(value).map_err(|error| {
+                            DraftError::new(DraftErrorKind::Validation, error.to_string())
+                        })?,
+                    ),
+                ),
+                None => None,
+            },
+            republish_intent: None,
+            request_id: request_id.to_string(),
+        };
+        let publication = crate::app::publish::ensure_publication(&workspace, &request)?;
+        crate::app::publish::publish(&workspace, &request, || {
+            crate::app::publish::deliver_to_filesystem(&workspace, &publication)
+        })
+    }
+
+    /// Authorize another attempt at a delivery Draft could not establish.
+    ///
+    /// A delivery that ended indeterminately against a target whose semantics
+    /// cannot rule out duplication is stuck on purpose. This is the decision
+    /// that unsticks it, recorded with who made it and what they knew — and it
+    /// permits exactly one further attempt.
+    pub fn dcg_authorize_retry(
+        &self,
+        cwd: &Path,
+        purpose: &str,
+        request_id: &str,
+        rationale: &str,
+    ) -> DraftResult<String> {
+        let workspace = self.open(cwd)?;
+        let baseline =
+            crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    "this project accepts no baseline, so there is nothing to retry publishing",
+                )
+            })?;
+        let request = crate::app::publish::PublishRequest {
+            baseline,
+            purpose: draft_dcg_contract::publication::PublicationPurposeId::parse(purpose)
+                .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?,
+            semantics: crate::app::publish::filesystem_delivery_semantics(),
+            retry_authorization: None,
+            republish_intent: None,
+            request_id: request_id.to_string(),
+        };
+        let digest = crate::app::publish::authorize_retry(&workspace, &request, rationale)?;
+        Ok(digest.digest().to_string())
+    }
+
+    /// Withdraw an allocated attempt whose dispatch is no longer permitted.
+    ///
+    /// An attempt interrupted between its allocation and its dispatch boundary
+    /// blocks its Publication forever: the barrier refuses a new one because it
+    /// cannot prove the first caused no effect. This proves it — the journal
+    /// never reached the boundary, so no external call was made — and releases
+    /// the Publication. An attempt past the boundary is refused, because
+    /// withdrawing it would assert something Draft cannot know.
+    pub fn dcg_withdraw_attempt(
+        &self,
+        cwd: &Path,
+        purpose: &str,
+        request_id: &str,
+        reason: &str,
+    ) -> DraftResult<crate::publication::abandon::Withdrawn> {
+        let workspace = self.open(cwd)?;
+        let baseline =
+            crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    "this project accepts no baseline, so there is no attempt to withdraw",
+                )
+            })?;
+        let request = crate::app::publish::PublishRequest {
+            baseline,
+            purpose: draft_dcg_contract::publication::PublicationPurposeId::parse(purpose)
+                .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))?,
+            semantics: crate::app::publish::filesystem_delivery_semantics(),
+            retry_authorization: None,
+            republish_intent: None,
+            request_id: request_id.to_string(),
+        };
+        crate::app::publish::withdraw_stalled_attempt(&workspace, &request, reason)
+    }
+
+    /// Every Publication, with the engine's own view of where each one is.
+    pub fn dcg_publications(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<Vec<crate::app::workflow::PublicationView>> {
+        crate::app::workflow::publication_views(&self.open(cwd)?)
+    }
+}
+
+fn parse_change_id(value: &str) -> DraftResult<draft_dcg_contract::ids::ChangeId> {
+    draft_dcg_contract::ids::ChangeId::parse(value)
+        .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+}
+
+fn parse_revision_id(value: &str) -> DraftResult<draft_dcg_contract::ids::ChangeRevisionId> {
+    draft_dcg_contract::ids::ChangeRevisionId::parse(value)
+        .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+}
+
+fn parse_decision_id(value: &str) -> DraftResult<draft_dcg_contract::ids::DecisionId> {
+    draft_dcg_contract::ids::DecisionId::parse(value)
+        .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+}
+
+fn parse_binding_id(value: &str) -> DraftResult<draft_dcg_contract::ids::ProviderBindingId> {
+    draft_dcg_contract::ids::ProviderBindingId::parse(value)
+        .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+}
+
+fn parse_grant_id(value: &str) -> DraftResult<draft_dcg_contract::ids::AuthorityGrantId> {
+    draft_dcg_contract::ids::AuthorityGrantId::parse(value)
+        .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+}
+
+fn parse_promotion_id(value: &str) -> DraftResult<draft_dcg_contract::ids::PromotionId> {
+    draft_dcg_contract::ids::PromotionId::parse(value)
+        .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+}
+
+fn parse_baseline_id(value: &str) -> DraftResult<draft_dcg_contract::baseline::BaselineId> {
+    draft_dcg_contract::Digest::parse(value)
+        .map(draft_dcg_contract::baseline::BaselineId::new)
+        .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
+}
+
+/// An id derived from what it names, so a retry recomputes it.
+///
+/// Every id a surface can cause to be minted goes through here. A randomly
+/// generated one would make a dropped connection produce a second immutable
+/// record of the same fact, which create-once storage would then be unable to
+/// tell from a genuine second fact.
+fn derived_id(prefix: &str, seed: &str) -> DraftResult<String> {
+    let digest = draft_dcg_contract::Digest::of_bytes(seed.as_bytes());
+    let short: String = digest
+        .as_str()
+        .rsplit(':')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(24)
+        .collect();
+    Ok(format!("{prefix}{short}"))
+}
+
+fn dcg_producer(name: &str) -> DraftResult<draft_dcg_contract::producer::ProducerIdentity> {
+    draft_dcg_contract::producer::ProducerIdentity::new(
+        draft_dcg_contract::identifier::NamespacedId::parse(name)
+            .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?,
+        crate::DRAFT_VERSION,
+    )
+    .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))
+}
+
+/// The context every DCG evaluation in this process records.
+///
+/// Frozen at the epoch, and deliberately so: evidence, assessments and gates
+/// are content-addressed facts, and stamping wall-clock time into them would
+/// make the same judgement over the same content a different fact each run —
+/// which create-once storage would refuse as a conflicting rewrite.
+///
+/// Waivers are the one thing that reads this as a real instant, and a waiver
+/// evaluated against the epoch has simply not expired yet.
+/// One entry of a declared Change scope.
+///
+/// A canonical Resource id when the caller has one, and otherwise a locator —
+/// `file:src/auth.rs`, or just `src/auth.rs` for the filesystem. The locator
+/// form is not a convenience: a Resource the project does not hold yet has no
+/// id to look up, so a Change that introduces one could not be declared at all
+/// without it. Both forms derive the same id for the same locator.
+fn parse_scope_entry(value: &str) -> draft_dcg_contract::ids::ResourceId {
+    if let Ok(resource) = draft_dcg_contract::ids::ResourceId::parse(value) {
+        return resource;
+    }
+    let locator = match value.split_once(':') {
+        Some((scheme, _)) if !scheme.is_empty() && !scheme.contains('/') => value.to_string(),
+        _ => format!("file:{value}"),
+    };
+    crate::dcg::resource::resource_id_for_locator(&locator)
+}
+
+fn dcg_evaluation_context() -> crate::evidence::context::EvaluationContext {
+    crate::evidence::context::EvaluationContext {
+        evaluated_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
+        clock_source: draft_dcg_contract::identifier::NamespacedId::parse("draft.core/fixed-clock")
+            .expect("a frozen literal is valid"),
+        policy_digest: draft_dcg_contract::security::PolicyDigest::new(
+            draft_dcg_contract::Digest::of_bytes(b"draft.core/default-policy"),
+        ),
+        security_context_digest: draft_dcg_contract::security::SecurityContextDigest::new(
+            draft_dcg_contract::Digest::of_bytes(b"draft.core/default-security-context"),
+        ),
+        core_evaluator_revision: crate::DRAFT_VERSION.to_string(),
+    }
+}
+
+fn parse_risk(value: &str) -> DraftResult<crate::evidence::assessment::AssessedRisk> {
+    use crate::evidence::assessment::AssessedRisk;
+    match value.to_ascii_lowercase().as_str() {
+        "low" => Ok(AssessedRisk::Low),
+        "medium" => Ok(AssessedRisk::Medium),
+        "high" => Ok(AssessedRisk::High),
+        "critical" => Ok(AssessedRisk::Critical),
+        // Never parsed from input. "Nobody looked" is a state Draft reaches by
+        // not being told, not one a caller asserts.
+        other => Err(DraftError::new(
+            DraftErrorKind::Validation,
+            format!("'{other}' is not a risk level; use low, medium, high or critical"),
+        )),
+    }
+}
+
+/// The authority a decision in this project is made under.
+///
+/// Derived from the project so it is stable across calls, and named as a
+/// grant so a reader can see what an approval rested on. It is a real fact
+/// about this project rather than a constant, because a decision citing a
+/// grant that means nothing would satisfy the letter of "cite your authority"
+/// while defeating the point of it.
+fn project_decision_authority(
+    workspace: &Workspace,
+) -> DraftResult<draft_dcg_contract::security::SecurityFactRef> {
+    Ok(draft_dcg_contract::security::SecurityFactRef::new(
+        draft_dcg_contract::security::SecurityControlKindId::parse(
+            "draft.security/authority-grant.v1",
+        )
+        .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?,
+        None,
+        draft_dcg_contract::Digest::of_bytes(
+            format!(
+                "draft.core/project-decision-authority|{}",
+                workspace.workspace_id
+            )
+            .as_bytes(),
+        ),
+    ))
+}
+
+/// The decision this actor's judgement of this revision is.
+///
+/// Derived so that a surface retry recomputes the same id and the create-once
+/// decision store converges, rather than a dropped connection producing a
+/// second immutable record of the same judgement.
+fn decision_id_for(
+    revision: &draft_dcg_contract::ids::ChangeRevisionId,
+    approve: bool,
+) -> DraftResult<draft_dcg_contract::ids::DecisionId> {
+    let verdict = if approve { "approved" } else { "rejected" };
+    let seed = draft_dcg_contract::Digest::of_bytes(format!("{revision}|{verdict}").as_bytes());
+    let short: String = seed
+        .as_str()
+        .rsplit(':')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(24)
+        .collect();
+    draft_dcg_contract::ids::DecisionId::parse(format!("dec_{short}"))
+        .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))
 }
 
 fn append_project_config_event(ws: &Workspace, key: &str, operation: &str) -> DraftResult<()> {
     let bytes = std::fs::read(ws.layout.config_toml())?;
+    // One event for both: a project's configuration is its policy about how it
+    // is read and checked, and the changed key is in the payload for a reader
+    // who needs to know which part moved.
     ws.events()?.append(
-        if key.starts_with("user.") {
-            "user.profile.updated"
-        } else {
-            "config.updated"
-        },
+        EventKind::PolicyUpdated,
         None,
         serde_json::json!({
             "scope": "project",
@@ -8414,10 +5720,10 @@ impl Default for App {
 }
 
 impl Workspace {
-    fn events(&self) -> DraftResult<WorkspaceEventLog> {
-        Ok(WorkspaceEventLog::new(
+    fn events(&self) -> DraftResult<ProjectActivity> {
+        Ok(ProjectActivity::new(
             self.layout.clone(),
-            self.workspace_id.clone(),
+            &self.workspace_id,
         ))
     }
 }
@@ -8428,9 +5734,10 @@ pub struct InitReport {
     pub root: String,
     pub created: bool,
     pub draft_dir: String,
-    pub stable_head_id: String,
-    pub stable_head_receipt_id: String,
-    pub workspace_hash: String,
+    /// The Baseline this project now accepts.
+    pub baseline_id: String,
+    /// The material state that Baseline accepted.
+    pub project_state_root: String,
     #[serde(default)]
     pub next_actions: Vec<String>,
     #[serde(default)]
@@ -8442,7 +5749,7 @@ pub struct CloseReport {
     pub closed: bool,
     pub forced: bool,
     pub draft_dir: String,
-    pub pending_packs: usize,
+    pub pending_changes: usize,
 }
 
 const DEFAULT_IGNORE: &str = "# Draft private metadata is always excluded.\n.draft/\n";
@@ -8478,7 +5785,7 @@ pub struct StorageStats {
     pub draft_size_bytes: u64,
     pub repo_size_bytes: u64,
     pub objects_size_bytes: u64,
-    pub packs_size_bytes: u64,
+    pub changes_size_bytes: u64,
     pub receipts_size_bytes: u64,
     pub events_size_bytes: u64,
     pub draft_repo_ratio: f64,
@@ -8504,8 +5811,8 @@ impl StorageMaintenanceReport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageDoctorReport {
-    pub event_chain_ok: bool,
-    pub event_chain_error: Option<String>,
+    pub activity_chain_ok: bool,
+    pub activity_chain_error: Option<String>,
     pub draft_hard_excluded: bool,
     #[serde(default)]
     pub draft_exclusion_errors: Vec<String>,
@@ -8514,14 +5821,16 @@ pub struct StorageDoctorReport {
     pub receipts_ok: bool,
     pub receipt_errors: Vec<String>,
     pub receipts: usize,
-    pub packs: usize,
+    pub changes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointReport {
     pub snapshot_id: String,
-    pub receipt_id: String,
-    pub files: usize,
+    /// The Activity event that records the checkpoint, and the reference a
+    /// later `draft recover` names to come back to it.
+    pub event_id: String,
+    pub resources: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8530,7 +5839,7 @@ pub struct TaskSpawnReport {
     pub task_name: String,
     pub task_kind: String,
     pub preset: Option<String>,
-    pub parent_pack: Option<String>,
+    pub parent_change: Option<String>,
     pub executions: Vec<ExecutionSummary>,
     pub next_action: String,
 }
@@ -8540,7 +5849,7 @@ pub struct ExecutionSummary {
     pub execution_id: String,
     pub candidate: String,
     pub status: String,
-    pub produced_pack: Option<String>,
+    pub produced_change: Option<String>,
     pub error: Option<String>,
     pub note: Option<String>,
 }
@@ -8565,66 +5874,54 @@ pub struct TaskImportReport {
 pub struct TaskViewOptions {
     pub full: bool,
     pub executions: bool,
-    pub packs: bool,
+    pub changes: bool,
     pub conflicts: bool,
     pub lanes: bool,
     pub evidence: bool,
     pub timeline: bool,
     pub explain: bool,
     pub decompose: bool,
-    pub diff_stable: bool,
+    pub compare_stable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CandidatePackAssignment {
-    pub pack_id: String,
+pub struct CandidateChangeAssignment {
+    pub change_id: String,
     pub candidate: String,
     pub task_id: Option<String>,
     pub execution_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackReport {
-    pub lifecycle: PackLifecycle,
-    pub pack: PackWorkspace,
-    pub patch: PatchSet,
+pub struct ChangeReport {
+    pub lifecycle: RevisionState,
+    pub change: ChangeWorkspace,
+    /// The authoritative transition. Always present, whatever is installed.
+    pub change_set: ChangeSet,
+    /// The derived explanation of it, when a comparison capability produced
+    /// one. `None` is a real answer: Draft knows *that* the resources changed
+    /// and between which states, without being able to say how.
+    pub representations: Option<ChangeRepresentationBundle>,
     pub evidence: Option<Evidence>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackDeleteReport {
-    pub deleted_pack_id: String,
-    pub deleted_pack_name: Option<String>,
-    pub replacement_selected_pack: String,
-    pub deleted_files: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubmitReadinessReport {
-    pub ok: bool,
-    pub blockers: Vec<String>,
-    #[serde(default)]
-    pub ownership: Option<crate::workspace::ownership::OwnershipReport>,
-    #[serde(default)]
-    pub reviewability: Option<crate::review::reviewability::ReviewabilityReport>,
-    #[serde(default)]
-    pub verification_receipt_id: Option<String>,
-    #[serde(default)]
-    pub review_receipt_id: Option<String>,
-    #[serde(default)]
-    pub approval_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompareReport {
     pub id: String,
-    pub left_pack: String,
-    pub right_pack: String,
-    pub overlapping_files: Vec<WorkspacePath>,
+    pub left_change: String,
+    pub right_change: String,
+    /// Resources both Changes touch.
+    pub overlapping_resources: Vec<ResourceId>,
+    /// How the two Changes relate on each shared resource, where they do not
+    /// simply compose.
+    ///
+    /// `Indeterminate` appears here as itself rather than as a conflict or a
+    /// pass, because "Draft cannot tell whether these are separable" is a
+    /// different fact from "they collide" — even though both block composition.
     #[serde(default)]
-    pub overlapping_hunks: Vec<HunkOverlap>,
-    pub unique_left_files: Vec<WorkspacePath>,
-    pub unique_right_files: Vec<WorkspacePath>,
+    pub interference: Vec<ResourceInterference>,
+    pub unique_left_resources: Vec<ResourceId>,
+    pub unique_right_resources: Vec<ResourceId>,
     #[serde(default)]
     pub compatible: bool,
     pub warnings: Vec<String>,
@@ -8634,10 +5931,10 @@ pub struct CompareReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComposeResult {
     pub output_pack_id: String,
-    pub source_packs: Vec<String>,
+    pub source_changes: Vec<String>,
     pub receipt_id: String,
     #[serde(default)]
-    pub files: usize,
+    pub resources: usize,
     #[serde(default)]
     pub compatible: bool,
     #[serde(default)]
@@ -8650,7 +5947,7 @@ pub struct ComposeResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisperseResult {
-    pub source_pack_id: String,
+    pub source_change_id: String,
     pub output_pack_ids: Vec<String>,
     pub receipt_id: String,
     #[serde(default)]
@@ -8667,7 +5964,7 @@ pub struct IndexReport {
     pub events: usize,
     pub tasks: usize,
     pub executions: usize,
-    pub packs: usize,
+    pub changes: usize,
     pub receipts: usize,
     pub snapshots: usize,
 }
@@ -8717,64 +6014,17 @@ fn validate_config_key(key: &str) -> DraftResult<()> {
     }
 }
 
-fn verification_commands(
-    ws: &Workspace,
-    evidence: &crate::review::verification::VerifyEvidence,
-) -> DraftResult<Vec<String>> {
-    let mut commands = std::collections::BTreeSet::new();
-    commands.extend(
-        evidence
-            .selected_tests
-            .iter()
-            .map(|test| test.command.clone()),
-    );
-    commands.extend(
-        evidence
-            .selected_fuzz_targets
-            .iter()
-            .map(|target| target.command.clone()),
-    );
-    if ws.layout.verify_toml().exists() {
-        let config: VerificationConfig = read_toml(&ws.layout.verify_toml())?;
-        if !crate::contracts::supports_version(
-            ContractId::VerificationConfig,
-            config.schema_version,
-        ) {
-            return Err(DraftError::new(
-                DraftErrorKind::UnsupportedSchema,
-                format!(
-                    "verification configuration schema {} is unsupported",
-                    config.schema_version
-                ),
-            ));
-        }
-        commands.extend(
-            config
-                .checks
-                .into_iter()
-                .filter(|check| check.enabled && !check.command.trim().is_empty())
-                .map(|check| check.command),
-        );
-    }
-    Ok(commands.into_iter().collect())
-}
-
-fn wire_binding_error(contract: &str, error: DraftError) -> DraftError {
-    if error.kind == DraftErrorKind::UnsupportedSchema {
-        error
-    } else {
-        DraftError::new(
-            DraftErrorKind::Validation,
-            format!("invalid {contract}: {}", error.message),
-        )
-    }
-}
-
 trait ConfigContract {
     fn declared_schema_version(&self) -> u32;
 }
 
 impl ConfigContract for RiskConfig {
+    fn declared_schema_version(&self) -> u32 {
+        self.schema_version
+    }
+}
+
+impl ConfigContract for VerificationConfig {
     fn declared_schema_version(&self) -> u32 {
         self.schema_version
     }
@@ -8808,7 +6058,10 @@ fn is_draft_path(path: &str) -> bool {
     crate::support::pathguard::is_draft_path(path)
 }
 
-fn validate_task_definition(ws: &Workspace, task: &crate::task::TaskDefinition) -> DraftResult<()> {
+fn validate_task_definition(
+    protections: &[crate::project::protected::ProtectionRule],
+    task: &crate::task::TaskDefinition,
+) -> DraftResult<()> {
     if task.success_criteria.is_empty() {
         return Err(
             DraftError::invalid_config("task success criteria cannot be empty")
@@ -8825,14 +6078,13 @@ fn validate_task_definition(ws: &Workspace, task: &crate::task::TaskDefinition) 
             "task zones cannot contain empty patterns",
         ));
     }
-    let protected_rules = crate::workspace::protected::rules_for_project(&ws.root)?;
     if let Some(zone) = task
         .allowed_zones
         .iter()
-        .find(|zone| crate::workspace::protected::matches_rules(&protected_rules, zone))
+        .find(|zone| crate::project::protected::matches_rules(protections, zone))
     {
         return Err(DraftError::new(
-            DraftErrorKind::ProtectedFileAccess,
+            DraftErrorKind::ProtectedResourceAccess,
             format!("task allowed zone '{zone}' conflicts with protected-file rules"),
         )
         .with_suggestion("remove protected paths from --allow and keep them in --forbid"));
@@ -8843,301 +6095,192 @@ fn validate_task_definition(ws: &Workspace, task: &crate::task::TaskDefinition) 
     Ok(())
 }
 
+/// The baseline every project starts from: an observation of nothing.
+///
+/// Its coverage is complete, which is what makes the first real snapshot's
+/// resources genuinely `Added` rather than merely unexplained.
 fn empty_snapshot(ws: &Workspace) -> Snapshot {
+    empty_snapshot_for(&ws.workspace_id, &ws.layout)
+}
+
+/// The same, for `init`, before a workspace can be opened.
+fn empty_snapshot_for(
+    workspace_id: &ProjectId,
+    layout: &crate::project::layout::DraftLayout,
+) -> Snapshot {
+    let _ = layout;
     Snapshot {
         schema_version: current_version(ContractId::WorkspaceSnapshot),
         id: SnapshotId::new("chk_empty"),
-        workspace_id: ws.workspace_id.clone(),
-        manifest_hash: sha256_hex(b"empty"),
-        files: vec![],
+        workspace_id: workspace_id.clone(),
+        observation_context_digest: baseline_observation_context().context_digest,
+        resources: vec![],
+        observation_map: crate::dcg::observation::SnapshotObservationMap {
+            domains: vec![crate::dcg::observation::ObservationCoverage {
+                domain: crate::dcg::snapshot::domain(crate::dcg::snapshot::ROOT_DOMAIN),
+                status: crate::dcg::observation::CoverageStatus::Complete,
+            }],
+            resource_membership: vec![],
+        },
+        gaps: vec![],
+        untrackable: vec![],
+        identity_proofs: vec![],
         content_object_refs: vec![],
-        ignored_patterns_hash: sha256_hex(b""),
         created_at: now(),
         created_by: ActorRef {
             id: ActorId::new("act_system"),
             kind: ActorKind::Service,
             display_name: "draft".to_string(),
         },
+        snapshot_digest: String::new(),
     }
+    .seal()
+}
+
+/// The observation semantics currently in force for a workspace.
+///
+/// With no contributed adapter or view rule this is Draft's own filesystem
+/// observer alone — which is the zero-extension case, and is a real context
+/// rather than an absent one.
+/// The observation semantics currently in force for this project.
+///
+/// Draft's own filesystem observer, plus every installed `view_rules`
+/// contribution as a declarative binding. A view-rule binding structurally
+/// carries no mechanism — it changes what is observed, never how — and its
+/// presence in the context digest is what makes adopting a new one a
+/// re-observation rather than a silent change of meaning.
+/// What the installed extensions *would* observe under.
+///
+/// Deliberately not "the active context". This is a candidate: it is what the
+/// currently installed and authorized contributions add up to right now, and a
+/// project only observes under it once somebody has adopted it. Confusing the
+/// two is the failure the whole lifecycle exists to prevent — an install would
+/// silently change what the project claims it saw, retroactively.
+fn effective_observation_context(
+    ws: &Workspace,
+    contributions: &crate::extension::ActiveContributions,
+) -> ObservationContext {
+    let _ = ws;
+    let mut bindings: Vec<crate::dcg::observation::ViewRuleBinding> = contributions
+        .policies
+        .iter()
+        .filter(|preset| !preset.value.view_rules.exclusions.is_empty())
+        .map(|preset| crate::dcg::observation::ViewRuleBinding {
+            binding_id: crate::dcg::observation::ViewRuleBindingId(format!(
+                "view:{}",
+                preset.extension_id
+            )),
+            contribution_id: preset.extension_id.clone(),
+            contribution_semantics_digest: try_canonical_hash(&preset.value.view_rules)
+                .unwrap_or_default(),
+        })
+        .collect();
+    // Deterministic and installation-order independent: two projects with the
+    // same packages installed observe under the same context digest.
+    bindings.sort_by(|a, b| a.binding_id.0.cmp(&b.binding_id.0));
+    bindings.dedup_by(|a, b| a.binding_id == b.binding_id);
+
+    let mut context = baseline_observation_context();
+    context.view_rule_bindings = bindings;
+    ObservationContext::build(context.adapter_bindings, context.view_rule_bindings)
+}
+
+/// A predicate-evaluable view of one observed resource.
+fn resource_view_of(
+    state: &crate::dcg::resource::RawResourceState,
+) -> crate::extension::ResourceView<'_> {
+    crate::extension::ResourceView {
+        locator_scheme: state.locator.scheme.as_str(),
+        locator_body: state.locator.body.as_str(),
+        media_type: state.media_type.as_deref(),
+        form: state.form,
+        attributes: &state.attributes,
+        content_size: state.content_size,
+    }
+}
+
+/// The rendering that always exists.
+///
+/// It is a platform engine, not a contribution, so a resource from a domain
+/// nothing understands still displays — as its own intrinsic facts. That is
+/// what makes an unknown domain usable rather than blank.
+const NEUTRAL_PRESENTATION: &str = "metadata_summary";
+
+/// Where revision-bound representations live.
+fn representation_store(
+    layout: &crate::project::layout::DraftLayout,
+) -> crate::evidence::representation::RepresentationStore {
+    crate::evidence::representation::RepresentationStore::new(layout.representations_dir())
+}
+
+/// Every exclusion the installed presets contribute, in a stable order.
+fn contributed_view_rules(
+    contributions: &crate::extension::ActiveContributions,
+) -> Vec<draft_extension_contract::ResourceRule> {
+    let mut rules: Vec<_> = contributions
+        .policies
+        .iter()
+        .flat_map(|preset| preset.value.view_rules.exclusions.iter().cloned())
+        .collect();
+    rules.sort_by_key(|rule| {
+        try_canonical_hash(&rule.predicate).unwrap_or_else(|_| rule.reason.clone())
+    });
+    rules
+}
+
+/// The zero-extension observation context: Draft's own filesystem observer and
+/// nothing else.
+fn baseline_observation_context() -> ObservationContext {
+    ObservationContext::build(
+        vec![crate::dcg::observation::AdapterObservationBinding {
+            binding_id: crate::dcg::snapshot::filesystem_binding_id(),
+            contribution_id: crate::dcg::snapshot::FILESYSTEM_BINDING.to_string(),
+            contribution_semantics_digest: try_canonical_hash(&serde_json::json!({
+                "adapter": crate::dcg::snapshot::FILESYSTEM_BINDING,
+                "revision": crate::dcg::snapshot::FILESYSTEM_OBSERVER_REVISION,
+            }))
+            .unwrap_or_default(),
+            mechanism: crate::dcg::observation::EffectiveObservationMechanism::Engine {
+                engine: crate::extension::EngineId::ResourceEnumeration,
+                engine_revision: crate::dcg::snapshot::FILESYSTEM_OBSERVER_REVISION,
+                engine_config_digest: try_canonical_hash(&serde_json::json!({}))
+                    .unwrap_or_default(),
+                request_schema_digest: String::new(),
+                response_schema_digest: String::new(),
+                coverage_domain_semantics_digest: try_canonical_hash(&serde_json::json!({
+                    "partition": "single-universe-with-incomplete-subtrees",
+                    "revision": crate::dcg::snapshot::FILESYSTEM_OBSERVER_REVISION,
+                }))
+                .unwrap_or_default(),
+            },
+        }],
+        vec![],
+    )
 }
 
 fn load_snapshot(ws: &Workspace, id: &SnapshotId) -> DraftResult<Snapshot> {
     if id.as_str() == "chk_empty" {
         return Ok(empty_snapshot(ws));
     }
-    crate::contracts::read_persisted(&ws.layout.snapshots_dir().join(format!("{}.json", id)))
+    crate::contracts::read_persisted(&ws.layout.snapshot_file(id.as_str()))
 }
 
-fn snapshot_file_fingerprint(snapshot: &Snapshot) -> String {
-    let mut files = snapshot.files.clone();
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    let stable = files
-        .into_iter()
-        .map(|f| {
-            serde_json::json!({
-                "path": f.path,
-                "file_kind": f.file_kind,
-                "content_hash": f.content_hash,
-                "size_bytes": f.size_bytes,
-                "executable": f.executable,
-            })
+/// The locators a transition touches, for display and for risk hotspots.
+fn changed_locators(change_set: &ChangeSet) -> Vec<ResourceLocator> {
+    let mut locators: Vec<ResourceLocator> = change_set
+        .resources
+        .iter()
+        .filter_map(|change| {
+            change
+                .after
+                .as_ref()
+                .or(change.before.as_ref())
+                .map(|side| side.locator.clone())
         })
-        .collect::<Vec<_>>();
-    sha256_hex(canonical_json(&Value::Array(stable)).as_bytes())
-}
-
-fn diff_snapshots(ws: &Workspace, base: &Snapshot, result: &Snapshot) -> DraftResult<PatchSet> {
-    let mut patch = diff_snapshot_values(base, result)?;
-    enrich_patch_hunks(ws, base, result, &mut patch)?;
-    patch.patch_graph_hash.clear();
-    patch.patch_graph_hash = hash_json(&patch)?;
-    write_json(
-        &ws.layout.tmp_dir().join(format!("{}.json", patch.id)),
-        &patch,
-    )?;
-    Ok(patch)
-}
-
-fn diff_snapshot_values(base: &Snapshot, result: &Snapshot) -> DraftResult<PatchSet> {
-    let old: BTreeMap<_, _> = base
-        .files
-        .iter()
-        .map(|f| (f.path.clone(), f.clone()))
         .collect();
-    let new: BTreeMap<_, _> = result
-        .files
-        .iter()
-        .map(|f| (f.path.clone(), f.clone()))
-        .collect();
-    let files = diff_manifests(&old, &new)
-        .into_iter()
-        .map(|c| FilePatch {
-            path: c.path,
-            old_path: match &c.change_kind {
-                FileChangeKind::Renamed { from } => Some(from.clone()),
-                _ => None,
-            },
-            change_kind: c.change_kind,
-            hunks: vec![],
-            binary: matches!(c.file_kind, FileKind::Binary),
-            old_hash: c.old_hash,
-            new_hash: c.new_hash,
-        })
-        .collect::<Vec<_>>();
-    let mut patch = PatchSet {
-        schema_version: current_version(ContractId::PatchSet),
-        id: PatchSetId::generate(),
-        base_snapshot_id: base.id.clone(),
-        result_snapshot_id: result.id.clone(),
-        files,
-        patch_graph_hash: String::new(),
-    };
-    patch.patch_graph_hash = hash_json(&patch)?;
-    Ok(patch)
-}
-
-fn enrich_patch_hunks(
-    ws: &Workspace,
-    base: &Snapshot,
-    result: &Snapshot,
-    patch: &mut PatchSet,
-) -> DraftResult<()> {
-    let store = ObjectStore::new(ws.layout.clone());
-    let old_by_path: BTreeMap<_, _> = base
-        .files
-        .iter()
-        .map(|f| (f.path.clone(), f.clone()))
-        .collect();
-    let new_by_path: BTreeMap<_, _> = result
-        .files
-        .iter()
-        .map(|f| (f.path.clone(), f.clone()))
-        .collect();
-    for file in &mut patch.files {
-        if file.binary {
-            continue;
-        }
-        let old_entry = file
-            .old_path
-            .as_ref()
-            .and_then(|p| old_by_path.get(p))
-            .or_else(|| old_by_path.get(&file.path));
-        let new_entry = new_by_path.get(&file.path);
-        let old_text = read_text_object(&store, old_entry.and_then(|e| e.content_hash.as_ref()))?;
-        let new_text = read_text_object(&store, new_entry.and_then(|e| e.content_hash.as_ref()))?;
-        if old_text.is_none() && new_text.is_none() {
-            continue;
-        }
-        file.hunks = build_text_hunks(
-            &store,
-            &file.path,
-            old_text.as_deref().unwrap_or(""),
-            new_text.as_deref().unwrap_or(""),
-        )?;
-    }
-    Ok(())
-}
-
-fn read_text_object(
-    store: &ObjectStore,
-    object_ref: Option<&String>,
-) -> DraftResult<Option<String>> {
-    let Some(object_ref) = object_ref else {
-        return Ok(None);
-    };
-    let bytes = store.get_bytes(object_ref)?;
-    match String::from_utf8(bytes) {
-        Ok(s) => Ok(Some(s)),
-        Err(_) => Ok(None),
-    }
-}
-
-fn build_text_hunks(
-    store: &ObjectStore,
-    path: &WorkspacePath,
-    old_text: &str,
-    new_text: &str,
-) -> DraftResult<Vec<PatchHunk>> {
-    if old_text == new_text {
-        return Ok(Vec::new());
-    }
-    let old_lines = split_lines_preserve(old_text);
-    let new_lines = split_lines_preserve(new_text);
-    let mut prefix = 0usize;
-    while prefix < old_lines.len()
-        && prefix < new_lines.len()
-        && old_lines[prefix] == new_lines[prefix]
-    {
-        prefix += 1;
-    }
-    let mut suffix = 0usize;
-    while suffix + prefix < old_lines.len()
-        && suffix + prefix < new_lines.len()
-        && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
-    let old_changed = &old_lines[prefix..old_lines.len().saturating_sub(suffix)];
-    let new_changed = &new_lines[prefix..new_lines.len().saturating_sub(suffix)];
-    let old_start = prefix as u32 + 1;
-    let new_start = prefix as u32 + 1;
-    let old_joined = old_changed.concat();
-    let new_joined = new_changed.concat();
-    let hunk_body = format!(
-        "--- {}\n+++ {}\n@@ -{},{} +{},{} @@\n{}{}",
-        path,
-        path,
-        old_start,
-        old_changed.len(),
-        new_start,
-        new_changed.len(),
-        old_changed
-            .iter()
-            .map(|l| format!("-{l}"))
-            .collect::<String>(),
-        new_changed
-            .iter()
-            .map(|l| format!("+{l}"))
-            .collect::<String>(),
-    );
-    let old_hash = if old_joined.is_empty() {
-        None
-    } else {
-        Some(format!("b3:{}", blake3_hex(old_joined.as_bytes())))
-    };
-    let new_hash = if new_joined.is_empty() {
-        None
-    } else {
-        Some(format!("b3:{}", blake3_hex(new_joined.as_bytes())))
-    };
-    let id_input = format!(
-        "{}:{}:{}:{}:{}:{}",
-        path,
-        old_start,
-        old_changed.len(),
-        new_start,
-        new_changed.len(),
-        sha256_hex(hunk_body.as_bytes())
-    );
-    let hunk_digest = sha256_hex(id_input.as_bytes());
-    let hunk_digest = hunk_digest
-        .strip_prefix("sha256:")
-        .expect("canonical SHA-256 digests carry their algorithm prefix");
-    Ok(vec![PatchHunk {
-        id: format!("hunk_{}", &hunk_digest[..12]),
-        old_start,
-        old_lines: old_changed.len() as u32,
-        new_start,
-        new_lines: new_changed.len() as u32,
-        content_ref: store.put_bytes(hunk_body.as_bytes())?,
-        old_content_hash: old_hash,
-        new_content_hash: new_hash,
-    }])
-}
-
-fn split_lines_preserve(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    text.split_inclusive('\n')
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn file_level_conflict(left: &FilePatch, right: &FilePatch) -> bool {
-    left.hunks.is_empty()
-        || right.hunks.is_empty()
-        || left.binary
-        || right.binary
-        || !matches!(
-            (&left.change_kind, &right.change_kind),
-            (FileChangeKind::Modified, FileChangeKind::Modified)
-        )
-}
-
-fn hunk_overlaps(left: &PatchSet, right: &PatchSet) -> Vec<HunkOverlap> {
-    let mut out = Vec::new();
-    for lf in &left.files {
-        for rf in right.files.iter().filter(|rf| rf.path == lf.path) {
-            if file_level_conflict(lf, rf) {
-                continue;
-            }
-            for lh in &lf.hunks {
-                for rh in &rf.hunks {
-                    if ranges_overlap(lh.old_start, lh.old_lines, rh.old_start, rh.old_lines)
-                        || ranges_overlap(lh.new_start, lh.new_lines, rh.new_start, rh.new_lines)
-                    {
-                        out.push(HunkOverlap {
-                            path: lf.path.clone(),
-                            left_hunk_id: lh.id.clone(),
-                            right_hunk_id: rh.id.clone(),
-                            old_start: lh.old_start.min(rh.old_start),
-                            old_end: range_end(lh.old_start, lh.old_lines)
-                                .max(range_end(rh.old_start, rh.old_lines)),
-                            new_start: lh.new_start.min(rh.new_start),
-                            new_end: range_end(lh.new_start, lh.new_lines)
-                                .max(range_end(rh.new_start, rh.new_lines)),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    out
-}
-
-fn ranges_overlap(a_start: u32, a_len: u32, b_start: u32, b_len: u32) -> bool {
-    let a_end = range_end(a_start, a_len);
-    let b_end = range_end(b_start, b_len);
-    a_start <= b_end && b_start <= a_end
-}
-
-fn range_end(start: u32, len: u32) -> u32 {
-    if len == 0 {
-        start
-    } else {
-        start + len - 1
-    }
+    locators.sort();
+    locators.dedup();
+    locators
 }
 
 fn load_json_dir<T: serde::de::DeserializeOwned + crate::contracts::VersionedContract>(
@@ -9150,229 +6293,74 @@ fn load_json_dir<T: serde::de::DeserializeOwned + crate::contracts::VersionedCon
     Ok(out)
 }
 
-fn load_pack(ws: &Workspace, id: &str) -> DraftResult<PackWorkspace> {
-    let pack: PackWorkspace = crate::contracts::read_persisted(
+fn load_change(ws: &Workspace, id: &str) -> DraftResult<ChangeWorkspace> {
+    let change: ChangeWorkspace = crate::contracts::read_persisted(
         &ws.layout
-            .pack_workspaces_dir()
+            .change_workspaces_dir()
             .join(id)
             .join("staging.json"),
     )?;
-    pack.validate()?;
-    Ok(pack)
+    change.validate()?;
+    Ok(change)
 }
 
-fn pack_lifecycle(ws: &Workspace, id: &PackId) -> DraftResult<PackLifecycle> {
-    let store = crate::pack::PackStore::new(ws.layout.clone());
-    let location = store.locate(id.as_str()).ok_or_else(|| {
-        DraftError::new(
-            DraftErrorKind::CorruptData,
-            format!("pack staging state {} has no canonical pack", id),
-        )
-    })?;
-    Ok(store.read_lifecycle_in(location, id.as_str())?.lifecycle)
+/// Work that removing the project would destroy.
+///
+/// Every Change still open. A Change stays open until a promotion carries one
+/// of its revisions onto the accepted Baseline, so an open one is unfinished
+/// work by definition — and this is the only thing standing between a person
+/// and deleting it, which is why counting the wrong records here is worse than
+/// not counting at all: the refusal still prints, and it always says zero.
+fn unsafe_pending_change_count(paths: &crate::project::layout::DraftLayout) -> DraftResult<usize> {
+    let store = crate::dcg::change::ChangeStore::new(paths.changes_dir());
+    Ok(store
+        .list()?
+        .into_iter()
+        .filter(|change| change.lifecycle.accepts_work())
+        .count())
 }
 
-fn save_pack_staging(ws: &Workspace, pack: &mut PackWorkspace) -> DraftResult<()> {
-    pack.updated_at = now();
-    pack.manifest_hash.clear();
-    pack.manifest_hash = hash_json(pack)?;
-    write_json(
-        &ws.layout.pack_workspace_dir(&pack.id).join("staging.json"),
-        pack,
-    )
-}
-
-fn dispose_pack_metadata(
-    ws: &Workspace,
-    paths: &crate::workspace::layout::DraftLayout,
-    pack_id: &str,
-) -> DraftResult<usize> {
-    validate_pack_id(pack_id)?;
-    let mut removed = 0;
-    let staging_dir = ws.layout.pack_workspaces_dir().join(pack_id);
-    if staging_dir.exists() {
-        std::fs::remove_dir_all(&staging_dir)
-            .map_err(|e| DraftError::storage(format!("dispose pack {pack_id}: {e}")))?;
-        removed += 1;
-    }
-    // Canonical manifests, revisions, lifecycle, evidence, and receipts are
-    // immutable history. Disposal removes only mutable staging state.
-    let selected = ws.layout.selected_pack_file();
-    if selected.exists()
-        && std::fs::read_to_string(&selected)
-            .map(|s| s.trim() == pack_id)
-            .unwrap_or(false)
-    {
-        std::fs::remove_file(&selected)
-            .map_err(|e| DraftError::storage(format!("clear selected pack: {e}")))?;
-        removed += 1;
-    }
-    crate::review::index::AffectedPathIndex::remove(paths, pack_id)?;
-    Ok(removed)
-}
-
-fn unsafe_pending_pack_count(paths: &crate::workspace::layout::DraftLayout) -> DraftResult<usize> {
-    if !paths.packs_dir().exists() {
-        return Ok(0);
-    }
-    let mut count = 0;
-    for entry in std::fs::read_dir(paths.packs_dir())? {
-        let manifest_path = entry?.path().join("manifest.json");
-        if !manifest_path.exists() {
-            continue;
-        }
-        let manifest: crate::pack::PackManifest = crate::contracts::read_persisted(&manifest_path)?;
-        if manifest.description != "base pack" {
-            count += 1;
-        }
-    }
-    Ok(count)
-}
-
-fn load_patch(ws: &Workspace, pack: &PackWorkspace) -> DraftResult<PatchSet> {
-    let patch: PatchSet = crate::contracts::read_persisted(
-        &ws.layout.pack_workspace_dir(&pack.id).join("patch.json"),
+/// The authoritative transition a Change carries.
+///
+/// Validated on load: a change set names its base and result by digest, and a
+/// substituted or corrupted record is refused rather than silently trusted.
+fn load_change_set(ws: &Workspace, change: &ChangeWorkspace) -> DraftResult<ChangeSet> {
+    let change_set: ChangeSet = crate::contracts::read_persisted(
+        &ws.layout
+            .change_workspace_dir(&change.id)
+            .join("changes.json"),
     )?;
-    let mut canonical = patch.clone();
-    canonical.patch_graph_hash.clear();
-    if patch.patch_graph_hash != hash_json(&canonical)? {
+    // Validated by recomputing the canonical identity, not by hashing the
+    // record: a re-recorded transition keeps its identity, and a substituted
+    // one loses it.
+    if change_set.change_set_digest != change_set.compute_digest() {
         return Err(DraftError::new(
             DraftErrorKind::CorruptData,
-            format!("pack {} patch graph digest mismatch", pack.id),
+            format!("change {} change set digest mismatch", change.id),
         ));
     }
-    Ok(patch)
+    Ok(change_set)
 }
 
-fn load_evidence(ws: &Workspace, pack: &PackWorkspace) -> DraftResult<Evidence> {
-    crate::contracts::read_persisted(&ws.layout.pack_workspace_dir(&pack.id).join("evidence.json"))
-}
-
-fn pack_has_path_conflicts(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-    patch: &PatchSet,
-) -> DraftResult<bool> {
-    let paths: BTreeSet<String> = patch
-        .files
-        .iter()
-        .map(|f| f.path.as_str().to_string())
-        .collect();
-    if paths.is_empty() {
-        return Ok(false);
-    }
-    if !ws.layout.pack_workspaces_dir().exists() {
-        return Ok(false);
-    }
-    for entry in fs::read_dir(ws.layout.pack_workspaces_dir())? {
-        let path = entry?.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let manifest = path.join("staging.json");
-        if !manifest.exists() {
-            continue;
-        }
-        let other: PackWorkspace = crate::contracts::read_persisted(&manifest)?;
-        let lifecycle = pack_lifecycle(ws, &other.id)?;
-        if other.id == pack.id
-            || matches!(
-                lifecycle,
-                PackLifecycle::Submitted | PackLifecycle::Rejected
-            )
-        {
-            continue;
-        }
-        let other_patch = load_patch(ws, &other)?;
-        if other_patch
-            .files
-            .iter()
-            .any(|f| paths.contains(f.path.as_str()))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn patch_changed_lines(patch: &PatchSet) -> u64 {
-    patch
-        .files
-        .iter()
-        .flat_map(|file| file.hunks.iter())
-        .map(|hunk| u64::from(hunk.old_lines.max(hunk.new_lines)))
-        .sum()
-}
-
-fn patch_zones(patch: &PatchSet) -> usize {
-    patch
-        .files
-        .iter()
-        .filter_map(|file| file.path.as_str().split('/').next())
-        .filter(|zone| !zone.is_empty())
-        .collect::<BTreeSet<_>>()
-        .len()
-}
-
-fn hooks_submit_ready(ws: &Workspace) -> DraftResult<bool> {
-    let cfg = ResolvedConfig::load(ws)?;
-    let hooks = cfg
-        .submit_hooks(SubmitHookPhase::Before)
-        .into_iter()
-        .chain(cfg.submit_hooks(SubmitHookPhase::After));
-    Ok(hooks
-        .filter(|hook| hook.enabled)
-        .all(|hook| !hook.command.trim().is_empty()))
-}
-
-fn ensure_workspace_matches_hash(
-    ws: &Workspace,
-    expected_hash: &str,
-    action: &str,
-    suggestion: &str,
-) -> DraftResult<()> {
-    let current_hash = crate::workspace::source_view::workspace_hash(&ws.root)?;
-    if current_hash == expected_hash {
-        return Ok(());
-    }
-    Err(DraftError::new(
-        DraftErrorKind::DirtyWorkspace,
-        format!("workspace has Draft-visible edits that are not part of the {action} baseline"),
-    )
-    .with_context(format!(
-        "expected workspace hash {expected_hash}, found {current_hash}"
-    ))
-    .with_suggestion(suggestion))
-}
-
-fn ensure_pack_workspace_matches_target(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-    action: &str,
-    suggestion: &str,
-) -> DraftResult<()> {
-    let store =
-        crate::pack::PackStore::new(crate::workspace::layout::DraftLayout::for_root(&ws.root));
-    let Some(location) = store.locate(pack.id.as_str()) else {
-        return Ok(());
-    };
-    let revision = store.current_revision_in(location, pack.id.as_str())?;
-    ensure_workspace_matches_hash(ws, &revision.target_digest, action, suggestion)
-}
-
-fn decision_dirty_action(kind: DecisionKind) -> &'static str {
-    match kind {
-        DecisionKind::Approve => "approve",
-        DecisionKind::Reject => "reject",
-        DecisionKind::NeedsChanges => "request changes",
-        DecisionKind::AcceptFile => "accept file",
-        DecisionKind::RejectFile => "reject file",
-        DecisionKind::AcceptCandidate => "accept candidate",
-    }
+/// The producer record for one contributed extension.
+pub(crate) fn producer_ref_for(
+    contributions: &crate::extension::ActiveContributions,
+    extension_id: &str,
+) -> crate::extension::ProducerRef {
+    contributions
+        .attestations
+        .get(extension_id)
+        .cloned()
+        .unwrap_or_else(|| crate::extension::ProducerRef {
+            extension_id: extension_id.to_string(),
+            extension_version: String::new(),
+            package_digest: String::new(),
+            attestation_digest: String::new(),
+        })
 }
 
 fn insert_inbox(
-    by_id: &mut BTreeMap<String, crate::review::workflow::InboxItem>,
+    by_id: &mut BTreeMap<String, crate::read_model::inbox::InboxItem>,
     id: String,
     kind: &str,
     subject_id: String,
@@ -9382,7 +6370,7 @@ fn insert_inbox(
 ) {
     by_id
         .entry(id.clone())
-        .or_insert(crate::review::workflow::InboxItem {
+        .or_insert(crate::read_model::inbox::InboxItem {
             schema_version: current_version(ContractId::InboxItem),
             id,
             kind: kind.into(),
@@ -9457,551 +6445,6 @@ fn collect_newest_mtime(
     Ok(())
 }
 
-fn submit_readiness(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-    patch: &PatchSet,
-    policy: &crate::review::policy::Policy,
-) -> DraftResult<SubmitReadinessReport> {
-    let mut blockers = Vec::new();
-    let verification = latest_current_passed_verification(ws, pack)?;
-    if verification.is_none() {
-        blockers.push("current passed verification receipt is required before submit".to_string());
-    }
-    let review =
-        latest_completed_review_after(ws, pack, verification.as_ref().map(|v| v.created_at))?;
-    let approval = latest_human_approval_after(ws, pack, review.as_ref().map(|r| r.created_at))?;
-    let lifecycle = pack_lifecycle(ws, &pack.id)?;
-    if policy.require_approval_for_submit {
-        if review.is_none() {
-            blockers.push("current review receipt is required before submit".to_string());
-        }
-        if approval.is_none() || lifecycle != PackLifecycle::Approved {
-            blockers
-                .push("human approval is required after current review before submit".to_string());
-        }
-    }
-    let workflow = crate::review::workflow::WorkflowStore::for_root(&ws.root);
-    let mut paths_to_check = Vec::new();
-    for file in &patch.files {
-        paths_to_check.push(&file.path);
-        if let Some(old_path) = &file.old_path {
-            paths_to_check.push(old_path);
-        }
-    }
-    let protected_violations =
-        crate::workspace::protected::violations(&ws.root, paths_to_check.clone())?;
-    let no_protected = protected_violations.is_empty();
-    let no_forbidden = paths_to_check
-        .iter()
-        .all(|path| !path.as_str().starts_with(".draft/") && path.as_str() != ".draft");
-    let stable_store = crate::workspace::stable::StableHeadStore::new(
-        crate::workspace::layout::DraftLayout::for_root(&ws.root),
-    );
-    let base_valid = if stable_store.exists() {
-        stable_store.read()?;
-        true
-    } else {
-        false
-    };
-    let no_conflicts = !pack_has_path_conflicts(ws, pack, patch)?;
-    let hooks_ready = hooks_submit_ready(ws)?;
-    let patch_paths = paths_to_check
-        .iter()
-        .map(|path| path.as_str().to_string())
-        .collect::<Vec<_>>();
-    let decision_authors = workflow
-        .decisions()?
-        .into_iter()
-        .filter(|decision| decision.pack_id.as_deref() == Some(pack.id.as_str()))
-        .map(|decision| decision.author)
-        .collect::<Vec<_>>();
-    let ownership =
-        crate::workspace::ownership::evaluate(&ws.root, &patch_paths, &decision_authors)?;
-    if ownership.missing_owner_review {
-        blockers.push(format!(
-            "owner_review: owner review required for {}",
-            ownership.domains.join(", ")
-        ));
-    }
-    let changed_lines = patch_changed_lines(patch);
-    let zones = patch_zones(patch);
-    let unresolved_warnings = load_evidence(ws, pack)?.warnings.len();
-    let reviewability = crate::review::reviewability::evaluate(
-        &crate::review::reviewability::budget(&ws.root)?,
-        patch.files.len(),
-        changed_lines,
-        zones,
-        ownership.domains.len(),
-        unresolved_warnings,
-    );
-    if reviewability.status == "poor" {
-        blockers.push(format!(
-            "reviewability: {}",
-            reviewability.reasons.join("; ")
-        ));
-    }
-    let rollback_available = pack.base_snapshot_id.as_str() != "chk_empty"
-        || latest_snapshot(ws)?.is_some()
-        || crate::workspace::stable::StableHeadStore::new(
-            crate::workspace::layout::DraftLayout::for_root(&ws.root),
-        )
-        .exists();
-    let view = workflow.readiness(
-        pack.id.as_str(),
-        true,
-        base_valid,
-        no_conflicts,
-        no_protected,
-        no_forbidden,
-        hooks_ready,
-        rollback_available,
-    )?;
-    for check in view.checks.into_iter().filter(|check| !check.passed) {
-        if check.id == "protected_files" {
-            for violation in &protected_violations {
-                blockers.push(format!(
-                    "{}: {} matched {} ({})",
-                    check.id, violation.path, violation.pattern, violation.reason
-                ));
-            }
-            if protected_violations.is_empty() {
-                blockers.push(format!("{}: {}", check.id, check.reason));
-            }
-        } else {
-            blockers.push(format!("{}: {}", check.id, check.reason));
-        }
-    }
-    Ok(SubmitReadinessReport {
-        ok: blockers.is_empty(),
-        blockers,
-        ownership: Some(ownership),
-        reviewability: Some(reviewability),
-        verification_receipt_id: verification.map(|v| v.id),
-        review_receipt_id: review.map(|r| r.id),
-        approval_ref: approval,
-    })
-}
-
-/// Resolve the effective policy for a workspace: project `.draft/policy.toml`
-/// over the global default policy over the built-in safe default. Fails closed
-/// on an unreadable or malformed policy file.
-fn effective_policy(ws: &Workspace) -> DraftResult<crate::review::policy::Policy> {
-    let project = crate::workspace::layout::DraftLayout::for_root(&ws.root).policy_toml();
-    let global = Some(crate::workspace::home::DraftGlobalStore::locate()?.default_policy_toml());
-    crate::review::policy::Policy::resolve(Some(&project), global.as_deref())
-}
-
-fn validate_canonical_submit_gate(ws: &Workspace, pack_id: &str) -> DraftResult<()> {
-    let policy = effective_policy(ws)?;
-    let paths = crate::workspace::layout::DraftLayout::for_root(&ws.root);
-    let store = crate::pack::PackStore::new(paths.clone());
-    store.read_manifest(pack_id)?;
-    let revision = store.current_revision_in(crate::pack::PackLocation::Store, pack_id)?;
-    let lifecycle = store.read_lifecycle_in(crate::pack::PackLocation::Store, pack_id)?;
-    let verification_path = paths.pack_verify(pack_id);
-    if !verification_path.exists() {
-        return Err(DraftError::new(
-            DraftErrorKind::VerificationFailed,
-            "canonical verification evidence is required before submit",
-        )
-        .with_suggestion("run `draft verify <pck_id>` before submit"));
-    }
-    let evidence: crate::review::verification::VerifyEvidence =
-        crate::contracts::read_persisted(&verification_path)?;
-    evidence.validate_binding(&revision)?;
-    if !evidence.passed() {
-        return Err(DraftError::new(
-            DraftErrorKind::VerificationFailed,
-            "canonical verification receipt is required before submit",
-        ));
-    }
-    if policy.require_approval_for_submit
-        && lifecycle.lifecycle != crate::pack::lifecycle::PackLifecycle::Approved
-    {
-        return Err(DraftError::new(
-            DraftErrorKind::ReviewRequired,
-            "canonical approval receipt is required before submit",
-        ));
-    }
-    if store.is_quarantined(pack_id) {
-        return Err(DraftError::new(
-            DraftErrorKind::ReviewRequired,
-            "imported packs must be locally verified and approved before submit",
-        ));
-    }
-    validate_canonical_risk_gate(
-        &policy,
-        &paths,
-        pack_id,
-        &revision,
-        lifecycle.lifecycle == crate::pack::lifecycle::PackLifecycle::Approved,
-    )?;
-    if policy.require_reverify_on_workspace_change {
-        let current_hash = crate::workspace::source_view::workspace_hash(&ws.root)?;
-        if evidence
-            .verification_key
-            .as_ref()
-            .map(|key| key.workspace_hash.as_str())
-            != Some(current_hash.as_str())
-        {
-            return Err(DraftError::new(
-                DraftErrorKind::VerificationFailed,
-                "workspace content changed after canonical verification",
-            )
-            .with_suggestion("run `draft verify <pck_id>` again before submit"));
-        }
-    }
-    let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-    let verification = ledger.verify_all()?;
-    if !verification.all_ok {
-        return Err(DraftError::new(
-            DraftErrorKind::OperationLogCorrupt,
-            "canonical event, receipt, or transparency ledger failed verification",
-        )
-        .with_suggestion("run `draft receipt verify --all` or `draft doctor`"));
-    }
-    Ok(())
-}
-
-/// Enforce the canonical risk report (`risk.json`) against the effective
-/// policy: an unresolved critical risk blocks submit, and high/critical risk
-/// requires explicit approval. A missing risk report fails closed when the
-/// policy blocks on critical risk.
-fn validate_canonical_risk_gate(
-    policy: &crate::review::policy::Policy,
-    paths: &crate::workspace::layout::DraftLayout,
-    pack_id: &str,
-    revision: &crate::pack::PackRevision,
-    approved: bool,
-) -> DraftResult<()> {
-    let risk_path = paths.pack_risk(pack_id);
-    if !risk_path.exists() {
-        if policy.block_on_critical_risk {
-            return Err(DraftError::new(
-                DraftErrorKind::RiskPolicyBlocked,
-                "no canonical risk report exists for this pack",
-            )
-            .with_suggestion("run `draft verify <pck_id>` before submit"));
-        }
-        return Ok(());
-    }
-    let risk: crate::review::risk::RiskReport = crate::contracts::read_persisted(&risk_path)?;
-    risk.validate_binding(revision)?;
-    if policy.block_on_critical_risk && risk.risk_level == crate::review::risk::RiskLevel::Critical
-    {
-        return Err(DraftError::new(
-            DraftErrorKind::RiskPolicyBlocked,
-            "unresolved critical risk blocks submit",
-        )
-        .with_suggestion("resolve the required actions in risk.json and re-verify"));
-    }
-    if policy.require_approval_on_high_risk
-        && matches!(
-            risk.risk_level,
-            crate::review::risk::RiskLevel::High | crate::review::risk::RiskLevel::Critical
-        )
-        && !approved
-    {
-        return Err(DraftError::new(
-            DraftErrorKind::ReviewRequired,
-            "high-risk pack requires explicit approval before submit",
-        ));
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct ReceiptRef {
-    id: String,
-    created_at: DateTime<Utc>,
-}
-
-fn latest_current_passed_verification(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-) -> DraftResult<Option<ReceiptRef>> {
-    let store = crate::pack::PackStore::new(ws.layout.clone());
-    let location = store.locate(pack.id.as_str()).ok_or_else(|| {
-        DraftError::new(
-            DraftErrorKind::CorruptData,
-            format!("pack staging state {} has no canonical pack", pack.id),
-        )
-    })?;
-    let revision = store.current_revision_in(location, pack.id.as_str())?;
-    let evidence_path = store
-        .dir_for(location, pack.id.as_str())
-        .join("verify.json");
-    if !evidence_path.exists() {
-        return Ok(None);
-    }
-    let evidence: crate::review::verification::VerifyEvidence =
-        crate::contracts::read_persisted(&evidence_path)?;
-    evidence.validate_binding(&revision)?;
-    if !evidence.passed() {
-        return Ok(None);
-    }
-
-    let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-    let record = crate::review::workflow::WorkflowStore::for_root(&ws.root)
-        .evidence()?
-        .into_iter()
-        .filter(|record| {
-            record.pack_id.as_deref() == Some(pack.id.as_str())
-                && record.kind == "verification"
-                && record.state == crate::review::workflow::EvidenceState::Fresh
-                && record.result.get("result_hash").and_then(Value::as_str)
-                    == Some(evidence.result_hash.as_str())
-        })
-        .max_by_key(|record| record.produced_at)
-        .ok_or_else(|| {
-            DraftError::new(
-                DraftErrorKind::CorruptData,
-                "canonical verification evidence has no linked workflow evidence record",
-            )
-        })?;
-    let receipt_id = record.receipt_id.ok_or_else(|| {
-        DraftError::new(
-            DraftErrorKind::CorruptData,
-            "canonical verification evidence has no linked receipt",
-        )
-    })?;
-    if !ledger.verify_receipt(&receipt_id)?.ok {
-        return Err(DraftError::new(
-            DraftErrorKind::CorruptData,
-            "canonical verification receipt failed validation",
-        ));
-    }
-    Ok(Some(ReceiptRef {
-        id: receipt_id,
-        created_at: record.produced_at,
-    }))
-}
-
-fn latest_completed_review_after(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-    after: Option<DateTime<Utc>>,
-) -> DraftResult<Option<ReceiptRef>> {
-    let mut latest = None;
-    let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-    let receipts = crate::trust::receipt::ReceiptStore::new(ws.layout.clone());
-    let events =
-        crate::trust::event::EventLog::workspace(ws.layout.clone(), ws.workspace_id.to_string())
-            .read_all()?;
-    for receipt_id in &pack.review_refs {
-        let receipt = receipts.read(receipt_id)?;
-        if receipt.event_type != "ReviewCompleted"
-            || receipt.subject_id.as_deref() != Some(pack.id.as_str())
-            || !ledger.verify_receipt(receipt_id)?.ok
-        {
-            continue;
-        }
-        let event = events
-            .iter()
-            .find(|event| event.event_hash == receipt.event_hash)
-            .ok_or_else(|| {
-                DraftError::new(DraftErrorKind::CorruptData, "receipt event is missing")
-            })?;
-        if event.metadata.get("status").and_then(Value::as_str) != Some("completed") {
-            continue;
-        }
-        let created_at = DateTime::parse_from_rfc3339(&receipt.timestamp)
-            .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?
-            .with_timezone(&Utc);
-        if after.map(|minimum| created_at < minimum).unwrap_or(false) {
-            continue;
-        }
-        if latest
-            .as_ref()
-            .map(|current: &ReceiptRef| created_at > current.created_at)
-            .unwrap_or(true)
-        {
-            latest = Some(ReceiptRef {
-                id: receipt_id.clone(),
-                created_at,
-            });
-        }
-    }
-    Ok(latest)
-}
-
-fn latest_human_approval_after(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-    after: Option<DateTime<Utc>>,
-) -> DraftResult<Option<String>> {
-    let review = load_review_file(ws, &pack.id)?;
-    Ok(review
-        .decisions
-        .into_iter()
-        .filter(|decision| {
-            decision.kind == DecisionKind::Approve
-                && decision.actor.kind == ActorKind::Human
-                && after
-                    .map(|minimum| decision.created_at >= minimum)
-                    .unwrap_or(true)
-        })
-        .max_by_key(|decision| decision.created_at)
-        .map(|decision| decision.id.to_string()))
-}
-
-fn load_review_file(ws: &Workspace, id: &PackId) -> DraftResult<ReviewFile> {
-    let path = ws.layout.pack_workspace_dir(id).join("review.json");
-    if !path.exists() {
-        return Ok(ReviewFile::default());
-    }
-    crate::contracts::read_persisted(&path)
-}
-
-fn save_review_file(ws: &Workspace, id: &PackId, file: &ReviewFile) -> DraftResult<()> {
-    write_json(&ws.layout.pack_workspace_dir(id).join("review.json"), file)
-}
-
-fn build_review_units(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-    risk: Option<&RiskSummary>,
-) -> DraftResult<Vec<ReviewUnit>> {
-    let patch = load_patch(ws, pack)?;
-    let hotspots: HashSet<_> = risk
-        .map(|summary| summary.hotspots.iter().cloned().collect())
-        .unwrap_or_default();
-    Ok(patch
-        .files
-        .into_iter()
-        .enumerate()
-        .map(|(idx, file)| {
-            let risk_contribution = if hotspots.contains(&file.path) { 10 } else { 1 };
-            ReviewUnit {
-                id: format!("rvu_{:04}", idx + 1),
-                path: file.path,
-                change_kind: format!("{:?}", file.change_kind),
-                risk_contribution,
-                evidence_refs: pack.evidence_refs.clone(),
-                provenance_refs: pack
-                    .task_id
-                    .as_ref()
-                    .map(|id| vec![id.to_string()])
-                    .unwrap_or_default(),
-                status: "pending".to_string(),
-            }
-        })
-        .collect())
-}
-
-fn split_patch(source: &PackWorkspace, files: Vec<FilePatch>) -> DraftResult<PatchSet> {
-    let mut patch = PatchSet {
-        schema_version: current_version(ContractId::PatchSet),
-        id: PatchSetId::generate(),
-        base_snapshot_id: source.base_snapshot_id.clone(),
-        result_snapshot_id: source.result_snapshot_id.clone(),
-        files,
-        patch_graph_hash: String::new(),
-    };
-    patch.patch_graph_hash = hash_json(&patch)?;
-    Ok(patch)
-}
-
-fn split_evidence(pack: &PackWorkspace, patch: &PatchSet, warning: &str) -> Evidence {
-    Evidence {
-        schema_version: current_version(ContractId::PackEvidence),
-        id: EvidenceId::generate(),
-        pack_id: pack.id.clone(),
-        command_logs: vec![],
-        files_touched: patch.files.iter().map(|f| f.path.clone()).collect(),
-        generated_diff_ref: None,
-        test_results: vec![],
-        lint_results: vec![],
-        risk_summary_ref: None,
-        agent_plan_ref: None,
-        agent_transcript_ref: None,
-        warnings: vec![warning.to_string()],
-        created_at: now(),
-    }
-}
-
-fn write_receipt(ws: &Workspace, receipt: &ActionReceiptDraft) -> DraftResult<()> {
-    let kind = match receipt.kind.as_str() {
-        "checkpoint" => crate::trust::event::EventKind::CheckpointCreated,
-        "verification" => crate::trust::event::EventKind::PackVerified,
-        "risk" => crate::trust::event::EventKind::RiskAssessed,
-        "review" => crate::trust::event::EventKind::ReviewCompleted,
-        "approval" => crate::trust::event::EventKind::PackApproved,
-        "compose" => crate::trust::event::EventKind::PackComposed,
-        "disperse" => crate::trust::event::EventKind::PackDispersed,
-        "hook" if receipt.status == "failed" => crate::trust::event::EventKind::SubmitHookFailed,
-        "hook" => crate::trust::event::EventKind::SubmitHookCompleted,
-        other => {
-            return Err(DraftError::invalid_config(format!(
-                "unsupported action receipt kind '{other}'"
-            )))
-        }
-    };
-    crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?
-        .record_with_receipt_id(
-            kind,
-            receipt.subject_id.clone(),
-            None,
-            crate::workspace::source_view::workspace_hash(&ws.root)?,
-            serde_json::json!({
-                "status": receipt.status,
-                "payload": redact_value(receipt.payload.clone()),
-                "rollback_target": receipt.rollback_target,
-            }),
-            receipt.id.to_string(),
-        )?;
-    Ok(())
-}
-
-fn write_submit_record(ws: &Workspace, receipt: &SubmitRecord) -> DraftResult<()> {
-    let mut receipt = receipt.clone();
-    collect_object_refs_into_vec(
-        &serde_json::to_value(&receipt.hook_results).expect("Draft-owned records must serialize"),
-        &mut receipt.object_refs,
-    );
-    receipt.object_refs.sort();
-    receipt.object_refs.dedup();
-    receipt.failure_reason = receipt
-        .failure_reason
-        .as_ref()
-        .map(|reason| redact_secrets(reason));
-    receipt.record_digest.clear();
-    receipt.record_digest = hash_json(&receipt)?;
-    let kind = if receipt.overall_status == SubmitOverallStatus::Failed {
-        crate::trust::event::EventKind::SubmitCompleted
-    } else {
-        crate::trust::event::EventKind::PackSubmitted
-    };
-    let rollback_snapshot_id = if ws
-        .layout
-        .pack_workspace_dir(&receipt.pack_id)
-        .join("staging.json")
-        .exists()
-    {
-        Some(
-            load_pack(ws, receipt.pack_id.as_str())?
-                .base_snapshot_id
-                .to_string(),
-        )
-    } else {
-        None
-    };
-    crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?
-        .record_with_receipt_id(
-            kind,
-            Some(receipt.pack_id.to_string()),
-            None,
-            crate::workspace::source_view::workspace_hash(&ws.root)?,
-            redact_value(serde_json::json!({
-                "submit": receipt,
-                "rollback_snapshot_id": rollback_snapshot_id,
-            })),
-            receipt.id.to_string(),
-        )?;
-    Ok(())
-}
-
 fn write_rollback_record(ws: &Workspace, receipt: &mut RollbackRecord) -> DraftResult<()> {
     receipt.record_digest.clear();
     receipt.record_digest = hash_json(receipt)?;
@@ -10018,7 +6461,7 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
     conn.execute("DELETE FROM tasks", []).map_err(sql_err)?;
     conn.execute("DELETE FROM executions", [])
         .map_err(sql_err)?;
-    conn.execute("DELETE FROM packs", []).map_err(sql_err)?;
+    conn.execute("DELETE FROM changes", []).map_err(sql_err)?;
     conn.execute("DELETE FROM receipts", []).map_err(sql_err)?;
     conn.execute("DELETE FROM snapshots", []).map_err(sql_err)?;
 
@@ -10028,10 +6471,10 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
             "INSERT INTO events (id, event_type, subject_id, time, event_hash) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 event.event_id,
-                event.event_type,
-                event.subject_id,
-                event.time,
-                event.event_hash
+                event.kind,
+                event.subject,
+                event.previous_hash,
+                event.record_hash
             ],
         )
         .map_err(sql_err)?;
@@ -10065,17 +6508,23 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
         .map_err(sql_err)?;
     }
 
-    let packs = App::new().pack_list(&ws.root)?;
-    for pack in &packs {
-        let lifecycle = pack_lifecycle(ws, &pack.id)?;
+    // The graph's Changes. A Change has no name of its own — what it is for
+    // lives in its definition — so the newest sealed revision stands in, which
+    // is what a searcher is actually looking for.
+    for change in App::new().dcg_changes(&ws.root)? {
+        let revision = change
+            .revisions
+            .first()
+            .map(|revision| revision.id.to_string())
+            .unwrap_or_default();
         conn.execute(
-            "INSERT INTO packs (id, name, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO changes (id, name, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                pack.id.to_string(),
-                pack.name.clone().unwrap_or_default(),
-                format!("{lifecycle:?}"),
-                pack.created_at.to_rfc3339(),
-                pack.updated_at.to_rfc3339()
+                change.change.to_string(),
+                revision,
+                format!("{:?}", change.lifecycle),
+                String::new(),
+                String::new()
             ],
         )
         .map_err(sql_err)?;
@@ -10111,12 +6560,12 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
     let snapshots: Vec<Snapshot> = load_json_dir(&ws.layout.snapshots_dir())?;
     for snapshot in &snapshots {
         conn.execute(
-            "INSERT INTO snapshots (id, manifest_hash, created_at, file_count) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO snapshots (id, snapshot_digest, created_at, resource_count) VALUES (?1, ?2, ?3, ?4)",
             params![
                 snapshot.id.to_string(),
-                snapshot.manifest_hash,
+                snapshot.snapshot_digest,
                 snapshot.created_at.to_rfc3339(),
-                snapshot.files.len() as i64
+                snapshot.resources.len() as i64
             ],
         )
         .map_err(sql_err)?;
@@ -10127,7 +6576,7 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
         events: events.len(),
         tasks: tasks.len(),
         executions: executions.len(),
-        packs: packs.len(),
+        changes: App::new().dcg_changes(&ws.root)?.len(),
         receipts: receipts.len(),
         snapshots: snapshots.len(),
     })
@@ -10135,6 +6584,35 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
 
 fn rebuild_index_for_layout(layout: &DraftLayout) -> DraftResult<()> {
     let conn = open_index(layout)?;
+
+    // The index is a derived cache, and a rebuild that inherited a stale table
+    // shape would not be one: `CREATE TABLE IF NOT EXISTS` silently keeps the
+    // old columns, and the first insert then fails on a column that is not
+    // there. So when the recorded revision is not the one this build writes,
+    // the derived tables are dropped and recreated. Authoritative state is
+    // untouched — everything here is re-derived from it on the next few lines.
+    let recorded: Option<String> = conn
+        .query_row(
+            "SELECT value FROM schema_info WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    let expected = current_version(ContractId::WorkspaceIndex).to_string();
+    if recorded.is_some_and(|found| found != expected) {
+        conn.execute_batch(
+            "
+            DROP TABLE IF EXISTS events;
+            DROP TABLE IF EXISTS tasks;
+            DROP TABLE IF EXISTS executions;
+            DROP TABLE IF EXISTS changes;
+            DROP TABLE IF EXISTS receipts;
+            DROP TABLE IF EXISTS snapshots;
+            ",
+        )
+        .map_err(sql_err)?;
+    }
+
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS schema_info (
@@ -10160,7 +6638,7 @@ fn rebuild_index_for_layout(layout: &DraftLayout) -> DraftResult<()> {
             status TEXT NOT NULL,
             started_at TEXT
         );
-        CREATE TABLE IF NOT EXISTS packs (
+        CREATE TABLE IF NOT EXISTS changes (
             id TEXT PRIMARY KEY,
             name TEXT,
             status TEXT NOT NULL,
@@ -10176,9 +6654,9 @@ fn rebuild_index_for_layout(layout: &DraftLayout) -> DraftResult<()> {
         );
         CREATE TABLE IF NOT EXISTS snapshots (
             id TEXT PRIMARY KEY,
-            manifest_hash TEXT NOT NULL,
+            snapshot_digest TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            file_count INTEGER NOT NULL
+            resource_count INTEGER NOT NULL
         );
         ",
     )
@@ -10200,367 +6678,57 @@ fn sql_err(e: rusqlite::Error) -> DraftError {
     DraftError::storage(format!("SQLite index error: {e}"))
 }
 
-fn failed_submit(
-    ws: &Workspace,
-    pack: &PackWorkspace,
-    started: DateTime<Utc>,
-    reason: &str,
-) -> DraftResult<SubmitRecord> {
-    let store = ObjectStore::new(ws.layout.clone());
-    let mut receipt = SubmitRecord {
-        schema_version: current_version(ContractId::SubmitRecord),
-        id: ReceiptId::generate(),
-        pack_id: pack.id.clone(),
-        actor_id: resolve_actor(&ws.layout.draft_dir)?.id,
-        native_submit_status: NativeSubmitStatus::Failed,
-        hook_status: HookStatus::Skipped,
-        overall_status: SubmitOverallStatus::Failed,
-        message_ref: store.put_bytes(b"")?,
-        hook_results: Vec::new(),
-        hook_receipt_refs: Vec::new(),
-        object_refs: Vec::new(),
-        event_refs: Vec::new(),
-        risk_level: "unknown".to_string(),
-        risk_receipt_id: None,
-        started_at: started,
-        ended_at: now(),
-        record_digest: String::new(),
-        failure_reason: Some(reason.to_string()),
-    };
-    receipt.record_digest = hash_json(&receipt)?;
-    write_submit_record(ws, &receipt)?;
-    Ok(receipt)
-}
-
-fn render_message(
-    ws: &Workspace,
-    cfg: &ResolvedConfig,
-    pack: &PackWorkspace,
-    patch: &PatchSet,
-    receipt_id: &ReceiptId,
-) -> DraftResult<String> {
-    let title = pack.name.clone().unwrap_or_else(|| pack.id.to_string());
-    let mut values = BTreeMap::new();
-    values.insert("message".to_string(), title.clone());
-    values.insert("title".to_string(), title);
-    values.insert("description".to_string(), String::new());
-    values.insert(
-        "task_id".to_string(),
-        pack.task_id
-            .as_ref()
-            .map(|x| x.as_str())
-            .unwrap_or("")
-            .to_string(),
-    );
-    values.insert(
-        "execution_id".to_string(),
-        pack.execution_id
-            .as_ref()
-            .map(|x| x.as_str())
-            .unwrap_or("")
-            .to_string(),
-    );
-    values.insert("pack_id".to_string(), pack.id.to_string());
-    values.insert("receipt_id".to_string(), receipt_id.to_string());
-    let actor_id = resolve_actor(&ws.layout.draft_dir)?.id.to_string();
-    values.insert("actor_name".to_string(), actor_id);
-    values.insert("timestamp".to_string(), now().to_rfc3339());
-    values.insert(
-        "verified".to_string(),
-        (!pack.verification_refs.is_empty()).to_string(),
-    );
-    values.insert("risk_level".to_string(), "unknown".to_string());
-    values.insert("files_changed".to_string(), patch.files.len().to_string());
-    Ok(interpolate_lenient(&cfg.submit_message_template, &values))
-}
-
-/// The fraction (0.0–1.0) of a candidate's packs that were later rolled back —
-/// a risk signal, never a verdict on its own. Returns 0.0 when the candidate
-/// has produced no packs. Live values stay 0.0 until candidate attribution is
-/// recorded on manifests.
-fn candidate_rollback_rate(
-    events: &[crate::trust::event::EventRecord],
-    manifests: &[crate::pack::PackManifest],
-    candidate: &str,
-) -> f64 {
-    let candidate_packs: Vec<&str> = manifests
-        .iter()
-        .filter(|m| m.candidate_id.as_deref() == Some(candidate))
-        .map(|m| m.pack_id.as_str())
-        .collect();
-    if candidate_packs.is_empty() {
-        return 0.0;
-    }
-    let rolled_back = candidate_packs
-        .iter()
-        .filter(|pack_id| {
-            events.iter().any(|e| {
-                e.event_type == "RollbackPerformed" && e.subject_id.as_deref() == Some(**pack_id)
-            })
-        })
-        .count();
-    rolled_back as f64 / candidate_packs.len() as f64
-}
-
-/// A fully validated import application plan: every write has its bytes in
-/// hand and every precondition was checked before anything touches the
-/// workspace.
-struct ImportApplyPlan {
-    writes: Vec<(PathBuf, Vec<u8>)>,
-    deletes: Vec<PathBuf>,
-}
-
-/// Validate that an imported patch applies cleanly to the current workspace
-/// and assemble the plan. Fail closed on the first conflict: a file whose
-/// current content does not match the patch's recorded `old_hash`, a missing
-/// content object, or an unsafe path. Already-applied entries are skipped so
-/// the apply is idempotent.
-fn plan_import_apply(
-    ws: &Workspace,
-    pack_dir: &Path,
-    patch: &PatchSet,
-) -> DraftResult<ImportApplyPlan> {
-    let current_hash = |p: &Path| -> DraftResult<Option<String>> {
-        if !p.is_file() {
-            return Ok(None);
-        }
-        Ok(Some(format!("b3:{}", blake3_hex(&fs::read(p)?))))
-    };
-    let conflict = |path: &WorkspacePath, why: &str| {
-        DraftError::new(
-            DraftErrorKind::SubmitFailed,
-            format!("cannot apply imported change to '{path}': {why}"),
-        )
-        .with_suggestion("resolve the local conflict, then re-verify and submit again")
-    };
-
-    let mut writes = Vec::new();
-    let mut deletes = Vec::new();
-    for f in &patch.files {
-        if is_draft_path(f.path.as_str()) {
-            continue;
-        }
-        let dest = safe_workspace_dest(&ws.root, &f.path)?;
-        let current = current_hash(&dest)?;
-        match &f.change_kind {
-            FileChangeKind::Added => {
-                let new_hash = f
-                    .new_hash
-                    .as_ref()
-                    .ok_or_else(|| conflict(&f.path, "added file has no recorded content hash"))?;
-                if current.as_deref() == Some(new_hash.as_str()) {
-                    continue; // already applied
-                }
-                if current.is_some() {
-                    return Err(conflict(
-                        &f.path,
-                        "a different local file already exists at this path",
-                    ));
-                }
-                writes.push((dest, read_imported_object(pack_dir, new_hash)?));
-            }
-            FileChangeKind::Modified
-            | FileChangeKind::TypeChanged
-            | FileChangeKind::PermissionChanged => {
-                let new_hash = f.new_hash.as_ref().ok_or_else(|| {
-                    conflict(&f.path, "modified file has no recorded content hash")
-                })?;
-                if current.as_deref() == Some(new_hash.as_str()) {
-                    continue; // already applied
-                }
-                if current.as_deref() != f.old_hash.as_deref() {
-                    return Err(conflict(
-                        &f.path,
-                        "local content differs from the change's base version",
-                    ));
-                }
-                writes.push((dest, read_imported_object(pack_dir, new_hash)?));
-            }
-            FileChangeKind::Deleted => {
-                match current {
-                    None => continue, // already applied
-                    Some(h) if Some(h.as_str()) == f.old_hash.as_deref() => deletes.push(dest),
-                    Some(_) => {
-                        return Err(conflict(
-                            &f.path,
-                            "local content differs from the change's base version",
-                        ))
-                    }
-                }
-            }
-            FileChangeKind::Renamed { from } => {
-                let new_hash = f.new_hash.as_ref().ok_or_else(|| {
-                    conflict(&f.path, "renamed file has no recorded content hash")
-                })?;
-                let source = safe_workspace_dest(&ws.root, from)?;
-                let source_hash = current_hash(&source)?;
-                if current.as_deref() == Some(new_hash.as_str()) && source_hash.is_none() {
-                    continue; // already applied
-                }
-                if source_hash.as_deref() != f.old_hash.as_deref() {
-                    return Err(conflict(
-                        from,
-                        "rename source differs from the change's base version",
-                    ));
-                }
-                if current.is_some() {
-                    return Err(conflict(
-                        &f.path,
-                        "a different local file already exists at the rename target",
-                    ));
-                }
-                writes.push((dest, read_imported_object(pack_dir, new_hash)?));
-                deletes.push(source);
-            }
-        }
-    }
-    Ok(ImportApplyPlan { writes, deletes })
-}
-
-/// Read a content object embedded in an imported pack directory, re-checking
-/// its content address (fail closed on post-import tampering or absence).
-fn read_imported_object(pack_dir: &Path, object_ref: &str) -> DraftResult<Vec<u8>> {
-    let hex = object_ref.strip_prefix("b3:").ok_or_else(|| {
-        DraftError::new(
-            DraftErrorKind::VerificationFailed,
-            format!("imported pack references unsupported object '{object_ref}'"),
-        )
-    })?;
-    let path = pack_dir.join("objects").join(hex);
-    if !path.exists() {
-        return Err(DraftError::new(
-            DraftErrorKind::VerificationFailed,
-            format!("imported pack is missing content object '{hex}'"),
-        )
-        .with_suggestion("re-export the pack with the current Draft release"));
-    }
-    let bytes = fs::read(&path)?;
-    if blake3_hex(&bytes) != hex {
-        return Err(DraftError::new(
-            DraftErrorKind::VerificationFailed,
-            format!("imported content object '{hex}' failed its content-address check"),
-        ));
-    }
-    Ok(bytes)
-}
-
 fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Snapshot> {
     if reference.starts_with("chk_") {
         validate_checkpoint_id(reference)?;
         return load_snapshot(ws, &SnapshotId::new(reference));
     }
-    if reference.starts_with("pck_") {
-        validate_pack_id(reference)?;
-        let staging = ws.layout.pack_workspace_dir(PackId::new(reference));
+    if reference.starts_with("chg_") {
+        validate_change_id(reference)?;
+        let staging = ws.layout.change_workspace_dir(ChangeId::new(reference));
         if !staging.join("staging.json").exists()
-            && crate::pack::PackStore::new(ws.layout.clone()).exists(reference)
+            && crate::dcg::change_store::ChangeContentStore::new(ws.layout.clone())
+                .exists(reference)
         {
-            let receipt = crate::trust::receipt::ReceiptStore::new(ws.layout.clone())
-                .list()?
-                .into_iter()
-                .rev()
-                .find(|receipt| {
-                    receipt.subject_id.as_deref() == Some(reference)
-                        && receipt.event_type == "PackSubmitted"
-                })
-                .map(|receipt| receipt.receipt_id)
-                .unwrap_or_else(|| "the signed submit receipt".to_string());
             return Err(DraftError::invalid_config(format!(
-                "submitted pack '{reference}' is immutable and its mutable staging snapshot was disposed; use rollback receipt '{receipt}'"
-            )));
+                "promoted change '{reference}' is immutable and its mutable staging snapshot was \
+                 disposed; recover to a checkpoint or the Activity event that recorded one"
+            ))
+            .with_suggestion("`draft activity list` shows the checkpoints this project recorded"));
         }
-        let pack = load_pack(ws, reference)?;
-        return load_snapshot(ws, &pack.base_snapshot_id);
+        let change = load_change(ws, reference)?;
+        return load_snapshot(ws, &change.base_snapshot_id);
     }
-    if reference.starts_with("rcp_") {
-        validate_receipt_id(reference)?;
-        let receipt_path = ws.layout.receipts_dir().join(format!("{reference}.json"));
-        if !receipt_path.exists() {
-            return Err(DraftError::not_found(format!(
-                "unknown rollback receipt '{reference}'"
-            )));
-        }
-        let record: crate::trust::receipt::ReceiptRecord =
-            crate::contracts::read_persisted(&receipt_path)?;
-        return resolve_canonical_receipt_target(ws, &record);
+    if reference.starts_with("evt_") {
+        return resolve_activity_target(ws, reference);
     }
     Err(DraftError::invalid_config(format!(
-        "rollback reference '{reference}' must start with chk_, pck_, or rcp_"
+        "recovery reference '{reference}' must start with chk_, chg_, or evt_"
     )))
 }
 
-/// Canonical receipt event types whose subject is a meaningful local rollback
-/// anchor. Deliberately excluded: PackImported (no local snapshot precedes
-/// it), PackComposed (no base snapshot), PackExported (no state change), and
-/// RollbackPerformed (aliases the original reference).
-const ROLLBACK_ELIGIBLE_EVENTS: &[&str] = &[
-    "CheckpointCreated",
-    "PackCreated",
-    "PackVerified",
-    "PackApproved",
-    "PackSubmitted",
-];
-
-/// Resolve a canonical signed receipt to a rollback snapshot via its subject.
-/// The receipt must verify (fail closed: an unverifiable receipt is not a
-/// trustworthy rollback anchor) and its event type must be rollback-eligible.
-fn resolve_canonical_receipt_target(
-    ws: &Workspace,
-    record: &crate::trust::receipt::ReceiptRecord,
-) -> DraftResult<Snapshot> {
-    let ledger = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?;
-    let verification = ledger.verify_receipt(&record.receipt_id)?;
-    if !verification.ok {
-        return Err(DraftError::new(
-            DraftErrorKind::OperationLogCorrupt,
-            format!(
-                "receipt '{}' failed verification and cannot anchor a rollback",
-                record.receipt_id
-            ),
-        )
-        .with_suggestion("run `draft receipt verify --all` or `draft doctor`"));
-    }
-    if !ROLLBACK_ELIGIBLE_EVENTS.contains(&record.event_type.as_str()) {
+/// Resolve an Activity event to the state it can be recovered to.
+///
+/// The anchor is the event itself rather than a signed receipt over it: v1
+/// receipts attest promotions and publications, and requiring one here made a
+/// local checkpoint depend on a signing identity it has no reason to need.
+/// The ledger is hash-chained and verified, so the event is the durable fact.
+fn resolve_activity_target(ws: &Workspace, event_id: &str) -> DraftResult<Snapshot> {
+    let activity = ws.events()?;
+    let entry = crate::read_model::activity::entry(activity.log(), event_id)?;
+    if entry.kind != crate::activity::EventKind::CheckpointCreated.as_str() {
         return Err(DraftError::invalid_config(format!(
-            "receipt '{}' ({}) is not rollback-eligible",
-            record.receipt_id, record.event_type
+            "Activity event '{event_id}' is a {} and names no state to recover to",
+            entry.kind
         )));
     }
-    let event =
-        crate::trust::event::EventLog::workspace(ws.layout.clone(), ws.workspace_id.to_string())
-            .read_all()?
-            .into_iter()
-            .find(|event| event.event_hash == record.event_hash)
-            .ok_or_else(|| {
-                DraftError::new(DraftErrorKind::CorruptData, "receipt event is missing")
-            })?;
-    if let Some(snapshot_id) = event
-        .metadata
-        .get("rollback_snapshot_id")
-        .and_then(Value::as_str)
-    {
-        if snapshot_id != "chk_empty" {
-            validate_checkpoint_id(snapshot_id)?;
-        }
-        return load_snapshot(ws, &SnapshotId::new(snapshot_id));
-    }
-    match record.subject_id.as_deref() {
+    match entry.subject.as_deref() {
         Some(subject) if subject.starts_with("chk_") => {
             validate_checkpoint_id(subject)?;
             load_snapshot(ws, &SnapshotId::new(subject))
         }
-        Some(subject) if subject.starts_with("pck_") => {
-            validate_pack_id(subject)?;
-            let pack = load_pack(ws, subject).map_err(|_| {
-                DraftError::invalid_config(format!(
-                    "pack '{subject}' has no local snapshot to roll back to"
-                ))
-            })?;
-            load_snapshot(ws, &pack.base_snapshot_id)
-        }
         other => Err(DraftError::invalid_config(format!(
-            "receipt '{}' subject '{}' is not a rollback target",
-            record.receipt_id,
+            "Activity event '{event_id}' subject '{}' is not a recovery target",
             other.unwrap_or("<none>")
         ))),
     }
@@ -10570,8 +6738,8 @@ fn validate_checkpoint_id(id: &str) -> DraftResult<()> {
     validate_prefixed_id(id, "chk_", "checkpoint")
 }
 
-fn validate_pack_id(id: &str) -> DraftResult<()> {
-    validate_prefixed_id(id, "pck_", "pack")
+fn validate_change_id(id: &str) -> DraftResult<()> {
+    validate_prefixed_id(id, "chg_", "change")
 }
 
 fn validate_receipt_id(id: &str) -> DraftResult<()> {
@@ -10593,23 +6761,6 @@ fn validate_prefixed_id(id: &str, prefix: &str, label: &str) -> DraftResult<()> 
             "malformed {label} id '{id}'"
         )))
     }
-}
-
-fn ensure_pack_not_locked(ws: &Workspace, pack: &PackWorkspace) -> DraftResult<()> {
-    let lock = ws
-        .layout
-        .pack_workspace_dir(&pack.id)
-        .join("review.lock.json");
-    if lock.exists() {
-        return Err(DraftError::new(
-            DraftErrorKind::ReviewRequired,
-            format!(
-                "Pack {} is locked for review; approve or reject it before mutating it",
-                pack.id
-            ),
-        ));
-    }
-    Ok(())
 }
 
 fn dir_size(path: &Path) -> DraftResult<u64> {
@@ -10688,6 +6839,10 @@ fn garbage_collect_objects(ws: &Workspace) -> DraftResult<usize> {
         };
         if !reachable.contains(&object_ref) {
             fs::remove_file(path)?;
+            // Counted after the deletion succeeded. A collection that failed
+            // is not a collection, and counting the intent would tell an
+            // operator storage was reclaimed when it was not.
+            crate::support::telemetry::Counter::GcObjectsCollected.increment();
             removed += 1;
         }
     }
@@ -10707,7 +6862,7 @@ fn verify_objects(ws: &Workspace) -> DraftResult<Vec<String>> {
             errors.push(format!("{object_ref}: {e}"));
         }
     }
-    let index = read_object_pack_index(&ws.layout)?;
+    let index = read_object_segment_index(&ws.layout)?;
     for object_ref in index.objects.keys() {
         if let Err(e) = store.get_bytes(object_ref) {
             errors.push(format!("{object_ref}: {e}"));
@@ -10724,7 +6879,7 @@ fn compact_loose_objects(ws: &Workspace) -> DraftResult<usize> {
             continue;
         };
         let compressed = fs::read(&path)?;
-        entries.push(ObjectPackEntry {
+        entries.push(ObjectSegmentEntry {
             object_ref,
             compressed_hex: hex_encode(&compressed),
         });
@@ -10733,29 +6888,32 @@ fn compact_loose_objects(ws: &Workspace) -> DraftResult<usize> {
     if entries.is_empty() {
         return Ok(0);
     }
-    ensure_dir(&ws.layout.object_packs_dir())?;
-    let pack_id = format!("opk_{}", uuid::Uuid::new_v4().simple());
-    let pack_name = format!("{pack_id}.json.zst");
-    let pack = ObjectPack {
-        schema_version: current_version(ContractId::ObjectPack),
-        id: pack_id,
+    ensure_dir(&ws.layout.object_segments_dir())?;
+    let change_id = format!("opk_{}", uuid::Uuid::new_v4().simple());
+    let change_name = format!("{change_id}.json.zst");
+    let change = ObjectSegment {
+        schema_version: current_version(ContractId::ObjectSegment),
+        id: change_id,
         created_at: now(),
         entries,
     };
-    let json = serde_json::to_vec(&pack).map_err(json_err)?;
+    let json = serde_json::to_vec(&change).map_err(json_err)?;
     let compressed = zstd::stream::encode_all(json.as_slice(), 3)
-        .map_err(|e| DraftError::storage(format!("object pack compression failed: {e}")))?;
-    write_atomic(&ws.layout.object_packs_dir().join(&pack_name), &compressed)?;
+        .map_err(|e| DraftError::storage(format!("object change compression failed: {e}")))?;
+    write_atomic(
+        &ws.layout.object_segments_dir().join(&change_name),
+        &compressed,
+    )?;
 
-    let mut index = read_object_pack_index(&ws.layout)?;
-    for entry in &pack.entries {
+    let mut index = read_object_segment_index(&ws.layout)?;
+    for entry in &change.entries {
         index
             .objects
-            .insert(entry.object_ref.clone(), pack_name.clone());
+            .insert(entry.object_ref.clone(), change_name.clone());
     }
-    write_object_pack_index(&ws.layout, &index)?;
+    write_object_segment_index(&ws.layout, &index)?;
     let store = ObjectStore::new(ws.layout.clone());
-    for entry in &pack.entries {
+    for entry in &change.entries {
         store.get_bytes(&entry.object_ref)?;
     }
 
@@ -10768,14 +6926,10 @@ fn compact_loose_objects(ws: &Workspace) -> DraftResult<usize> {
 }
 
 fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
-    let verification = crate::trust::ledger::TrustLedger::open(&ws.root, ws.workspace_id.as_str())?
-        .verify_all()?;
+    let verification = crate::read_model::integrity::verify_all(&ws.layout, &ws.workspace_id)?;
     let mut errors = Vec::new();
-    if !verification.event_chain_ok {
-        errors.push("event chain verification failed".into());
-    }
-    if !verification.transparency_ok {
-        errors.push("receipt transparency chain verification failed".into());
+    if !verification.activity_chain_ok {
+        errors.push("Activity chain verification failed".into());
     }
     for receipt in verification
         .receipts
@@ -10785,7 +6939,7 @@ fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
         let failed = receipt
             .checks
             .into_iter()
-            .filter(|check| !check.ok)
+            .filter(|check| check.status != crate::receipt::CheckStatus::Valid)
             .map(|check| check.name)
             .collect::<Vec<_>>()
             .join(", ");
@@ -10796,28 +6950,24 @@ fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
 
 fn verify_draft_hard_exclusion(ws: &Workspace) -> DraftResult<Vec<String>> {
     let mut errors = Vec::new();
-    if !ws.layout.pack_workspaces_dir().exists() {
+    if !ws.layout.change_workspaces_dir().exists() {
         return Ok(errors);
     }
-    for entry in fs::read_dir(ws.layout.pack_workspaces_dir())? {
+    for entry in fs::read_dir(ws.layout.change_workspaces_dir())? {
         let manifest = entry?.path().join("staging.json");
         if !manifest.exists() {
             continue;
         }
-        let pack: PackWorkspace = crate::contracts::read_persisted(&manifest)?;
-        pack.validate()?;
-        let patch = load_patch(ws, &pack)?;
-        for file in patch.files {
-            if is_draft_path(file.path.as_str())
-                || file
-                    .old_path
-                    .as_ref()
-                    .map(|p| is_draft_path(p.as_str()))
-                    .unwrap_or(false)
-            {
+        let change: ChangeWorkspace = crate::contracts::read_persisted(&manifest)?;
+        change.validate()?;
+        let patch = load_change_set(ws, &change)?;
+        // Both sides: `.draft/**` must not enter project state through either a
+        // change's result or the state it came from.
+        for locator in changed_locators(&patch) {
+            if locator.scheme == crate::extension::FILE_SCHEME && is_draft_path(&locator.body) {
                 errors.push(format!(
-                    "{} includes Draft metadata path {}",
-                    pack.id, file.path
+                    "{} includes Draft control-plane locator {}",
+                    change.id, locator.body
                 ));
             }
         }
@@ -10908,12 +7058,6 @@ fn collect_object_refs_from_value(value: &Value, refs: &mut HashSet<String>) {
     }
 }
 
-fn collect_object_refs_into_vec(value: &Value, refs: &mut Vec<String>) {
-    let mut set: HashSet<String> = refs.iter().cloned().collect();
-    collect_object_refs_from_value(value, &mut set);
-    *refs = set.into_iter().collect();
-}
-
 fn is_object_ref(value: &str) -> bool {
     value
         .strip_prefix("b3:")
@@ -10977,30 +7121,30 @@ fn prune_empty_dirs(dir: &Path) -> DraftResult<bool> {
     }
 }
 
-fn count_files(path: &Path) -> DraftResult<usize> {
-    if !path.exists() {
-        return Ok(0);
-    }
-    let mut total = 0;
-    for entry in walkdir::WalkDir::new(path) {
-        let entry = entry.map_err(|e| DraftError::storage(e.to_string()))?;
-        if entry.file_type().is_file() {
-            total += 1;
-        }
-    }
-    Ok(total)
-}
-
-fn empty_patch_for_pack(pack: &PackWorkspace) -> DraftResult<PatchSet> {
-    let mut patch = PatchSet {
-        schema_version: current_version(ContractId::PatchSet),
-        id: PatchSetId::generate(),
-        base_snapshot_id: pack.base_snapshot_id.clone(),
-        result_snapshot_id: pack.result_snapshot_id.clone(),
-        files: Vec::new(),
-        patch_graph_hash: String::new(),
+/// The change set for a Change that touches nothing.
+///
+/// A real change set with real snapshot digests, so it carries the same
+/// identity and the same validation as any other. Its emptiness is a fact about
+/// the transition, not a weaker shape.
+fn empty_change_set_between(
+    change: &ChangeWorkspace,
+    base: &Snapshot,
+    result: &Snapshot,
+) -> DraftResult<ChangeSet> {
+    let mut patch = ChangeSet {
+        schema_version: current_version(ContractId::ChangeSet),
+        id: ChangeSetId::generate(),
+        base_snapshot_id: change.base_snapshot_id.clone(),
+        result_snapshot_id: change.result_snapshot_id.clone(),
+        base_snapshot_digest: base.snapshot_digest.clone(),
+        result_snapshot_digest: result.snapshot_digest.clone(),
+        observation_context_digest: base.observation_context_digest.clone(),
+        resources: Vec::new(),
+        derivation_gaps: Vec::new(),
+        change_derivation_revision: crate::dcg::change_set::CHANGE_DERIVATION_REVISION,
+        change_set_digest: String::new(),
     };
-    patch.patch_graph_hash = hash_json(&patch)?;
+    patch = patch.seal();
     Ok(patch)
 }
 
@@ -11053,28 +7197,13 @@ fn terminate_process(_pid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-fn pack_name_for(
-    task: &crate::task::TaskDefinition,
-    profile: &crate::task::candidate::CandidateProfile,
-    exe_id: &str,
-) -> String {
-    let suffix: String = exe_id
-        .chars()
-        .rev()
-        .take(6)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    format!("{}-{}-{}", task.name, profile.name, suffix)
-}
-
 /// One accepted change collected from an execution workspace.
 #[derive(Debug, Clone)]
 struct IsolatedChange {
     path: WorkspacePath,
     kind: IsolatedChangeKind,
-    changed_lines: u64,
+    /// How much content the change produced, in bytes.
+    bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11092,10 +7221,14 @@ fn collect_isolated_changes(
     baseline: &Snapshot,
 ) -> DraftResult<Vec<IsolatedChange>> {
     let ignore = IgnoreMatcher::load(&DraftLayout::for_root(real_root).ignore_file())?;
-    let baseline_by_path: BTreeMap<&str, &FileManifestEntry> = baseline
-        .files
+    // Only the baseline's filesystem-addressed resources can be compared to
+    // files on disk. Another scheme's resources are not in this directory at
+    // all, and pretending otherwise would report them all as deleted.
+    let baseline_by_path: BTreeMap<&str, &RawResourceState> = baseline
+        .resources
         .iter()
-        .map(|f| (f.path.as_str(), f))
+        .filter(|state| state.locator.scheme == crate::extension::FILE_SCHEME)
+        .map(|state| (state.locator.body.as_str(), state))
         .collect();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut changes = Vec::new();
@@ -11111,76 +7244,30 @@ fn collect_isolated_changes(
         let data = fs::read(path)?;
         let hash = format!("b3:{}", blake3_hex(&data));
         match baseline_by_path.get(rel.as_str()) {
-            Some(entry) if entry.content_hash.as_deref() == Some(hash.as_str()) => {}
-            Some(entry) => {
-                let old_len = entry.size_bytes.max(1);
-                let changed_lines = estimate_changed_lines(&data, old_len);
-                changes.push(IsolatedChange {
-                    path: rel,
-                    kind: IsolatedChangeKind::Modified,
-                    changed_lines,
-                });
-            }
-            None => {
-                let changed_lines = count_lines(&data);
-                changes.push(IsolatedChange {
-                    path: rel,
-                    kind: IsolatedChangeKind::Added,
-                    changed_lines,
-                });
-            }
+            Some(state) if state.content_digest.as_deref() == Some(hash.as_str()) => {}
+            Some(_) => changes.push(IsolatedChange {
+                path: rel,
+                kind: IsolatedChangeKind::Modified,
+                bytes: data.len() as u64,
+            }),
+            None => changes.push(IsolatedChange {
+                path: rel,
+                kind: IsolatedChangeKind::Added,
+                bytes: data.len() as u64,
+            }),
         }
         Ok(())
     })?;
-    for entry in &baseline.files {
-        if !seen.contains(entry.path.as_str()) && !ignore.is_ignored(entry.path.as_str()) {
+    for body in baseline_by_path.keys() {
+        if !seen.contains(*body) && !ignore.is_ignored(body) {
             changes.push(IsolatedChange {
-                path: entry.path.clone(),
+                path: WorkspacePath::new(*body),
                 kind: IsolatedChangeKind::Deleted,
-                changed_lines: 0,
+                bytes: 0,
             });
         }
     }
     Ok(changes)
-}
-
-fn count_lines(data: &[u8]) -> u64 {
-    if data.is_empty() {
-        return 0;
-    }
-    data.iter().filter(|b| **b == b'\n').count() as u64 + 1
-}
-
-/// A cheap, conservative changed-line estimate: the larger of the new line
-/// count and a byte-based estimate of the old size. Used only for candidate
-/// change-budget enforcement.
-fn estimate_changed_lines(new_data: &[u8], old_size_bytes: u64) -> u64 {
-    let new_lines = count_lines(new_data);
-    let old_estimate = old_size_bytes / 40; // ~40 bytes per line of code
-    new_lines.max(old_estimate.max(1))
-}
-
-/// Contents of workspace files about to be overwritten by an execution's
-/// changes, so the tree can be restored afterwards.
-struct WorkspaceStash {
-    /// path -> original bytes (None = file did not exist before).
-    entries: Vec<(WorkspacePath, Option<Vec<u8>>)>,
-}
-
-fn stash_workspace_files(root: &Path, changes: &[IsolatedChange]) -> DraftResult<WorkspaceStash> {
-    let mut entries = Vec::new();
-    for change in changes {
-        let dest = safe_workspace_dest(root, &change.path)?;
-        let original = if dest.exists() {
-            Some(fs::read(&dest).map_err(|e| {
-                DraftError::storage(format!("failed to stash {}: {e}", change.path.as_str()))
-            })?)
-        } else {
-            None
-        };
-        entries.push((change.path.clone(), original));
-    }
-    Ok(WorkspaceStash { entries })
 }
 
 fn apply_isolated_changes(
@@ -11219,53 +7306,64 @@ fn apply_isolated_changes(
     Ok(())
 }
 
-fn restore_workspace_files(root: &Path, stash: WorkspaceStash) -> DraftResult<()> {
-    for (path, original) in stash.entries {
-        let dest = safe_workspace_dest(root, &path)?;
-        match original {
-            Some(bytes) => {
-                if let Some(parent) = dest.parent() {
-                    ensure_dir(parent)?;
-                }
-                write_atomic(&dest, &bytes)?;
-            }
-            None => {
-                if dest.exists() {
-                    fs::remove_file(&dest).map_err(|e| {
-                        DraftError::storage(format!("failed to restore {}: {e}", path.as_str()))
-                    })?;
-                }
-            }
-        }
-    }
-    Ok(())
+/// The anchors retained for one observed state.
+///
+/// A missing file is not an error: it means nothing was retained for that state,
+/// and the resulting empty set reports `NotAnchored` — which is the truth, and
+/// what stops a rollback claiming more than it can deliver.
+/// The anchors captured alongside `snapshot`, verified against their objects.
+///
+/// Shared with the Baseline recoverability projection so both answer "what can
+/// be restored?" from the same load and the same integrity check.
+pub(crate) fn anchor_set_for(
+    ws: &Workspace,
+    snapshot: &Snapshot,
+) -> DraftResult<crate::dcg::anchor::RecoveryAnchorSet> {
+    load_anchor_set(ws, snapshot)
 }
 
-fn restore_snapshot(ws: &Workspace, snap: &Snapshot) -> DraftResult<()> {
+fn load_anchor_set(
+    ws: &Workspace,
+    snapshot: &Snapshot,
+) -> DraftResult<crate::dcg::anchor::RecoveryAnchorSet> {
+    let path = ws.layout.recovery_anchor_file(&snapshot.snapshot_digest);
+    if !path.exists() {
+        return crate::dcg::anchor::RecoveryAnchorSet::build(snapshot, Vec::new());
+    }
+    let set: crate::dcg::anchor::RecoveryAnchorSet = crate::contracts::read_persisted(&path)?;
+    // Material referenced by a retained set must still be there. Its absence is
+    // an integrity failure, not a quiet downgrade of what rollback promises.
     let store = ObjectStore::new(ws.layout.clone());
-    let desired: BTreeSet<_> = snap.files.iter().map(|f| f.path.clone()).collect();
-    let scanner = Scanner::new(ws)?;
-    for path in scanner.current_manifest()?.keys() {
-        if !desired.contains(path) && !is_draft_path(path.as_str()) {
-            let fs_path = safe_workspace_dest(&ws.root, path)?;
-            if fs_path.is_file() || fs_path.is_symlink() {
-                fs::remove_file(fs_path)?;
-            }
+    for object in set.referenced_objects() {
+        if store.get_bytes(&object).is_err() {
+            return Err(DraftError::new(
+                DraftErrorKind::CorruptData,
+                format!("recovery material {object} is missing from the object store"),
+            )
+            .with_suggestion(
+                "run `draft doctor`; retained recovery material must not be collected",
+            ));
         }
     }
-    for f in &snap.files {
-        if is_draft_path(f.path.as_str()) {
-            continue;
-        }
-        let dest = safe_workspace_dest(&ws.root, &f.path)?;
-        if let Some(parent) = dest.parent() {
-            ensure_dir(parent)?;
-        }
-        if let Some(hash) = &f.content_hash {
-            let bytes = store.get_bytes(hash)?;
-            write_atomic(&dest, &bytes)?;
-        }
-    }
+    set.validate_against(snapshot)?;
+    Ok(set)
+}
+
+/// Apply a Draft-authored restore plan: presence and absence both.
+///
+/// Draft owns the plan — the target locators, the anchor set it may draw on,
+/// the preconditions and the authority. What it does not own is how an opaque
+/// anchor becomes state again: that is the adapter's, and it is reached through
+/// the ordinary port. Keeping a second filesystem restore here would mean two
+/// implementations of one operation, and the day they disagreed the receipt
+/// would still claim they had not.
+fn apply_restore_plan(
+    ws: &Workspace,
+    plan: &crate::dcg::anchor::ResourceRestorePlan,
+    anchors: &crate::dcg::anchor::RecoveryAnchorSet,
+) -> DraftResult<()> {
+    use crate::dcg::source::ResourceSource;
+    crate::dcg::filesystem_source::FilesystemSource::new(ws).restore(plan, anchors)?;
     Ok(())
 }
 
@@ -11309,121 +7407,45 @@ fn safe_workspace_dest(root: &Path, rel: &WorkspacePath) -> DraftResult<PathBuf>
     Ok(dest)
 }
 
-fn checked_editor_path(root: &Path, path: &str) -> DraftResult<WorkspacePath> {
-    let rel = WorkspacePath::new(
-        crate::support::pathguard::check_relative(path).map_err(|e| {
+/// The filesystem path behind a `file`-scheme locator.
+///
+/// The only place Core reads a locator body as a path — and it refuses any
+/// other scheme rather than treating a body that merely contains slashes as
+/// one. Another scheme's resources are reached through their own adapter.
+fn filesystem_relative(locator: &ResourceLocator) -> DraftResult<WorkspacePath> {
+    if locator.scheme != crate::extension::FILE_SCHEME {
+        return Err(DraftError::invalid_config(format!(
+            "the '{}' scheme is handled by its own adapter, not by Draft's filesystem path",
+            locator.scheme
+        )));
+    }
+    Ok(WorkspacePath::new(
+        crate::support::pathguard::check_relative(&locator.body).map_err(|error| {
             DraftError::new(
-                DraftErrorKind::ProtectedFileAccess,
-                format!("unsafe editor path '{path}': {e}"),
+                DraftErrorKind::ProtectedResourceAccess,
+                format!("unsafe locator body '{}': {error}", locator.body),
             )
         })?,
-    );
-    crate::workspace::protected::ensure_allowed(root, &rel)?;
+    ))
+}
+
+/// The same, additionally refused when the resource is protected.
+fn checked_resource_path(
+    protections: &[crate::project::protected::ProtectionRule],
+    locator: &ResourceLocator,
+) -> DraftResult<WorkspacePath> {
+    let rel = filesystem_relative(locator)?;
+    crate::project::protected::ensure_allowed(protections, &rel)?;
     Ok(rel)
 }
 
 fn editor_backup_path(root: &Path, rel: &WorkspacePath) -> DraftResult<PathBuf> {
-    let project_paths = crate::workspace::layout::DraftLayout::for_root(root);
-    Ok(project_paths.editor_dir().join("backups").join(format!(
+    let project_paths = crate::project::layout::DraftLayout::for_root(root);
+    Ok(project_paths.workspaces_dir().join("backups").join(format!(
         "{}-{}",
         now().timestamp_millis(),
         rel.as_str().replace('/', "__")
     )))
-}
-
-fn simple_unified_diff(path: &str, old: &str, new: &str) -> String {
-    if old == new {
-        return format!("--- a/{path}\n+++ b/{path}\n");
-    }
-    let mut out = format!("--- a/{path}\n+++ b/{path}\n");
-    let old_lines = old.lines().collect::<Vec<_>>();
-    let new_lines = new.lines().collect::<Vec<_>>();
-    out.push_str(&format!(
-        "@@ -1,{} +1,{} @@\n",
-        old_lines.len(),
-        new_lines.len()
-    ));
-    let max = old_lines.len().max(new_lines.len());
-    for i in 0..max {
-        match (old_lines.get(i), new_lines.get(i)) {
-            (Some(a), Some(b)) if a == b => {
-                out.push(' ');
-                out.push_str(a);
-                out.push('\n');
-            }
-            (Some(a), Some(b)) => {
-                out.push('-');
-                out.push_str(a);
-                out.push('\n');
-                out.push('+');
-                out.push_str(b);
-                out.push('\n');
-            }
-            (Some(a), None) => {
-                out.push('-');
-                out.push_str(a);
-                out.push('\n');
-            }
-            (None, Some(b)) => {
-                out.push('+');
-                out.push_str(b);
-                out.push('\n');
-            }
-            (None, None) => {}
-        }
-    }
-    out
-}
-
-fn collect_editor_entries(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<EditorFileEntry>,
-) -> DraftResult<()> {
-    if crate::support::pathguard::is_draft_path(
-        dir.strip_prefix(root)
-            .unwrap_or(dir)
-            .to_string_lossy()
-            .as_ref(),
-    ) {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(dir)
-        .map_err(|e| DraftError::storage(format!("cannot read {}: {e}", dir.display())))?
-    {
-        let entry = entry.map_err(|e| DraftError::storage(e.to_string()))?;
-        let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|e| DraftError::storage(format!("cannot stat {}: {e}", path.display())))?;
-        let rel_path = match path.strip_prefix(root) {
-            Ok(path) => WorkspacePath::from_relative(path),
-            Err(_) => continue,
-        };
-        if crate::support::pathguard::is_draft_path(rel_path.as_str()) {
-            continue;
-        }
-        if file_type.is_dir() {
-            if !file_type.is_symlink() {
-                collect_editor_entries(root, &path, out)?;
-            }
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let metadata = entry
-            .metadata()
-            .map_err(|e| DraftError::storage(format!("cannot stat {}: {e}", path.display())))?;
-        let protected = !crate::workspace::protected::violations(root, [&rel_path])?.is_empty();
-        out.push(EditorFileEntry {
-            path: rel_path.to_string(),
-            kind: "file".to_string(),
-            protected,
-            bytes: metadata.len(),
-        });
-    }
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -11433,7 +7455,7 @@ struct HookContext {
     description: String,
     task_id: String,
     execution_id: String,
-    pack_id: String,
+    change_id: String,
     receipt_id: String,
     actor_name: String,
     timestamp: String,
@@ -11546,7 +7568,7 @@ fn hook_values(ctx: &HookContext) -> BTreeMap<String, String> {
         ("description".to_string(), ctx.description.clone()),
         ("task_id".to_string(), ctx.task_id.clone()),
         ("execution_id".to_string(), ctx.execution_id.clone()),
-        ("pack_id".to_string(), ctx.pack_id.clone()),
+        ("change_id".to_string(), ctx.change_id.clone()),
         ("receipt_id".to_string(), ctx.receipt_id.clone()),
         ("actor_name".to_string(), ctx.actor_name.clone()),
         ("timestamp".to_string(), ctx.timestamp.clone()),
@@ -11568,7 +7590,7 @@ fn hook_env(ctx: &HookContext) -> BTreeMap<String, String> {
         ctx.workspace_root.clone(),
     );
     env.insert("DRAFT_RECEIPT_ID".to_string(), ctx.receipt_id.clone());
-    env.insert("DRAFT_PACK_ID".to_string(), ctx.pack_id.clone());
+    env.insert("DRAFT_PACK_ID".to_string(), ctx.change_id.clone());
     env.insert("DRAFT_ACTOR_NAME".to_string(), ctx.actor_name.clone());
     for (k, v) in &ctx.vars {
         env.insert(format!("DRAFT_VAR_{}", k.to_ascii_uppercase()), v.clone());
@@ -11618,7 +7640,7 @@ fn builtin_placeholder_names() -> BTreeSet<&'static str> {
         "description",
         "task_id",
         "execution_id",
-        "pack_id",
+        "change_id",
         "receipt_id",
         "actor_name",
         "timestamp",
@@ -11629,14 +7651,6 @@ fn builtin_placeholder_names() -> BTreeSet<&'static str> {
         "hook_name",
         "hook_phase",
     ])
-}
-
-fn interpolate_lenient(template: &str, values: &BTreeMap<String, String>) -> String {
-    let mut out = template.to_string();
-    for (k, v) in values {
-        out = out.replace(&format!("{{{{{k}}}}}"), v);
-    }
-    out
 }
 
 fn interpolate_strict(
@@ -11791,109 +7805,105 @@ fn json_err(e: serde_json::Error) -> DraftError {
     DraftError::storage(format!("JSON error: {e}"))
 }
 
-fn parse_duration_seconds(raw: &str) -> DraftResult<i64> {
-    let (number, multiplier) = match raw.chars().last() {
-        Some('s') => (&raw[..raw.len() - 1], 1),
-        Some('m') => (&raw[..raw.len() - 1], 60),
-        Some('h') => (&raw[..raw.len() - 1], 3_600),
-        Some('d') => (&raw[..raw.len() - 1], 86_400),
-        _ => {
-            return Err(DraftError::invalid_config(
-                "duration must end in s, m, h, or d",
-            ))
-        }
-    };
-    let value: i64 = number
-        .parse()
-        .map_err(|_| DraftError::invalid_config("invalid duration"))?;
-    if value <= 0 {
-        return Err(DraftError::invalid_config("duration must be positive"));
-    }
-    value
-        .checked_mul(multiplier)
-        .ok_or_else(|| DraftError::invalid_config("duration is too large"))
-}
-
 impl From<serde_json::Error> for DraftError {
     fn from(e: serde_json::Error) -> Self {
         json_err(e)
     }
 }
 
+// ---------------------------------------------------------------------------
+// The authoritative Change lifecycle
+//
+// A Change's lifecycle record answers "how far through review is this revision".
+// A Change record answers "is this work still open". Those were one value, and
+// separating them is what lets a change be abandoned — a decision the Change
+// model had no way to express, since leaving it in Draft claims it is still
+// being worked on and moving it to Rejected claims a reviewer turned it down.
+//
+// While both exist, the Change record still drives the review surfaces and the
+// Change record is authoritative for the work lifecycle. Readers move over
+// before the Change record is retired.
+// ---------------------------------------------------------------------------
+
+/// The Change store for a project.
+/// Protections contributed by installed extensions, reduced to project rules.
+///
+/// `project` cannot reach the extension layer to gather these, so the
+/// conversion happens here — above both — and the rules are handed down.
+fn contributed_protections(
+    contributions: &crate::extension::ActiveContributions,
+) -> Vec<crate::project::protected::ProtectionRule> {
+    contributions
+        .policies
+        .iter()
+        .flat_map(|preset| {
+            preset
+                .value
+                .control_policy
+                .protections
+                .iter()
+                .map(move |rule| crate::project::protected::ProtectionRule {
+                    predicate: rule.predicate.clone(),
+                    reason: rule.reason.clone(),
+                    source: crate::project::protected::ProtectionSource::Extension {
+                        extension_id: preset.extension_id.clone(),
+                    },
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod app_tests {
+    /// Accept an initial Baseline for a test project.
+    ///
+    /// The same path production takes, so a test fixture cannot drift into a
+    /// state production could never produce.
+    fn accept_initial_baseline_for_tests(app: &App, root: &std::path::Path) {
+        // Acceptance records *who* accepted, which the retired stable head
+        // never did — so a fixture needs the actor state a real project has.
+        let home = crate::project::home::DraftGlobalStore::locate()
+            .expect("a Draft global store is locatable in tests");
+        crate::trust::identity::global::ensure_actor(&home).expect("a test actor identity exists");
+        let layout = crate::project::layout::DraftLayout::for_root(root);
+        let workspace = Workspace {
+            workspace_id: crate::contracts::read_persisted::<WorkspaceMetadata>(
+                &layout.project_json(),
+            )
+            .expect("test project metadata is readable")
+            .workspace_id,
+            root: root.to_path_buf(),
+            layout: layout.clone(),
+        };
+        crate::app::baseline::accept_current(
+            app,
+            &workspace,
+            crate::dcg::baseline::BaselineOrigin::Initial,
+        )
+        .expect("a test project accepts its initial Baseline");
+    }
+
     use super::*;
 
-    struct GlobalHomeGuard(Option<std::ffi::OsString>);
+    use crate::project::home::ScopedGlobalHome;
 
-    impl GlobalHomeGuard {
-        fn set(path: &Path) -> Self {
-            let previous = std::env::var_os("DRAFT_GLOBAL_HOME");
-            std::env::set_var("DRAFT_GLOBAL_HOME", path);
-            Self(previous)
-        }
-    }
-
-    impl Drop for GlobalHomeGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = self.0.take() {
-                std::env::set_var("DRAFT_GLOBAL_HOME", previous);
-            } else {
-                std::env::remove_var("DRAFT_GLOBAL_HOME");
-            }
-        }
-    }
-
-    fn manifest_for(candidate: Option<&str>, pack_id: &str) -> crate::pack::PackManifest {
-        crate::pack::PackManifest {
-            schema_version: current_version(ContractId::PackManifest),
-            pack_id: pack_id.to_string(),
+    fn manifest_for(
+        candidate: Option<&str>,
+        change_id: &str,
+    ) -> crate::dcg::change_store::ChangeManifest {
+        crate::dcg::change_store::ChangeManifest {
+            schema_version: current_version(ContractId::ChangeManifest),
+            change_id: change_id.to_string(),
             manifest_digest: String::new(),
-            name: pack_id.to_string(),
+            name: change_id.to_string(),
             description: String::new(),
-            intent: crate::pack::PackIntent::Feature,
+            intent: crate::dcg::change_store::unspecified_intent(),
             provenance: serde_json::json!({"origin": "test"}),
             author_id: "act_t".into(),
             candidate_id: candidate.map(|c| c.to_string()),
             declared_dependencies: Vec::new(),
             created_at: "2026-07-04T00:00:00+00:00".into(),
         }
-    }
-
-    fn rollback_event(subject: &str) -> crate::trust::event::EventRecord {
-        crate::trust::event::EventRecord {
-            schema_version: current_version(ContractId::EventRecord),
-            ledger: crate::trust::event::LedgerIdentity::Workspace {
-                workspace_id: "ws_t".into(),
-            },
-            event_id: "evt_t".into(),
-            event_type: "RollbackPerformed".into(),
-            time: "2026-07-04T00:00:00+00:00".into(),
-            subject_id: Some(subject.to_string()),
-            actor_id: "act_t".into(),
-            candidate_id: None,
-            previous_event_hash: String::new(),
-            event_hash: String::new(),
-            receipt_id: None,
-            metadata: serde_json::Value::Null,
-        }
-    }
-
-    #[test]
-    fn candidate_rollback_rate_counts_rolled_back_fraction() {
-        let manifests = vec![
-            manifest_for(Some("cand_a"), "pck_1"),
-            manifest_for(Some("cand_a"), "pck_2"),
-            manifest_for(Some("cand_b"), "pck_3"),
-            manifest_for(None, "pck_4"),
-        ];
-        let events = vec![rollback_event("pck_1")];
-        // One of cand_a's two packs was rolled back.
-        assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_a"), 0.5);
-        // cand_b has packs but no rollbacks.
-        assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_b"), 0.0);
-        // Unknown candidates never divide by zero.
-        assert_eq!(candidate_rollback_rate(&events, &manifests, "cand_x"), 0.0);
     }
 
     #[test]
@@ -11922,11 +7932,11 @@ mod app_tests {
         let app = App::new();
         let layout = DraftLayout::for_root(tmp.path());
         layout.create_all().unwrap();
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(tmp.path());
+        let project_paths = crate::project::layout::DraftLayout::for_root(tmp.path());
         project_paths.create_all().unwrap();
-        let id = WorkspaceId::generate();
+        let id = crate::project::mint_project_id();
         write_json(
-            &layout.workspace_json(),
+            &layout.project_json(),
             &WorkspaceMetadata {
                 schema_version: current_version(ContractId::WorkspaceMetadata),
                 workspace_id: id.clone(),
@@ -11935,7 +7945,7 @@ mod app_tests {
             },
         )
         .unwrap();
-        crate::operation::RecoveryStore::for_root(tmp.path())
+        crate::execution::operation::RecoveryStore::for_root(tmp.path())
             .start("doctor.recovery-test", None, serde_json::json!({}))
             .unwrap();
 
@@ -11960,13 +7970,13 @@ mod app_tests {
         let app = App::new();
         let layout = DraftLayout::for_root(tmp.path());
         layout.create_all().unwrap();
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(tmp.path());
+        let project_paths = crate::project::layout::DraftLayout::for_root(tmp.path());
         project_paths.create_all().unwrap();
         write_json(
-            &layout.workspace_json(),
+            &layout.project_json(),
             &WorkspaceMetadata {
                 schema_version: current_version(ContractId::WorkspaceMetadata),
-                workspace_id: WorkspaceId::generate(),
+                workspace_id: crate::project::mint_project_id(),
                 draft_version: crate::DRAFT_VERSION.to_string(),
                 created_at: now(),
             },
@@ -11982,9 +7992,7 @@ mod app_tests {
         crate::task::TaskStore::for_root(tmp.path())
             .create(&task)
             .unwrap();
-        crate::workspace::stable::StableHeadStore::new(project_paths)
-            .initialize(tmp.path(), "rcp_test".to_string())
-            .unwrap();
+        accept_initial_baseline_for_tests(&app, tmp.path());
 
         let view = app.task_view(tmp.path(), "review-docs").unwrap();
         assert_eq!(view.health, crate::task::TaskViewStatus::Defined);
@@ -11998,21 +8006,19 @@ mod app_tests {
         let app = App::new();
         let layout = DraftLayout::for_root(tmp.path());
         layout.create_all().unwrap();
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(tmp.path());
+        let project_paths = crate::project::layout::DraftLayout::for_root(tmp.path());
         project_paths.create_all().unwrap();
         write_json(
-            &layout.workspace_json(),
+            &layout.project_json(),
             &WorkspaceMetadata {
                 schema_version: current_version(ContractId::WorkspaceMetadata),
-                workspace_id: WorkspaceId::generate(),
+                workspace_id: crate::project::mint_project_id(),
                 draft_version: crate::DRAFT_VERSION.to_string(),
                 created_at: now(),
             },
         )
         .unwrap();
-        crate::workspace::stable::StableHeadStore::new(project_paths)
-            .initialize(tmp.path(), "rcp_test".to_string())
-            .unwrap();
+        accept_initial_baseline_for_tests(&app, tmp.path());
         let task = crate::task::TaskDefinition::new(
             "fix-build".into(),
             "Fix the failing build".into(),
@@ -12026,14 +8032,14 @@ mod app_tests {
         let execution = crate::task::Execution::queued(
             &task,
             "codex".into(),
-            vec!["cargo".into(), "test".into()],
+            vec!["example-test".into(), "--all".into()],
         );
         let execution_store = crate::task::ExecutionStore::for_root(tmp.path());
         execution_store.write(&execution).unwrap();
         execution_store
             .mark_failed(execution.id.as_str(), "tests failed")
             .unwrap();
-        crate::operation::RecoveryStore::for_root(tmp.path())
+        crate::execution::operation::RecoveryStore::for_root(tmp.path())
             .start(
                 "doctor.recovery-test",
                 Some("draft".into()),
@@ -12051,66 +8057,77 @@ mod app_tests {
     }
 
     #[test]
-    fn editor_file_lifecycle_uses_guards_backups_and_search() {
+    fn resource_lifecycle_uses_guards_backups_and_search() {
         let tmp = tempfile::tempdir().unwrap();
+        // Editing resolves the stable security actor, so this test needs a
+        // global store of its own rather than whatever one happens to exist.
+        let global = tempfile::tempdir().unwrap();
+        let _global = ScopedGlobalHome::set(global.path().join(".draft-global"));
         let app = App::new();
+        app.init_global().unwrap();
         let layout = DraftLayout::for_root(tmp.path());
         layout.create_all().unwrap();
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(tmp.path());
+        let project_paths = crate::project::layout::DraftLayout::for_root(tmp.path());
         project_paths.create_all().unwrap();
         write_json(
-            &layout.workspace_json(),
+            &layout.project_json(),
             &WorkspaceMetadata {
                 schema_version: current_version(ContractId::WorkspaceMetadata),
-                workspace_id: WorkspaceId::generate(),
+                workspace_id: crate::project::mint_project_id(),
                 draft_version: crate::DRAFT_VERSION.to_string(),
                 created_at: now(),
             },
         )
         .unwrap();
-        crate::workspace::stable::StableHeadStore::new(project_paths)
-            .initialize(tmp.path(), "rcp_test".to_string())
-            .unwrap();
+        accept_initial_baseline_for_tests(&app, tmp.path());
+
+        let source = ResourceLocator::file("src/notes.txt");
+        let renamed_to = ResourceLocator::file("src/renamed.txt");
 
         let created = app
-            .editor_create_file(tmp.path(), "src/editor.txt", "needle\n")
+            .resource_create(tmp.path(), &source, "needle\n")
             .unwrap();
         assert_eq!(created.action, "created");
         assert_eq!(
-            app.editor_search(tmp.path(), "needle", 10).unwrap()[0].path,
-            "src/editor.txt"
+            app.resource_search(tmp.path(), "needle", 10).unwrap()[0].locator,
+            source
         );
 
-        let renamed = app
-            .editor_rename_file(tmp.path(), "src/editor.txt", "src/renamed.txt")
+        let relocated = app
+            .resource_relocate(tmp.path(), &source, &renamed_to)
             .unwrap();
-        assert_eq!(renamed.old_path.as_deref(), Some("src/editor.txt"));
+        assert_eq!(relocated.previous_locator.as_ref(), Some(&source));
         assert!(tmp.path().join("src/renamed.txt").exists());
 
-        let deleted = app
-            .editor_delete_file(tmp.path(), "src/renamed.txt")
-            .unwrap();
+        let deleted = app.resource_delete(tmp.path(), &renamed_to).unwrap();
         assert_eq!(deleted.action, "deleted");
         assert!(deleted.backup_path.is_some());
         assert!(!tmp.path().join("src/renamed.txt").exists());
 
+        // The control plane can never be reached through a resource locator,
+        // whatever scheme it claims.
         let err = app
-            .editor_create_file(tmp.path(), ".draft/owned.txt", "")
+            .resource_create(tmp.path(), &ResourceLocator::file(".draft/owned.txt"), "")
             .unwrap_err();
         assert!(matches!(
             err.kind,
-            DraftErrorKind::ProtectedFileAccess | DraftErrorKind::Storage
+            DraftErrorKind::ProtectedResourceAccess | DraftErrorKind::Storage
         ));
+        let foreign = ResourceLocator {
+            scheme: "example.catalog".into(),
+            body: "sku/A-100".into(),
+        };
+        assert!(
+            app.resource_create(tmp.path(), &foreign, "").is_err(),
+            "another scheme's resources go through their own adapter"
+        );
     }
 
     #[test]
     fn global_config_get_unset_are_scoped_to_global_home() {
-        let _lock = crate::workspace::home::global_home_env_lock()
-            .lock()
-            .unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let global = tmp.path().join(".draft-global");
-        let _global = GlobalHomeGuard::set(&global);
+        let _global = ScopedGlobalHome::set(&global);
         let app = App::new();
 
         app.config_set_global("risk.block_on_critical", "false")
@@ -12132,208 +8149,6 @@ mod app_tests {
                 .map(String::as_str),
             Some("")
         );
-    }
-
-    #[test]
-    fn pack_dirty_guard_rejects_edits_after_pack_target() {
-        let tmp = tempfile::tempdir().unwrap();
-        let layout = DraftLayout::for_root(tmp.path());
-        layout.create_all().unwrap();
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(tmp.path());
-        project_paths.create_all().unwrap();
-        let workspace_id = WorkspaceId::generate();
-        write_json(
-            &layout.workspace_json(),
-            &WorkspaceMetadata {
-                schema_version: current_version(ContractId::WorkspaceMetadata),
-                workspace_id: workspace_id.clone(),
-                draft_version: crate::DRAFT_VERSION.to_string(),
-                created_at: now(),
-            },
-        )
-        .unwrap();
-        let stable = crate::workspace::stable::StableHeadStore::new(project_paths.clone())
-            .initialize(tmp.path(), "rcp_test".to_string())
-            .unwrap();
-        let pack = PackWorkspace::new(
-            workspace_id.clone(),
-            None,
-            None,
-            SnapshotId::generate(),
-            SnapshotId::generate(),
-            Some("dirty-pack".into()),
-        );
-        let manifest = manifest_for(None, pack.id.as_str());
-        let store = crate::pack::PackStore::new(project_paths);
-        store.write_manifest(&manifest).unwrap();
-        let manifest = store.read_manifest(pack.id.as_str()).unwrap();
-        let mut revision = crate::pack::PackRevision {
-            schema_version: current_version(ContractId::PackRevision),
-            pack_id: manifest.pack_id.clone(),
-            manifest_digest: manifest.manifest_digest.clone(),
-            revision_id: "rev_dirty".into(),
-            revision_number: 1,
-            revision_digest: String::new(),
-            base_digest: stable.workspace_hash.clone(),
-            content_digest: stable.workspace_hash.clone(),
-            diff_digest: sha256_hex(b""),
-            target_digest: stable.workspace_hash,
-            resolved_dependency_digests: Vec::new(),
-            created_at: now().to_rfc3339(),
-        };
-        revision.refresh_revision_digest();
-        store.write_revision(&revision).unwrap();
-        store
-            .write_lockfile(&crate::pack::PackLockfile {
-                schema_version: current_version(ContractId::PackLock),
-                pack_id: manifest.pack_id.clone(),
-                workspace_hash: revision.target_digest.clone(),
-                file_hashes: BTreeMap::new(),
-                policy_version: crate::DRAFT_VERSION.into(),
-                risk_engine_version: crate::DRAFT_VERSION.into(),
-                verification_commands: Vec::new(),
-                lsif_version: crate::DRAFT_VERSION.into(),
-                test_selector_version: crate::DRAFT_VERSION.into(),
-                fuzz_selector_version: crate::DRAFT_VERSION.into(),
-                dependency_pack_hashes: Vec::new(),
-                receipt_digests: Vec::new(),
-            })
-            .unwrap();
-        store
-            .write_lifecycle_in(
-                crate::pack::PackLocation::Store,
-                &crate::pack::lifecycle::PackLifecycleRecord {
-                    schema_version: current_version(ContractId::PackLifecycle),
-                    pack_id: manifest.pack_id,
-                    revision_id: revision.revision_id.clone(),
-                    revision_digest: revision.revision_digest.clone(),
-                    lifecycle: crate::pack::lifecycle::PackLifecycle::Draft,
-                    updated_at: now(),
-                    last_operation_id: crate::support::common::OperationId::new("op_dirty"),
-                },
-            )
-            .unwrap();
-        std::fs::write(tmp.path().join("src.txt"), "manual edit\n").unwrap();
-        let ws = Workspace {
-            workspace_id,
-            root: tmp.path().to_path_buf(),
-            layout,
-        };
-
-        let err =
-            ensure_pack_workspace_matches_target(&ws, &pack, "review", "restore the workspace")
-                .unwrap_err();
-        assert_eq!(err.kind, DraftErrorKind::DirtyWorkspace);
-        assert!(err.message.contains("review baseline"));
-    }
-
-    #[test]
-    fn pack_reopen_creates_audited_revision_and_invalidates_current_evidence() {
-        let _lock = crate::workspace::home::global_home_env_lock()
-            .lock()
-            .unwrap();
-        let tmp = tempfile::tempdir().unwrap();
-        let global = tempfile::tempdir().unwrap();
-        let _global = GlobalHomeGuard::set(&global.path().join(".draft-global"));
-        let layout = DraftLayout::for_root(tmp.path());
-        layout.create_all().unwrap();
-        let project_paths = crate::workspace::layout::DraftLayout::for_root(tmp.path());
-        project_paths.create_all().unwrap();
-        write_json(
-            &layout.workspace_json(),
-            &WorkspaceMetadata {
-                schema_version: current_version(ContractId::WorkspaceMetadata),
-                workspace_id: WorkspaceId::generate(),
-                draft_version: crate::DRAFT_VERSION.to_string(),
-                created_at: now(),
-            },
-        )
-        .unwrap();
-        crate::workspace::stable::StableHeadStore::new(project_paths.clone())
-            .initialize(tmp.path(), "rcp_reopen_test".to_string())
-            .unwrap();
-        let manifest = manifest_for(None, "pck_reopen");
-        let store = crate::pack::PackStore::new(project_paths);
-        store.write_manifest(&manifest).unwrap();
-        let manifest = store.read_manifest("pck_reopen").unwrap();
-        let mut patch = PatchSet {
-            schema_version: current_version(ContractId::PatchSet),
-            id: PatchSetId::generate(),
-            base_snapshot_id: SnapshotId::new("chk_empty"),
-            result_snapshot_id: SnapshotId::new("chk_empty"),
-            files: Vec::new(),
-            patch_graph_hash: String::new(),
-        };
-        patch.patch_graph_hash = hash_json(&patch).unwrap();
-        let patch_bytes = to_pretty(&patch).unwrap();
-        let mut revision = crate::pack::PackRevision {
-            schema_version: current_version(ContractId::PackRevision),
-            pack_id: manifest.pack_id.clone(),
-            manifest_digest: manifest.manifest_digest.clone(),
-            revision_id: "rev_rejected".into(),
-            revision_number: 1,
-            revision_digest: String::new(),
-            base_digest: "sha256:base".into(),
-            content_digest: "sha256:content".into(),
-            diff_digest: sha256_hex(&patch_bytes),
-            target_digest: "sha256:target".into(),
-            resolved_dependency_digests: Vec::new(),
-            created_at: now().to_rfc3339(),
-        };
-        revision.refresh_revision_digest();
-        store.write_revision(&revision).unwrap();
-        write_atomic(
-            &store
-                .dir_for(crate::pack::PackLocation::Store, "pck_reopen")
-                .join("changes.patch"),
-            &patch_bytes,
-        )
-        .unwrap();
-        store
-            .write_lockfile(&crate::pack::PackLockfile {
-                schema_version: current_version(ContractId::PackLock),
-                pack_id: manifest.pack_id.clone(),
-                workspace_hash: revision.target_digest.clone(),
-                file_hashes: BTreeMap::new(),
-                policy_version: crate::DRAFT_VERSION.into(),
-                risk_engine_version: crate::DRAFT_VERSION.into(),
-                verification_commands: Vec::new(),
-                lsif_version: crate::DRAFT_VERSION.into(),
-                test_selector_version: crate::DRAFT_VERSION.into(),
-                fuzz_selector_version: crate::DRAFT_VERSION.into(),
-                dependency_pack_hashes: Vec::new(),
-                receipt_digests: Vec::new(),
-            })
-            .unwrap();
-        store
-            .write_lifecycle_in(
-                crate::pack::PackLocation::Store,
-                &crate::pack::lifecycle::PackLifecycleRecord {
-                    schema_version: current_version(ContractId::PackLifecycle),
-                    pack_id: manifest.pack_id,
-                    revision_id: revision.revision_id.clone(),
-                    revision_digest: revision.revision_digest.clone(),
-                    lifecycle: crate::pack::lifecycle::PackLifecycle::Rejected,
-                    updated_at: now(),
-                    last_operation_id: crate::support::common::OperationId::new("op_rejected"),
-                },
-            )
-            .unwrap();
-
-        let report = App::new()
-            .pack_reopen(tmp.path(), "pck_reopen", "op_reopen_test")
-            .unwrap();
-        assert!(report.revision_id.starts_with("rev_"));
-        let inspected = App::new().pack_inspect(tmp.path(), "pck_reopen").unwrap();
-        assert_eq!(inspected.lifecycle, PackLifecycle::Draft);
-        assert_eq!(inspected.revision_id, report.revision_id);
-        assert!(!inspected.verified);
-        assert_eq!(inspected.valid_actions, vec!["verify"]);
-        assert!(App::new()
-            .canonical_events(tmp.path())
-            .unwrap()
-            .iter()
-            .any(|event| event.event_type == "PackReopened"));
     }
 
     fn tree_digest(root: &Path) -> String {
@@ -12363,18 +8178,15 @@ mod app_tests {
 
     #[test]
     fn user_profile_changes_preserve_all_preexisting_security_and_canonical_artifacts() {
-        let _lock = crate::workspace::home::global_home_env_lock()
-            .lock()
-            .unwrap();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("project");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("source.txt"), "canonical source\n").unwrap();
         let global_root = temp.path().join("global");
-        let _guard = GlobalHomeGuard::set(&global_root);
+        let _guard = ScopedGlobalHome::set(&global_root);
         let app = App::new();
         let initialized = app.init(&root).unwrap();
-        let home = crate::workspace::home::DraftGlobalStore::at(&global_root);
+        let home = crate::project::home::DraftGlobalStore::at(&global_root);
         let actor = crate::trust::identity::global::load_actor(&home)
             .unwrap()
             .unwrap();
@@ -12387,11 +8199,12 @@ mod app_tests {
         .unwrap();
 
         let workspace = app.open(&root).unwrap();
-        let mut manifest = manifest_for(Some(&candidate.candidate_id), "pck_profile_invariance");
+        let mut manifest = manifest_for(Some(&candidate.candidate_id), "chg_profile_invariance");
         manifest.author_id = actor.actor_id.clone();
         manifest.refresh_manifest_digest();
-        let pack_store = crate::pack::PackStore::new(workspace.layout.clone());
-        pack_store.write_manifest(&manifest).unwrap();
+        let change_store =
+            crate::dcg::change_store::ChangeContentStore::new(workspace.layout.clone());
+        change_store.write_manifest(&manifest).unwrap();
         crate::support::fsutil::write_json(
             &home.revoked_keys_json(),
             &serde_json::json!({
@@ -12400,10 +8213,10 @@ mod app_tests {
             }),
         )
         .unwrap();
-        crate::trust::audit::GlobalAuditLog::global()
+        crate::activity::GlobalAuditLog::global()
             .unwrap()
             .append(
-                "baseline",
+                crate::activity::GlobalAuditEvent::ExtensionSourceConfigured,
                 Some(actor.actor_id.clone()),
                 Some("profile-invariance".into()),
                 None,
@@ -12411,46 +8224,45 @@ mod app_tests {
             )
             .unwrap();
 
-        let ledger = crate::trust::ledger::TrustLedger::open_at(
-            &root,
-            &initialized.workspace_id,
-            home.clone(),
-        )
-        .unwrap();
-        assert!(ledger.verify_all().unwrap().all_ok);
+        assert!(
+            crate::read_model::integrity::verify_all(
+                &crate::project::layout::DraftLayout::for_root(&root),
+                &draft_dcg_contract::ids::ProjectId::parse(&initialized.workspace_id).unwrap(),
+            )
+            .unwrap()
+            .all_ok
+        );
 
-        let layout = crate::workspace::layout::DraftLayout::for_root(&root);
+        let layout = crate::project::layout::DraftLayout::for_root(&root);
         let actor_bytes = std::fs::read(home.actor_json()).unwrap();
         let signing_key_bytes = std::fs::read(home.signing_key()).unwrap();
         let public_keys_digest = tree_digest(&home.public_keys_dir());
         let trust_digest = tree_digest(&home.trust_dir());
         let candidate_registry_bytes = std::fs::read(home.candidates_json()).unwrap();
         let manifest_bytes =
-            std::fs::read(layout.pack_manifest(manifest.pack_id.as_str())).unwrap();
+            std::fs::read(layout.change_manifest(manifest.change_id.as_str())).unwrap();
         let events_before = app.events(&root).unwrap();
-        let event_log_before = std::fs::read(layout.event_log()).unwrap();
-        let receipts_before = crate::trust::receipt::ReceiptStore::new(layout.clone())
-            .list()
+        let event_log_before = std::fs::read(layout.activity_log()).unwrap();
+        let receipts_before = crate::receipt::ReceiptEnvelopeStore::for_layout(&layout)
+            .read_all()
             .unwrap();
         let receipts_digest = tree_digest(&layout.receipts_dir());
-        let source_policy = crate::workspace::source_view::CanonicalSourcePolicy::default();
+        let source_policy = crate::dcg::source_view::CanonicalSourcePolicy::default();
         let source_digest =
-            crate::workspace::source_view::CanonicalSourceView::build(&root, &source_policy)
+            crate::dcg::source_view::CanonicalSourceView::build(&root, &source_policy)
                 .unwrap()
                 .content_digest;
-        let workspace_digest = crate::workspace::source_view::workspace_hash(&root).unwrap();
-        let ownership_before = crate::workspace::ownership::evaluate(
-            &root,
-            &["source.txt".into()],
-            &["@owner".into()],
-        )
-        .unwrap();
-        let policy_before = crate::review::policy::Policy::resolve(
+        let workspace_digest =
+            crate::dcg::source_view::workspace_hash(&root, &Default::default()).unwrap();
+        let ownership_before =
+            crate::project::ownership::evaluate(&root, &["source.txt".into()], &["@owner".into()])
+                .unwrap();
+        let policy_before = crate::project::policy::Policy::resolve(
             Some(&layout.policy_toml()),
             Some(&home.default_policy_toml()),
         )
         .unwrap();
-        let audit_before = crate::trust::audit::GlobalAuditLog::global()
+        let audit_before = crate::activity::GlobalAuditLog::global()
             .unwrap()
             .read_all()
             .unwrap();
@@ -12478,7 +8290,7 @@ mod app_tests {
             candidate_registry_bytes
         );
         assert_eq!(
-            std::fs::read(layout.pack_manifest(manifest.pack_id.as_str())).unwrap(),
+            std::fs::read(layout.change_manifest(manifest.change_id.as_str())).unwrap(),
             manifest_bytes
         );
         assert_eq!(
@@ -12487,32 +8299,28 @@ mod app_tests {
         );
         assert_eq!(tree_digest(&layout.receipts_dir()), receipts_digest);
         assert_eq!(
-            crate::trust::receipt::ReceiptStore::new(layout.clone())
-                .list()
+            crate::receipt::ReceiptEnvelopeStore::for_layout(&layout)
+                .read_all()
                 .unwrap(),
             receipts_before
         );
         assert_eq!(
-            crate::workspace::source_view::CanonicalSourceView::build(&root, &source_policy)
+            crate::dcg::source_view::CanonicalSourceView::build(&root, &source_policy)
                 .unwrap()
                 .content_digest,
             source_digest
         );
         assert_eq!(
-            crate::workspace::source_view::workspace_hash(&root).unwrap(),
+            crate::dcg::source_view::workspace_hash(&root, &Default::default()).unwrap(),
             workspace_digest
         );
         assert_eq!(
-            crate::workspace::ownership::evaluate(
-                &root,
-                &["source.txt".into()],
-                &["@owner".into()],
-            )
-            .unwrap(),
+            crate::project::ownership::evaluate(&root, &["source.txt".into()], &["@owner".into()],)
+                .unwrap(),
             ownership_before
         );
         assert_eq!(
-            crate::review::policy::Policy::resolve(
+            crate::project::policy::Policy::resolve(
                 Some(&layout.policy_toml()),
                 Some(&home.default_policy_toml()),
             )
@@ -12525,12 +8333,12 @@ mod app_tests {
             &events_after[..events_before.len()],
             events_before.as_slice()
         );
-        assert!(std::fs::read(layout.event_log())
+        assert!(std::fs::read(layout.activity_log())
             .unwrap()
             .starts_with(&event_log_before));
         for event in &events_after[events_before.len()..] {
-            assert_eq!(event.actor_id, actor.actor_id);
-            assert_eq!(event.event_type, "user.profile.updated");
+            assert_eq!(event.actor, actor.actor_id);
+            assert_eq!(event.kind, "PolicyUpdated");
             assert_eq!(event.metadata["scope"], "project");
             assert!(event.metadata.get("changed_keys").is_some());
             assert!(event.metadata.get("resulting_config_digest").is_some());
@@ -12539,18 +8347,15 @@ mod app_tests {
             assert!(!serialized.contains("project@example.test"));
         }
         assert!(
-            crate::trust::ledger::TrustLedger::open_at(
-                &root,
-                &initialized.workspace_id,
-                home.clone(),
+            crate::read_model::integrity::verify_all(
+                &layout,
+                &draft_dcg_contract::ids::ProjectId::parse(&initialized.workspace_id).unwrap(),
             )
-            .unwrap()
-            .verify_all()
             .unwrap()
             .all_ok
         );
 
-        let audit_after = crate::trust::audit::GlobalAuditLog::global()
+        let audit_after = crate::activity::GlobalAuditLog::global()
             .unwrap()
             .read_all()
             .unwrap();

@@ -1,5 +1,4 @@
-//! Candidate profiles, capabilities, limits, and task presets (TDD §5.4,
-//! Blueprint §3.10–3.11).
+//! Candidate profiles, capabilities, limits, and task presets.
 //!
 //! A candidate is any tool or person that can produce work for a task: an
 //! agent command, a plain command, or a human editing through the editor.
@@ -51,14 +50,23 @@ impl CandidateKind {
 #[serde(default, deny_unknown_fields)]
 pub struct CandidateCapabilities {
     pub can_plan: bool,
+    /// Whether the candidate can change project state at all.
     pub can_edit: bool,
-    pub can_run_tests: bool,
+    /// Whether it can run the project's verification checks itself.
+    ///
+    /// Neutral: what a check *is* comes from the project's configuration or a
+    /// contributed verification capability, not from this flag.
+    pub can_verify: bool,
     pub can_read_index: bool,
     pub can_accept_task_contract: bool,
     pub supports_resume: bool,
     pub supports_streaming_logs: bool,
-    pub supports_patch_output: bool,
-    pub supports_pack_output: bool,
+    /// Whether it returns proposed mutations rather than editing in place.
+    ///
+    /// A proposal is the safer shape — Draft authors the plan from it — but
+    /// neither shape lets the candidate author authority metadata.
+    pub proposes_mutations: bool,
+    pub supports_change_output: bool,
     pub requires_shell: bool,
     pub requires_network: bool,
 }
@@ -70,13 +78,13 @@ impl Default for CandidateCapabilities {
         CandidateCapabilities {
             can_plan: false,
             can_edit: true,
-            can_run_tests: false,
+            can_verify: false,
             can_read_index: false,
             can_accept_task_contract: true,
             supports_resume: false,
             supports_streaming_logs: false,
-            supports_patch_output: false,
-            supports_pack_output: false,
+            proposes_mutations: false,
+            supports_change_output: false,
             requires_shell: false,
             requires_network: false,
         }
@@ -110,7 +118,12 @@ pub enum IsolationMode {
 pub struct CandidateLimits {
     pub max_runtime_seconds: Option<u64>,
     pub max_files_changed: Option<u32>,
-    pub max_changed_lines: Option<u32>,
+    /// A byte budget on what one candidate run may produce.
+    ///
+    /// Bytes rather than lines: Draft has no notion of a line, and a candidate
+    /// may legitimately produce something that has none. An extension that cares
+    /// about lines expresses that through a contributed reviewability metric.
+    pub max_output_bytes_changed: Option<u64>,
     pub max_processes: Option<u32>,
     pub max_output_bytes: Option<u64>,
     pub network: NetworkPolicy,
@@ -166,7 +179,7 @@ impl CandidateProfile {
         let ok = match needed {
             "edit" => self.capabilities.can_edit,
             "plan" => self.capabilities.can_plan,
-            "run_tests" => self.capabilities.can_run_tests,
+            "verify" => self.capabilities.can_verify,
             "resume" => self.capabilities.supports_resume,
             "task_contract" => self.capabilities.can_accept_task_contract,
             other => {
@@ -197,7 +210,7 @@ impl CandidateProfile {
 fn capability_key(needed: &str) -> &'static str {
     match needed {
         "plan" => "can_plan",
-        "run_tests" => "can_run_tests",
+        "verify" => "can_verify",
         "resume" => "supports_resume",
         "task_contract" => "can_accept_task_contract",
         _ => "can_edit",
@@ -215,7 +228,7 @@ pub struct CandidatePreset {
     #[serde(default)]
     pub require_full_evidence: bool,
     #[serde(default)]
-    pub prefer_smallest_valid_pack: bool,
+    pub prefer_smallest_valid_change: bool,
     pub source: String,
 }
 
@@ -228,7 +241,7 @@ fn builtin_presets() -> Vec<CandidatePreset> {
                   candidates: &[&str],
                   plan_first: bool,
                   require_full_evidence: bool,
-                  prefer_smallest_valid_pack: bool| CandidatePreset {
+                  prefer_smallest_valid_change: bool| CandidatePreset {
         schema_version: crate::contracts::current_version(
             crate::contracts::ContractId::CandidatePreset,
         ),
@@ -236,7 +249,7 @@ fn builtin_presets() -> Vec<CandidatePreset> {
         candidates: candidates.iter().map(|c| c.to_string()).collect(),
         plan_first,
         require_full_evidence,
-        prefer_smallest_valid_pack,
+        prefer_smallest_valid_change,
         source: "builtin".into(),
     };
     vec![
@@ -249,7 +262,7 @@ fn builtin_presets() -> Vec<CandidatePreset> {
 fn builtin_profiles() -> Vec<CandidateProfile> {
     let mut manual = CandidateProfile::base("manual", CandidateKind::Manual, None, "builtin");
     manual.capabilities.can_plan = true;
-    manual.capabilities.can_run_tests = true;
+    manual.capabilities.can_verify = true;
     manual.capabilities.can_accept_task_contract = false;
     manual.limits.isolation_mode = IsolationMode::InPlace;
 
@@ -296,7 +309,7 @@ impl CandidateRegistry {
             if !path.exists() {
                 continue;
             }
-            crate::workspace::config::read(path)?;
+            crate::project::config::read(path)?;
             let text = std::fs::read_to_string(path)?;
             let value = text.parse::<Value>().map_err(|error| {
                 DraftError::new(
@@ -359,7 +372,7 @@ impl CandidateRegistry {
                 format!("candidate '{name}' is not configured"),
             )
             .with_suggestion(format!(
-                "add [candidates.{name}] to .draft/config.toml or run `draft candidate add {name} -- <command>`"
+                "add [candidates.{name}] to .draft/config.toml or run `draft change candidate add {name} -- <command>`"
             ))
         })
     }
@@ -456,7 +469,7 @@ fn profile_from_table(
     let caps = CandidateCapabilities {
         can_plan: get_bool(table, "can_plan", base.capabilities.can_plan),
         can_edit: get_bool(table, "can_edit", base.capabilities.can_edit),
-        can_run_tests: get_bool(table, "can_run_tests", base.capabilities.can_run_tests),
+        can_verify: get_bool(table, "can_verify", base.capabilities.can_verify),
         can_read_index: get_bool(table, "can_read_index", base.capabilities.can_read_index),
         can_accept_task_contract: get_bool(
             table,
@@ -469,15 +482,15 @@ fn profile_from_table(
             "supports_streaming_logs",
             base.capabilities.supports_streaming_logs,
         ),
-        supports_patch_output: get_bool(
+        proposes_mutations: get_bool(
             table,
-            "supports_patch_output",
-            base.capabilities.supports_patch_output,
+            "proposes_mutations",
+            base.capabilities.proposes_mutations,
         ),
-        supports_pack_output: get_bool(
+        supports_change_output: get_bool(
             table,
-            "supports_pack_output",
-            base.capabilities.supports_pack_output,
+            "supports_change_output",
+            base.capabilities.supports_change_output,
         ),
         requires_shell: get_bool(table, "requires_shell", base.capabilities.requires_shell),
         requires_network: get_bool(
@@ -501,7 +514,8 @@ fn profile_from_table(
         max_runtime_seconds: get_u64(table, "max_runtime_seconds")
             .or(base.limits.max_runtime_seconds),
         max_files_changed: get_u32(table, "max_files_changed").or(base.limits.max_files_changed),
-        max_changed_lines: get_u32(table, "max_changed_lines").or(base.limits.max_changed_lines),
+        max_output_bytes_changed: get_u64(table, "max_output_bytes_changed")
+            .or(base.limits.max_output_bytes_changed),
         max_processes: get_u32(table, "max_processes").or(base.limits.max_processes),
         max_output_bytes: get_u64(table, "max_output_bytes").or(base.limits.max_output_bytes),
         network,
@@ -563,7 +577,7 @@ fn preset_from_table(name: &str, table: &Value, source: &str) -> CandidatePreset
         candidates: get_str_list(table, "candidates"),
         plan_first: get_bool(table, "plan_first", false),
         require_full_evidence: get_bool(table, "require_full_evidence", false),
-        prefer_smallest_valid_pack: get_bool(table, "prefer_smallest_valid_pack", false),
+        prefer_smallest_valid_change: get_bool(table, "prefer_smallest_valid_change", false),
         source: source.to_string(),
     }
 }
@@ -611,7 +625,7 @@ schema_version = 1
 [candidates.codex]
 kind = "agent"
 command = "codex-global"
-can_run_tests = true
+can_verify = true
 
 [tasks.presets.fast]
 candidates = ["claude"]
@@ -637,7 +651,7 @@ max_runtime_seconds = 60
         );
         assert!(codex.capabilities.supports_resume);
         // Global-layer capability survives when project does not override it.
-        assert!(codex.capabilities.can_run_tests);
+        assert!(codex.capabilities.can_verify);
         assert_eq!(codex.limits.max_runtime_seconds, Some(60));
         assert_eq!(reg.preset("fast").unwrap().candidates, vec!["claude"]);
     }

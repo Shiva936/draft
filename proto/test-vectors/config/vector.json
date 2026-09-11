@@ -7,12 +7,8 @@
       "name": "Ada",
       "email": "display contact"
     },
-    "submit": {
-      "pack_disposal": "merge_and_dispose",
-      "message_template": "{{title}}"
-    },
     "hooks": {
-      "submit": {
+      "verify": {
         "kind": "entry",
         "entry": {
           "command": "cargo test",
@@ -22,12 +18,17 @@
       }
     },
     "protected": {
-      "protected_files": [
-        { "pattern": ".env", "reason": "secrets" }
+      "protected_resources": [
+        {
+          "pattern": ".env",
+          "reason": "secrets"
+        }
       ]
     },
     "owners": {
-      "core/**": ["@core"]
+      "core/**": [
+        "@core"
+      ]
     },
     "candidates": {
       "codex": {

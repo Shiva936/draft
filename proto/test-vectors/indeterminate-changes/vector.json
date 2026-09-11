@@ -1,0 +1,42 @@
+{
+  "expect": "revisions sealed from different Baselines are indeterminate even when their                  Resource sets are disjoint — the answer fails closed",
+  "name": "indeterminate-changes",
+  "payload": {
+    "affected_resources": [
+      "res_000000000001",
+      "res_000000000002"
+    ],
+    "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+    "composition_digest": "sha256:d6e2d593a57fb40446c10b0a950a43ce84c3e9158a7ba52b11c8fb86006e2b1f",
+    "id": "cmp_d6e2d593a57f",
+    "members": [
+      {
+        "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+        "change": "chg_000000000001",
+        "revision": "rev_000000000001",
+        "touched": [
+          "res_000000000001"
+        ]
+      },
+      {
+        "base_baseline": "sha256:2962c0c5aa5ef6d7738402a392439cb4f75275d7aa0aa78200ed6113607692fa",
+        "change": "chg_000000000004",
+        "revision": "rev_000000000004",
+        "touched": [
+          "res_000000000002"
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "detail": "sealed from different Baselines, so disjoint Resource sets prove nothing",
+        "left": "rev_000000000001",
+        "relation": "indeterminate",
+        "right": "rev_000000000004"
+      }
+    ],
+    "schema_version": 1,
+    "status": "failed"
+  },
+  "payload_schema": "composition.schema.json"
+}

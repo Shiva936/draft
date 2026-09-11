@@ -1,0 +1,11 @@
+{
+  "preset_id": "draft.agent.cursor/default",
+  "display_name": "Cursor",
+  "execution": {
+    "execution": "tool_action",
+    "action_id": "draft.agent.cursor/run"
+  },
+  "limits": {
+    "max_resources_changed": 200
+  }
+}

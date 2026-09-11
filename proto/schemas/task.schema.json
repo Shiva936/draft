@@ -18,12 +18,12 @@
     "review_questions",
     "candidate_preset",
     "schedule",
-    "parent_pack",
+    "parent_change",
     "source_context",
     "created_at",
     "updated_at",
     "created_by",
-    "base_stable_head",
+    "base_baseline",
     "status",
     "priority",
     "next_actions",
@@ -100,7 +100,7 @@
         "null"
       ]
     },
-    "parent_pack": {
+    "parent_change": {
       "type": [
         "string",
         "null"
@@ -121,7 +121,7 @@
     "created_by": {
       "type": "string"
     },
-    "base_stable_head": {
+    "base_baseline": {
       "type": "string"
     },
     "status": {

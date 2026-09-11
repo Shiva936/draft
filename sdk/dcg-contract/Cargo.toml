@@ -1,0 +1,15 @@
+[package]
+name = "draft-dcg-contract"
+version = "0.3.4"
+edition = "2021"
+description = "Draft's portable Draft Change Graph contract: canonical identifiers, resource and relation state, observations, coverage, baselines, publication facts and receipts."
+license = "Apache-2.0"
+repository = "https://github.com/Shiva936/draft"
+readme = "README.md"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ed25519-dalek = "2.1"
+base64 = "0.22"
+sha2 = "0.10"

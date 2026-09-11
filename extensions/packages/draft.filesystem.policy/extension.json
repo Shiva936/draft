@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "draft.filesystem.policy",
+  "name": "Filesystem protection policy",
+  "version": "1.0.0",
+  "publisher": "draft",
+  "draft_api": "^0.3.4",
+  "contributions": [
+    {
+      "id": "policy",
+      "kind": "policy_preset",
+      "path": "contributions/policy.json"
+    }
+  ],
+  "documentation": [
+    "docs/readme.md"
+  ],
+  "licenses": [
+    "LICENSE.txt"
+  ],
+  "assets": [],
+  "schemas": [],
+  "permissions": [],
+  "description": "Protects credential-shaped filesystem resources from agent modification.",
+  "keywords": [
+    "security",
+    "filesystem",
+    "policy"
+  ]
+}

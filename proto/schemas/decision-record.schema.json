@@ -1,96 +1,66 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Draft Decision Record",
+  "$id": "https://draft.dev/schemas/decision-record.schema.json",
+  "title": "Draft Decision",
+  "x-draft-format-revision": 1,
+  "description": "One immutable judgement about one exact ChangeRevision. A Decision authorizes a promotion; it never performs one, and it never carries to another revision.",
   "type": "object",
-  "required": [
-    "schema_version",
-    "id",
-    "decision_type",
-    "pack_id",
-    "base_stable_head",
-    "author",
-    "reason",
-    "evidence_ids",
-    "created_at"
-  ],
+  "required": ["id", "revision", "outcome", "decided_by", "decided_at"],
+  "additionalProperties": false,
   "properties": {
-    "schema_version": {
-      "type": "integer",
-      "const": 1
-    },
-    "id": {
+    "id": { "type": "string", "pattern": "^dec_[A-Za-z0-9_-]+$" },
+    "revision": {
+      "description": "The exact revision judged. Backed by a create-once digest binding, so 'the same revision' means the same bytes.",
       "type": "string",
-      "pattern": "^dec_[A-Za-z0-9_-]+$"
+      "pattern": "^rev_[A-Za-z0-9_-]+$"
     },
-    "decision_type": {
-      "enum": [
-        "approve",
-        "reject",
-        "waive",
-        "override",
-        "accept_risk",
-        "request_changes",
-        "invalidate"
-      ]
-    },
-    "task_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "pack_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "execution_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "evidence_ids": {
+    "outcome": { "$ref": "#/$defs/outcome" },
+    "decided_by": { "type": "string", "pattern": "^act_[A-Za-z0-9_-]+$" },
+    "decided_at": { "type": "integer" },
+    "authority": {
+      "description": "The exact grants that permitted this decision. Empty is legitimate for a rejection — refusing work needs no authority beyond being asked to review it — but an approval citing none is refused.",
       "type": "array",
-      "items": {
-        "type": "string",
-        "pattern": "^evd_[A-Za-z0-9_-]+$"
-      }
-    },
-    "receipt_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "base_stable_head": {
-      "type": "string"
-    },
-    "author": {
-      "type": "string"
-    },
-    "reason": {
-      "type": "string"
-    },
-    "created_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "invalidated_at": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "format": "date-time"
-    },
-    "invalidation_reason": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "items": { "$ref": "#/$defs/security_fact_ref" }
     }
   },
-  "additionalProperties": false,
-  "$id": "https://draft.dev/schemas/decision-record.schema.json"
+  "$defs": {
+    "outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["outcome"],
+          "additionalProperties": false,
+          "properties": { "outcome": { "const": "approved" } }
+        },
+        {
+          "type": "object",
+          "required": ["outcome", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "outcome": { "const": "rejected" },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["outcome", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "outcome": { "const": "changes_requested" },
+            "reason": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "security_fact_ref": {
+      "type": "object",
+      "required": ["kind", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "logical_id": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    }
+  }
 }

@@ -16,6 +16,25 @@ pub const BINARY_METADATA_PART: &str = "metadata";
 pub const BINARY_CONTENT_PART: &str = "content";
 pub const BINARY_METADATA_MEDIA_TYPE: &str = "application/json";
 
+/// A reference to the artifact that produced a derived result.
+///
+/// The attestation digest is what makes historical evidence self-sufficient:
+/// validating an artifact produced years ago follows this reference rather
+/// than asking whichever version happens to be installed now.
+///
+/// It lives here rather than under `extension` because naming a producer is
+/// not an extension capability — the graph, recovery anchors, verification
+/// evidence and derivation provenance all record one, and none of them may
+/// depend on what is installed in order to say who made something.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProducerRef {
+    pub extension_id: String,
+    pub extension_version: String,
+    pub package_digest: String,
+    pub attestation_digest: String,
+}
+
 /// A schema version declared by one contract boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SchemaVersion(u32);
@@ -110,17 +129,20 @@ contract_registry! {
     ProjectRegistry => ("project-registry", Persisted, Some("registry.schema.json"), VersionPolicy::V1_ONLY),
     ProjectRegistryEntry => ("project-registry-entry", Wire, None, VersionPolicy::V1_ONLY),
     AdoptionReceipt => ("adoption-receipt", Persisted, None, VersionPolicy::V1_ONLY),
-    StableHead => ("stable-head", Persisted, Some("stable-head.schema.json"), VersionPolicy::V1_ONLY),
-    StableGraphIndex => ("stable-graph-index", Persisted, None, VersionPolicy::V1_ONLY),
+    ChangeGraphIndex => ("change-graph-index", Persisted, None, VersionPolicy::V1_ONLY),
     WorkspaceSnapshot => ("workspace-snapshot", Persisted, None, VersionPolicy::V1_ONLY),
+    ObservationContext => ("observation-context", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    ObservationRunProvenance => ("observation-run-provenance", Persisted, None, VersionPolicy::V1_ONLY),
+    ActiveObservationContext => ("active-observation-context", Persisted, None, VersionPolicy::V1_ONLY),
+    PendingObservationContext => ("pending-observation-context", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    ObservationContextTransition => ("observation-context-transition", PersistedAndWire, None, VersionPolicy::V1_ONLY),
     CanonicalSourcePolicy => ("canonical-source-policy", Persisted, None, VersionPolicy::V1_ONLY),
     CanonicalSourceView => ("canonical-source-view", PersistedAndWire, Some("canonical-source-view.schema.json"), VersionPolicy::V1_ONLY),
     WorkspaceRevision => ("workspace-revision", PersistedAndWire, Some("workspace-revision.schema.json"), VersionPolicy::V1_ONLY),
-    ObjectPackIndex => ("object-pack-index", Persisted, None, VersionPolicy::V1_ONLY),
-    ObjectPack => ("object-pack", Persisted, None, VersionPolicy::V1_ONLY),
+    ObjectSegmentIndex => ("object-segment-index", Persisted, None, VersionPolicy::V1_ONLY),
+    ObjectSegment => ("object-segment", Persisted, None, VersionPolicy::V1_ONLY),
     WorkspaceIndex => ("workspace-index", Persisted, None, VersionPolicy::V1_ONLY),
-    EventRecord => ("event", PersistedAndWire, Some("event.schema.json"), VersionPolicy::V1_ONLY),
-    EventIndex => ("event-index", Persisted, None, VersionPolicy::V1_ONLY),
+    ActivityRecord => ("activity-record", PersistedAndWire, Some("activity-record.schema.json"), VersionPolicy::V1_ONLY),
     Receipt => ("receipt", PersistedAndWire, Some("receipt.schema.json"), VersionPolicy::V1_ONLY),
     TransparencyEntry => ("transparency-entry", Persisted, None, VersionPolicy::V1_ONLY),
     RevokedKeyRegistry => ("revoked-key-registry", Persisted, None, VersionPolicy::V1_ONLY),
@@ -133,38 +155,41 @@ contract_registry! {
     FencedLease => ("fenced-lease", Wire, None, VersionPolicy::V1_ONLY),
     LeaseState => ("lease-state", Persisted, Some("lease.schema.json"), VersionPolicy::V1_ONLY),
     RecoveryRecord => ("recovery-record", Persisted, None, VersionPolicy::V1_ONLY),
-    EditorSession => ("editor-session", Persisted, Some("editor-session.schema.json"), VersionPolicy::V1_ONLY),
-    EditorCommitResult => ("editor-commit-result", Wire, None, VersionPolicy::V1_ONLY),
+    WorkspaceContract => ("workspace", Persisted, Some("workspace.schema.json"), VersionPolicy::V1_ONLY),
+    WorkspaceCommitResultContract => ("workspace-commit-result", Wire, None, VersionPolicy::V1_ONLY),
     NotificationStore => ("notification-store", Persisted, Some("notification.schema.json"), VersionPolicy::V1_ONLY),
     NotificationRecord => ("notification", Wire, Some("notification.schema.json"), VersionPolicy::V1_ONLY),
-    SubmitRecord => ("submit-record", Persisted, Some("submit-record.schema.json"), VersionPolicy::V1_ONLY),
     RollbackPlan => ("rollback-plan", PersistedAndWire, Some("rollback-plan.schema.json"), VersionPolicy::V1_ONLY),
     RollbackRecord => ("rollback-record", Persisted, Some("rollback-record.schema.json"), VersionPolicy::V1_ONLY),
     VerificationConfig => ("verification-config", Persisted, None, VersionPolicy::V1_ONLY),
     VerificationEvidence => ("verification-evidence", PersistedAndWire, Some("verification.schema.json"), VersionPolicy::V1_ONLY),
     RiskConfig => ("risk-config", Persisted, None, VersionPolicy::V1_ONLY),
-    RiskReport => ("risk-report", PersistedAndWire, Some("risk.schema.json"), VersionPolicy::V1_ONLY),
-    WorkflowEvidence => ("workflow-evidence", PersistedAndWire, Some("evidence-state.schema.json"), VersionPolicy::V1_ONLY),
-    DecisionRecord => ("decision-record", Persisted, Some("decision-record.schema.json"), VersionPolicy::V1_ONLY),
-    Waiver => ("waiver", Persisted, Some("waiver.schema.json"), VersionPolicy::V1_ONLY),
+    RiskAssessment => ("risk-assessment", PersistedAndWire, Some("risk.schema.json"), VersionPolicy::V1_ONLY),
+    Evidence => ("evidence", PersistedAndWire, Some("evidence-state.schema.json"), VersionPolicy::V1_ONLY),
+    Decision => ("decision", Persisted, Some("decision-record.schema.json"), VersionPolicy::V1_ONLY),
+    GateWaiver => ("gate-waiver", Persisted, Some("waiver.schema.json"), VersionPolicy::V1_ONLY),
     InboxItem => ("inbox-item", Persisted, Some("inbox-item.schema.json"), VersionPolicy::V1_ONLY),
     Policy => ("policy", Persisted, None, VersionPolicy::V1_ONLY),
+    AcceptanceContext => ("acceptance-context", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    AcceptanceContextProvenance => ("acceptance-context-provenance", Persisted, None, VersionPolicy::V1_ONLY),
+    AcceptanceEvaluation => ("acceptance-evaluation", PersistedAndWire, None, VersionPolicy::V1_ONLY),
     AffectedPathIndex => ("affected-path-index", Persisted, None, VersionPolicy::V1_ONLY),
     VerificationCache => ("verification-cache", Persisted, None, VersionPolicy::V1_ONLY),
-    ReviewFile => ("review-file", Persisted, None, VersionPolicy::V1_ONLY),
     Composition => ("composition", PersistedAndWire, Some("composition.schema.json"), VersionPolicy::V1_ONLY),
-    ProjectStateReport => ("project-state-report", Wire, Some("project-state.schema.json"), VersionPolicy::V1_ONLY),
-    PackManifest => ("pack", PersistedAndWire, Some("pack.schema.json"), VersionPolicy::V1_ONLY),
-    PackRevision => ("pack-revision", PersistedAndWire, Some("pack-revision.schema.json"), VersionPolicy::V1_ONLY),
-    PackQuarantine => ("pack-quarantine", Persisted, Some("pack-quarantine.schema.json"), VersionPolicy::V1_ONLY),
-    PackLock => ("pack-lock", PersistedAndWire, Some("pack-lock.schema.json"), VersionPolicy::V1_ONLY),
-    PackWorkspace => ("pack-workspace", Persisted, None, VersionPolicy::V1_ONLY),
-    PatchSet => ("patch-set", PersistedAndWire, None, VersionPolicy::V1_ONLY),
-    PackEvidence => ("pack-evidence", Persisted, None, VersionPolicy::V1_ONLY),
-    PackLifecycle => ("pack-lifecycle", PersistedAndWire, Some("pack-lifecycle.schema.json"), VersionPolicy::V1_ONLY),
+    ChangeManifest => ("change", PersistedAndWire, Some("change.schema.json"), VersionPolicy::V1_ONLY),
+    RevisionRecord => ("change-revision", PersistedAndWire, Some("change-revision.schema.json"), VersionPolicy::V1_ONLY),
+    ChangeQuarantine => ("change-quarantine", Persisted, Some("change-quarantine.schema.json"), VersionPolicy::V1_ONLY),
+    ChangeLock => ("change-lock", PersistedAndWire, Some("change-lock.schema.json"), VersionPolicy::V1_ONLY),
+    ChangeWorkspace => ("change-workspace", Persisted, None, VersionPolicy::V1_ONLY),
+    ChangeSet => ("change-set", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    ChangeRepresentationBundle => ("change-representation-bundle", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    ClassificationBundle => ("classification-bundle", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    RecoveryAnchorSet => ("recovery-anchor-set", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    ResourceRestorePlan => ("resource-restore-plan", PersistedAndWire, None, VersionPolicy::V1_ONLY),
+    ChangeEvidence => ("change-evidence", Persisted, None, VersionPolicy::V1_ONLY),
+    RevisionState => ("revision-state", PersistedAndWire, Some("revision-state.schema.json"), VersionPolicy::V1_ONLY),
     LifecycleEvidence => ("lifecycle-evidence", PersistedAndWire, Some("evidence-dependency.schema.json"), VersionPolicy::V1_ONLY),
-    Draftpack => ("draftpack", Wire, Some("draftpack.schema.json"), VersionPolicy::V1_ONLY),
-    DraftpackProvenance => ("draftpack-provenance", Wire, Some("draftpack-provenance.schema.json"), VersionPolicy::V1_ONLY),
+    DraftpackEnvelope => ("draftpack-envelope", Wire, Some("draftpack-envelope.schema.json"), VersionPolicy::V1_ONLY),
     TaskDefinition => ("task", PersistedAndWire, Some("task.schema.json"), VersionPolicy::V1_ONLY),
     TaskTemplate => ("task-template", PersistedAndWire, Some("task-template.schema.json"), VersionPolicy::V1_ONLY),
     Execution => ("execution", PersistedAndWire, Some("execution.schema.json"), VersionPolicy::V1_ONLY),
@@ -173,7 +198,11 @@ contract_registry! {
     CandidatePreset => ("candidate-preset", Persisted, None, VersionPolicy::V1_ONLY),
     ExtensionManifest => ("extension-package", PersistedAndWire, Some("extension-package.schema.json"), VersionPolicy::V1_ONLY),
     InstalledExtensionProvenance => ("installed-extension-provenance", Persisted, None, VersionPolicy::V1_ONLY),
+    ArtifactAttestation => ("artifact-attestation", Persisted, None, VersionPolicy::V1_ONLY),
+    AuthorizationDecision => ("authorization-decision", Persisted, None, VersionPolicy::V1_ONLY),
     ExtensionRegistry => ("extension-registry", Persisted, None, VersionPolicy::V1_ONLY),
+    ExtensionAuthorizationGrant => ("extension-authorization-grant", PersistedAndWire, Some("extension-authorization.schema.json"), VersionPolicy::V1_ONLY),
+    ExtensionAuthorizationRegistry => ("extension-authorization-registry", Persisted, None, VersionPolicy::V1_ONLY),
     CatalogSourceRegistry => ("catalog-source-registry", Persisted, Some("extension-catalog.schema.json"), VersionPolicy::V1_ONLY),
     CatalogSource => ("catalog-source", PersistedAndWire, Some("extension-catalog.schema.json"), VersionPolicy::V1_ONLY),
     CatalogRoot => ("catalog-root", PersistedAndWire, Some("extension-catalog.schema.json"), VersionPolicy::V1_ONLY),

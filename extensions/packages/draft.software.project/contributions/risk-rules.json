@@ -1,0 +1,112 @@
+{
+  "rules": [
+    {
+      "code": "draft.software.project/ci-change",
+      "weight": 4,
+      "when": {
+        "condition": "any",
+        "of": [
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": ".github/workflows/**"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": ".gitlab-ci.yml"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": ".circleci/**"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "ci/**"
+              }
+            },
+            "at_least": 1
+          }
+        ]
+      },
+      "explanation": "continuous-integration configuration changed",
+      "required_action": "confirm the pipeline change is intended"
+    },
+    {
+      "code": "draft.software.project/container-change",
+      "weight": 3,
+      "when": {
+        "condition": "any",
+        "of": [
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/Dockerfile"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/compose.yaml"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/compose.yml"
+              }
+            },
+            "at_least": 1
+          }
+        ]
+      },
+      "explanation": "container definitions changed"
+    },
+    {
+      "code": "draft.software.project/wide-change",
+      "weight": 3,
+      "when": {
+        "condition": "resource_count",
+        "at_least": 30
+      },
+      "explanation": "the change touches many resources at once",
+      "required_action": "consider decomposing this change"
+    }
+  ]
+}

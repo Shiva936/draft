@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft PublicationAttempt",
+  "type": "object",
+  "required": [
+    "id",
+    "publication",
+    "attempt_number",
+    "route",
+    "attempt_authority",
+    "authority_decision",
+    "project_control_generation_at_dispatch",
+    "project_security_state_at_dispatch",
+    "policy_digest_at_dispatch",
+    "global_registry_revisions_at_dispatch",
+    "provider_binding_generation_at_dispatch",
+    "lease_id",
+    "lease_fence",
+    "started_at",
+    "provenance"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^pat_[A-Za-z0-9_-]+$"
+    },
+    "publication": {
+      "type": "object",
+      "required": [
+        "id",
+        "digest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^pub_[A-Za-z0-9_-]+$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "attempt_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "route": {
+      "type": "object",
+      "required": [
+        "provenance",
+        "operational_profile"
+      ],
+      "properties": {
+        "provenance": {
+          "type": "object",
+          "required": [
+            "binding",
+            "semantic_definition"
+          ],
+          "properties": {
+            "binding": {
+              "type": "string",
+              "pattern": "^pbd_[A-Za-z0-9_-]+$"
+            },
+            "semantic_definition": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "operational_profile": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "attempt_authority": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "digest"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "logical_id": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "authority_decision": {
+      "type": "object",
+      "required": [
+        "scope",
+        "outcome",
+        "considered",
+        "evaluator",
+        "decided_at"
+      ],
+      "properties": {
+        "scope": {
+          "type": "object",
+          "required": [
+            "capability",
+            "subject"
+          ],
+          "properties": {
+            "capability": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "subject": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "outcome": {
+          "type": "object",
+          "required": [
+            "outcome"
+          ],
+          "properties": {
+            "outcome": {
+              "enum": [
+                "permitted",
+                "refused"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "considered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "digest"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "logical_id": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "evaluator": {
+          "type": "object",
+          "required": [
+            "producer",
+            "version"
+          ],
+          "properties": {
+            "producer": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "decided_at": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "project_control_generation_at_dispatch": {
+      "type": "integer"
+    },
+    "project_security_state_at_dispatch": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "policy_digest_at_dispatch": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "global_registry_revisions_at_dispatch": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "provider_binding_generation_at_dispatch": {
+      "type": "integer"
+    },
+    "retry_authorization": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "lease_id": {
+      "type": "string"
+    },
+    "lease_fence": {
+      "type": "integer"
+    },
+    "started_at": {
+      "type": "integer"
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "producer",
+        "version"
+      ],
+      "properties": {
+        "producer": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/publication-attempt.schema.json"
+}

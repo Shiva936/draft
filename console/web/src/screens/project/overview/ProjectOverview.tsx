@@ -9,11 +9,11 @@ import { StatusBadge } from "../../../components/StatusBadge";
 import { SuggestionRow } from "../../../components/NextAction";
 import { EmptyState, QueryState } from "../../../components/states";
 import { Donut, Legend, Meter, chartColors } from "../../../components/charts";
-import { NONE, humanize, isOverdue, packRevisionLabel, relative, statusTone } from "../../../lib/format";
+import { NONE, humanize, isOverdue, changeRevisionLabel, relative, statusTone } from "../../../lib/format";
 
 /**
  * Canonical project dashboard: task lifecycle, source changes, recent events,
- * pack state, and Draft's own recommended next actions.
+ * change state, and Draft's own recommended next actions.
  */
 export function ProjectOverview() {
   const { workspaceId = "" } = useParams();
@@ -38,8 +38,8 @@ export function ProjectOverview() {
         const changes = Array.isArray((project.status as any)?.changes) ? (project.status as any).changes : [];
         const recentEvents = events.data ?? [];
 
-        const packStates = new Map<string, number>();
-        for (const pack of project.packs) packStates.set(pack.submit_state, (packStates.get(pack.submit_state) ?? 0) + 1);
+        const changeStates = new Map<string, number>();
+        for (const change of project.changes) changeStates.set(change.submit_state, (changeStates.get(change.submit_state) ?? 0) + 1);
 
         const taskSegments = [
           { label: "Blocked", value: blocked.length, color: chartColors.danger },
@@ -67,26 +67,26 @@ export function ProjectOverview() {
                 unit={changes.length === 1 ? "file" : "files"}
                 note={changes.length > 0 ? "Uncommitted in the source view" : "Working tree matches canonical state"}
                 noteTone={changes.length > 0 ? "warning" : "success"}
-                link={<PanelLink to="editor">Open editor</PanelLink>}
+                link={<PanelLink to="resources">Browse resources</PanelLink>}
               />
               <MetricCard
-                label="Events"
+                label="Activity"
                 icon="activity"
                 value={recentEvents.length}
                 unit="recorded"
-                note={recentEvents.length > 0 ? `Latest ${relative(recentEvents[0]?.time)}` : "No events recorded"}
+                note={recentEvents.length > 0 ? `Latest ${relative(eventMillis(recentEvents[0]))}` : "No events recorded"}
                 link={<PanelLink to="events">View events</PanelLink>}
               />
               <MetricCard
-                label="Packs"
+                label="Changes"
                 icon="layers"
-                value={project.packs.length}
-                unit={project.packs.length === 1 ? "pack" : "packs"}
-                note={project.inbox.length > 0 ? `${project.inbox.length} need attention` : "No pack needs attention"}
+                value={project.changes.length}
+                unit={project.changes.length === 1 ? "change" : "changes"}
+                note={project.inbox.length > 0 ? `${project.inbox.length} need attention` : "No change needs attention"}
                 noteTone={project.inbox.length > 0 ? "warning" : "success"}
                 chart={
                   <Meter
-                    segments={[...packStates.entries()].map(([state, value]) => ({
+                    segments={[...changeStates.entries()].map(([state, value]) => ({
                       label: humanize(state),
                       value,
                       color:
@@ -100,7 +100,7 @@ export function ProjectOverview() {
                     }))}
                   />
                 }
-                link={<PanelLink to="packs">View packs</PanelLink>}
+                link={<PanelLink to="changes">View changes</PanelLink>}
               />
             </div>
 
@@ -121,11 +121,11 @@ export function ProjectOverview() {
                         <div className="activity-row" key={event.event_id ?? index}>
                           <span className="actor">
                             <Icon name="user" size={14} />
-                            <span className="truncate">{event.actor_id ?? "system"}</span>
+                            <span className="truncate">{event.actor ?? "system"}</span>
                           </span>
-                          <span className="verb">{humanize(event.type ?? event.event_type ?? "event")}</span>
-                          {event.subject_id && <span className="subject">{event.subject_id}</span>}
-                          <time>{relative(event.time)}</time>
+                          <span className="verb">{humanize(event.kind ?? "event")}</span>
+                          {event.subject && <span className="subject">{event.subject}</span>}
+                          <time>{relative(eventMillis(event))}</time>
                         </div>
                       ))}
                     </div>
@@ -134,26 +134,26 @@ export function ProjectOverview() {
 
                 <Panel className="flush">
                   <PanelHeader
-                    title="Active packs"
+                    title="Active changes"
                     icon="layers"
-                    count={project.packs.length}
-                    action={<PanelLink to="packs">View all packs</PanelLink>}
+                    count={project.changes.length}
+                    action={<PanelLink to="changes">View all changes</PanelLink>}
                   />
-                  {project.packs.length === 0 ? (
-                    <EmptyState inline icon="layers" label="No active pack." detail="Create a pack to group reviewable changes." />
+                  {project.changes.length === 0 ? (
+                    <EmptyState inline icon="layers" label="No active change." detail="Create a change to group reviewable changes." />
                   ) : (
                     <div className="rows">
-                      {project.packs.slice(0, 6).map((pack) => (
-                        <Link className="row-item" key={pack.pack_id} to={`packs/${encodeURIComponent(pack.pack_id)}/summary`}>
+                      {project.changes.slice(0, 6).map((change) => (
+                        <Link className="row-item" key={change.change_id} to="../graph">
                           <Icon name="layers" size={16} />
                           <div className="row-main">
-                            <strong className="mono">{pack.pack_id}</strong>
-                            <small>{pack.name}</small>
+                            <strong className="mono">{change.change_id}</strong>
+                            <small>{change.name}</small>
                           </div>
-                          {packRevisionLabel(pack.revision) && (
-                            <span className="chip mono">{packRevisionLabel(pack.revision)}</span>
+                          {changeRevisionLabel(change.revision) && (
+                            <span className="chip mono">{changeRevisionLabel(change.revision)}</span>
                           )}
-                          <StatusBadge value={pack.submit_state} />
+                          <StatusBadge value={change.submit_state} />
                         </Link>
                       ))}
                     </div>
@@ -230,4 +230,9 @@ export function ProjectOverview() {
       }}
     </QueryState>
   );
+}
+
+/** Activity records nanoseconds; the browser reads milliseconds. */
+function eventMillis(event: { recorded_at?: number } | undefined): number | null {
+  return event?.recorded_at ? Math.floor(event.recorded_at / 1_000_000) : null;
 }

@@ -81,7 +81,7 @@ draftd --detach
 draftd status
 ```
 
-`draftd start` runs in the foreground. Use `draftd --detach` or `draft service start` when the daemon should continue in the background.
+`draftd start` runs in the foreground. Use `draftd --detach` or `draft daemon start` when the daemon should continue in the background.
 
 ## Upgrades
 

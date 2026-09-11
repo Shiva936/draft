@@ -1,5 +1,4 @@
 use draft_core::app::App;
-use draft_core::pack::lifecycle::PackLifecycle;
 use std::path::Path;
 
 fn setup() -> (tempfile::TempDir, App) {
@@ -14,98 +13,12 @@ fn setup() -> (tempfile::TempDir, App) {
 }
 
 #[test]
-fn pack_create_uses_previous_snapshot_and_generates_text_hunks() {
-    let (dir, app) = setup();
-    let file = dir.path().join("app.txt");
-    std::fs::write(&file, "one\ntwo\nthree\n").unwrap();
-    app.checkpoint(dir.path(), "base").unwrap();
-    std::fs::write(&file, "one\nTWO\nthree\n").unwrap();
-
-    let pack = app
-        .pack_create(dir.path(), Some("edit".to_string()), None, true)
-        .unwrap();
-    let report = app.pack_show(dir.path(), pack.id.as_str()).unwrap();
-
-    assert_eq!(report.patch.files.len(), 1);
-    assert_eq!(report.patch.files[0].path.as_str(), "app.txt");
-    assert_eq!(report.patch.files[0].hunks.len(), 1);
-    assert!(report.patch.files[0].hunks[0].id.starts_with("hunk_"));
-    assert_eq!(report.patch.files[0].hunks[0].old_start, 2);
-    assert_eq!(report.patch.files[0].hunks[0].new_start, 2);
-}
-
-#[test]
-fn compare_and_compose_allow_same_file_non_overlapping_hunks() {
-    let (dir, app) = setup();
-    let file = dir.path().join("app.txt");
-    std::fs::write(&file, "one\ntwo\nthree\nfour\n").unwrap();
-    app.checkpoint(dir.path(), "base").unwrap();
-
-    std::fs::write(&file, "ONE\ntwo\nthree\nfour\n").unwrap();
-    let left = app
-        .pack_create(dir.path(), Some("left".to_string()), None, true)
-        .unwrap();
-
-    std::fs::write(&file, "one\ntwo\nthree\nfour\n").unwrap();
-    app.checkpoint(dir.path(), "base again").unwrap();
-    std::fs::write(&file, "one\ntwo\nTHREE\nfour\n").unwrap();
-    let right = app
-        .pack_create(dir.path(), Some("right".to_string()), None, true)
-        .unwrap();
-
-    let cmp = app
-        .compare(dir.path(), left.id.as_str(), right.id.as_str())
-        .unwrap();
-    assert_eq!(cmp.overlapping_files.len(), 1);
-    assert!(cmp.overlapping_hunks.is_empty());
-    assert!(cmp.compatible);
-
-    let composed = app
-        .compose(dir.path(), left.id.as_str(), right.id.as_str(), "combined")
-        .unwrap();
-    assert!(composed.compatible);
-    assert_eq!(composed.files, 2);
-    let report = app.pack_show(dir.path(), &composed.output_pack_id).unwrap();
-    assert_eq!(report.lifecycle, PackLifecycle::Draft);
-    assert_eq!(report.pack.source_pack_ids.len(), 2);
-}
-
-#[test]
-fn compare_blocks_overlapping_hunks() {
-    let (dir, app) = setup();
-    let file = dir.path().join("app.txt");
-    std::fs::write(&file, "one\ntwo\nthree\n").unwrap();
-    app.checkpoint(dir.path(), "base").unwrap();
-
-    std::fs::write(&file, "one\nTWO\nthree\n").unwrap();
-    let left = app
-        .pack_create(dir.path(), Some("left".to_string()), None, true)
-        .unwrap();
-
-    std::fs::write(&file, "one\ntwo\nthree\n").unwrap();
-    app.checkpoint(dir.path(), "base again").unwrap();
-    std::fs::write(&file, "one\nsecond\nthree\n").unwrap();
-    let right = app
-        .pack_create(dir.path(), Some("right".to_string()), None, true)
-        .unwrap();
-
-    let cmp = app
-        .compare(dir.path(), left.id.as_str(), right.id.as_str())
-        .unwrap();
-    assert!(!cmp.compatible);
-    assert_eq!(cmp.overlapping_hunks.len(), 1);
-    assert!(app
-        .compose(dir.path(), left.id.as_str(), right.id.as_str(), "bad")
-        .is_err());
-}
-
-#[test]
 fn event_replay_summarizes_and_verifies_chain() {
     let (dir, app) = setup();
     let report = app.replay_events(dir.path()).unwrap();
     assert!(report.chain_ok);
     assert!(report.events >= 1);
-    assert_eq!(report.by_type["repo.initialized"], 1);
+    assert_eq!(report.by_kind["ProjectCreated"], 1);
 }
 
 #[test]
@@ -129,7 +42,7 @@ fn durable_events_redact_common_secret_shapes() {
     let events = app.events(dir.path()).unwrap();
     let payload = events
         .iter()
-        .find(|event| event.event_type == "task.spawned")
+        .find(|event| event.kind == "TaskUpdated")
         .unwrap()
         .metadata
         .to_string();
@@ -162,17 +75,17 @@ fn proto_contract_files_are_present_and_parseable() {
         .to_path_buf();
     let proto = repo.join("proto");
     for rel in [
-        "specs/pack.md",
+        "specs/change.md",
         "specs/receipt.md",
         "specs/event-ledger.md",
         "specs/signing.md",
         "specs/canonicalization.md",
         "specs/compatibility.md",
         "specs/composition.md",
-        "specs/project-state.md",
+        "specs/publication.md",
+        "specs/coverage.md",
         "specs/stability.md",
-        "specs/submit-finalization.md",
-        "specs/rollback.md",
+        "specs/recovery.md",
         "specs/close.md",
         "specs/gc.md",
         "specs/import-export.md",
@@ -208,6 +121,32 @@ fn proto_contract_files_are_present_and_parseable() {
         !schema_paths.is_empty(),
         "at least one schema must be committed"
     );
+    // Schemas describing the portable canonical DCG types, rather than a
+    // Draft-owned persisted contract.
+    //
+    // They are exempt from the `ContractId` registry and from the
+    // `schema_version` rule for one reason: the types they describe carry no
+    // per-object version. A portable canonical object is versioned by
+    // `DCG_FORMAT_REVISION` and identified by its digest, and adding a
+    // `schema_version` field to make this check pass would change the
+    // canonical bytes of every Publication ever written.
+    //
+    // The exemption is a named list, not a pattern, so a new schema cannot
+    // slip past the registry by choosing a filename — and each one is required
+    // below to be exercised by a committed vector, which is the coverage the
+    // registry would otherwise have provided.
+    const PORTABLE_SCHEMAS: &[&str] = &[
+        "coverage-evidence.schema.json",
+        "project-state-root.schema.json",
+        "publication-attempt.schema.json",
+        "publication-control.schema.json",
+        "publication-outcome.schema.json",
+        "publication-resolution.schema.json",
+        "publication-retry-authorization.schema.json",
+        "publication.schema.json",
+        "state-evidence-entry.schema.json",
+    ];
+
     let registered_schemas = draft_core::contracts::ContractId::ALL
         .iter()
         .filter_map(|contract| contract.metadata().schema)
@@ -217,6 +156,9 @@ fn proto_contract_files_are_present_and_parseable() {
         .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
         .collect::<std::collections::BTreeSet<_>>();
     for schema in &committed_schemas {
+        if PORTABLE_SCHEMAS.contains(&schema.as_str()) {
+            continue;
+        }
         assert!(
             registered_schemas.contains(schema.as_str()),
             "schema {schema} has no closed ContractId registry entry"
@@ -228,7 +170,44 @@ fn proto_contract_files_are_present_and_parseable() {
             "registered schema {schema} is not committed"
         );
     }
+
+    // A portable schema nothing exercises is a schema nobody would notice
+    // drifting from the type it claims to describe.
+    let vector_schemas = std::fs::read_dir(proto.join("test-vectors"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("vector.json"))
+        .filter(|path| path.is_file())
+        .filter_map(|path| std::fs::read(path).ok())
+        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .filter_map(|value| value["payload_schema"].as_str().map(ToString::to_string))
+        .collect::<std::collections::BTreeSet<_>>();
+    for schema in PORTABLE_SCHEMAS {
+        assert!(
+            committed_schemas.contains(*schema),
+            "portable schema {schema} is named but not committed"
+        );
+        assert!(
+            vector_schemas.contains(*schema),
+            "portable schema {schema} is exempt from the contract registry, so a committed              vector must exercise it"
+        );
+    }
+
     for path in schema_paths {
+        let filename = path.file_name().unwrap().to_string_lossy().into_owned();
+        if PORTABLE_SCHEMAS.contains(&filename.as_str()) {
+            let value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(
+                value["$id"],
+                format!("https://draft.dev/schemas/{filename}"),
+                "{} must have a stable unversioned id",
+                path.display()
+            );
+            assert!(value["title"].as_str().is_some_and(|t| !t.is_empty()));
+            assert_local_refs_resolve(&value, &value, &path);
+            continue;
+        }
         let value: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&path)
                 .unwrap_or_else(|e| panic!("missing/readable schema {}: {e}", path.display())),
@@ -281,7 +260,7 @@ fn proto_contract_files_are_present_and_parseable() {
             "{} must declare expected outcome",
             path.display()
         );
-        // Schema-driven conformance (NFR-MT-005, NFR-TQ-001): every vector
+        // Schema-driven conformance: every vector
         // carries a payload that must validate against its declared schema,
         // and negative fixtures must fail validation.
         let schema_name = value["payload_schema"]
@@ -456,7 +435,19 @@ fn validate_schema_node(
     errors
 }
 
+/// Every schema must pin its own version somewhere a reader can find it.
+///
+/// Two shapes are legitimate, and only two. A Draft-owned persisted or wire
+/// artifact carries its own `schema_version`. A portable canonical value from
+/// `draft-dcg-contract` does not — its version is the crate's
+/// `DCG_FORMAT_REVISION`, and adding a per-artifact field would mean the same
+/// value serialized two different ways depending on which side wrote it. Those
+/// schemas say so explicitly with `x-draft-format-revision`, so "pins its
+/// version at the format level" stays distinguishable from "forgot to".
 fn schema_has_literal_version(value: &serde_json::Value) -> bool {
+    if value.get("x-draft-format-revision") == Some(&serde_json::json!(1)) {
+        return true;
+    }
     match value {
         serde_json::Value::Object(object) => {
             object
@@ -481,7 +472,7 @@ fn simple_pattern_matches(pattern: &str, text: &str) -> bool {
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         }),
         _ => {
-            // ^<prefix>[A-Za-z0-9_-]+$ shapes (pck_/rcp_/cmp_/evt_ ids).
+            // ^<prefix>[A-Za-z0-9_-]+$ shapes (chg_/rcp_/cmp_/evt_ ids).
             let Some(body) = pattern
                 .strip_prefix('^')
                 .and_then(|p| p.strip_suffix("[A-Za-z0-9_-]+$"))

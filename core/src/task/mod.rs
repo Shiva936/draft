@@ -2,10 +2,11 @@
 
 pub mod candidate;
 
+use crate::project::layout::DraftLayout;
 use crate::support::common::{now, ExecutionId, TaskId, Timestamp};
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 use crate::support::fsutil::{list_with_extension, write_json};
-use crate::workspace::layout::DraftLayout;
+use crate::support::telemetry::Counter;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -26,7 +27,7 @@ pub struct ExecutionView {
     pub execution_id: String,
     pub candidate: String,
     pub status: String,
-    pub produced_pack: Option<String>,
+    pub produced_change: Option<String>,
     pub error: Option<String>,
     pub note: Option<String>,
 }
@@ -40,7 +41,7 @@ pub struct TaskView {
     pub recommended_action: String,
     pub execution_count: usize,
     pub evidence_count: usize,
-    pub produced_packs: Vec<String>,
+    pub produced_changes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +81,19 @@ pub enum TaskLifecycleStatus {
     Cancelled,
 }
 
+impl TaskLifecycleStatus {
+    /// Whether the task is finished, either way it finished.
+    ///
+    /// `Completed` and `Cancelled` are different outcomes but the same
+    /// lifecycle answer: no more work is planned. Everything else means the
+    /// task is still open, including `Blocked` — blocked work is stalled, not
+    /// finished, and treating it as closed would hide it from exactly the
+    /// people who need to unblock it.
+    pub fn is_finished(self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
@@ -108,10 +122,21 @@ pub struct NextAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskSourceContext {
-    pub path: String,
-    pub start_line: Option<u32>,
-    pub end_line: Option<u32>,
-    pub symbol: Option<String>,
+    /// The resource this task is about. Opaque: Draft never parses the body.
+    pub locator: crate::dcg::resource::ResourceLocator,
+    /// The contributed space `start` and `length` are expressed in — lines of a
+    /// document, keys of a record set, frames of a timeline. Core stores it and
+    /// compares it for equality; it never learns what a coordinate means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate_space: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<u64>,
+    /// A contributed element this task concerns, when extraction found one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
@@ -159,6 +184,14 @@ pub struct DecompositionRule {
 #[serde(deny_unknown_fields)]
 pub struct TaskDefinition {
     pub schema_version: u32,
+    /// Monotonic, incremented by every accepted mutation.
+    ///
+    /// What makes a task update a compare-exchange rather than a
+    /// last-writer-wins overwrite: two callers that both read generation N can
+    /// no longer both succeed, so a concurrent edit is a detected conflict
+    /// instead of a silently discarded one.
+    #[serde(default)]
+    pub generation: u64,
     pub id: TaskId,
     pub name: String,
     pub kind: TaskKind,
@@ -173,18 +206,24 @@ pub struct TaskDefinition {
     pub review_questions: Vec<ReviewQuestion>,
     pub candidate_preset: Option<String>,
     pub schedule: Option<TaskSchedule>,
-    pub parent_pack: Option<String>,
+    pub parent_change: Option<String>,
     pub source_context: Option<TaskSourceContext>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
     pub created_by: String,
-    pub base_stable_head: String,
+    pub base_baseline: String,
     pub status: TaskLifecycleStatus,
     pub priority: TaskPriority,
     pub due_at: Option<Timestamp>,
     pub next_actions: Vec<NextAction>,
     pub assignee_ref: Option<AssigneeRef>,
     pub metadata: BTreeMap<String, serde_json::Value>,
+}
+
+impl crate::support::record_guard::RevisionedRecord for TaskDefinition {
+    fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 impl crate::contracts::VersionedContract for TaskDefinition {
@@ -211,278 +250,79 @@ impl crate::contracts::VersionedContract for TaskTemplate {
     const CONTRACT: crate::contracts::ContractId = crate::contracts::ContractId::TaskTemplate;
 }
 
-/// The ten built-in template ids, in presentation order.
-pub const BUILTIN_TEMPLATE_IDS: [&str; 10] = [
-    "bug_fix",
-    "small_feature",
-    "refactor",
-    "test_gap",
-    "security_sensitive",
-    "dependency_audit",
-    "performance_investigation",
-    "docs_update",
-    "ui_text_change",
-    "migration_plan",
-];
-
-pub fn builtin_template(id: &str) -> DraftResult<TaskTemplate> {
-    struct Spec {
-        name: &'static str,
-        risk: TaskRisk,
-        mode: TaskMode,
-        evidence: &'static [&'static str],
-        questions: &'static [&'static str],
-        forbidden: &'static [&'static str],
-        criteria: &'static [&'static str],
-        preset: &'static str,
-        rules: &'static [(
-            &'static str,
-            &'static str,
-            &'static [&'static str],
-            &'static str,
-        )],
+/// Resolve a contributed task template into the shape Core works with.
+///
+/// Draft ships no templates. "Fix a defect", "add tests", "migrate data" are
+/// software-project vocabulary; a recording session's templates would be
+/// entirely different ones. What Core owns is the *shape* — risk, mode,
+/// evidence, questions, criteria, decomposition — which is domain-neutral, and
+/// the guarantee that a template can only narrow a task, never widen it.
+pub fn resolve_template(
+    contributed: &draft_extension_contract::TaskTemplateContribution,
+) -> DraftResult<TaskTemplate> {
+    let mut decomposition_rules = Vec::new();
+    for step in &contributed.steps {
+        // A step's scope becomes the child's zones. Zones are path globs, so a
+        // scope Core cannot express as one is refused rather than dropped:
+        // silently unscoping a child would widen what an agent may touch, which
+        // is the opposite of what a template is for.
+        let zones = match &step.scope {
+            None => Vec::new(),
+            Some(draft_extension_contract::ResourcePredicate::Raw {
+                of: draft_extension_contract::RawResourcePredicate::PathGlob { glob },
+            }) => vec![glob.clone()],
+            Some(_) => {
+                return Err(DraftError::invalid_config(format!(
+                    "task template '{}' scopes step '{}' with a predicate that is not a path \
+                     glob, which a task zone cannot express",
+                    contributed.template_id, step.id
+                ))
+                .with_suggestion(
+                    "scope template steps with `path_glob`, or leave the step unscoped",
+                ))
+            }
+        };
+        decomposition_rules.push(DecompositionRule {
+            id: step.id.clone(),
+            description: step.label.clone(),
+            zones,
+            child_template: None,
+        });
     }
-    let spec = match id {
-        "bug_fix" => Spec {
-            name: "Bug fix",
-            risk: TaskRisk::Medium,
-            mode: TaskMode::Normal,
-            evidence: &["targeted_tests"],
-            questions: &["Does the fix address the root cause?"],
-            forbidden: &[],
-            criteria: &["Reproduction no longer fails"],
-            preset: "fast",
-            rules: &[
-                (
-                    "reproduce",
-                    "Cover the failure with a test first",
-                    &["tests/**"],
-                    "test_gap",
-                ),
-                (
-                    "fix",
-                    "Apply the smallest fix for the covered failure",
-                    &["**"],
-                    "bug_fix",
-                ),
-            ],
-        },
-        "small_feature" => Spec {
-            name: "Small feature",
-            risk: TaskRisk::Medium,
-            mode: TaskMode::Normal,
-            evidence: &["tests"],
-            questions: &["Are acceptance criteria satisfied?"],
-            forbidden: &[],
-            criteria: &["Feature behavior is covered"],
-            preset: "fast",
-            rules: &[
-                (
-                    "core",
-                    "Implement the feature behavior",
-                    &["**"],
-                    "small_feature",
-                ),
-                (
-                    "tests",
-                    "Cover the feature with tests",
-                    &["tests/**"],
-                    "test_gap",
-                ),
-                (
-                    "docs",
-                    "Document the feature",
-                    &["docs/**", "README.md"],
-                    "docs_update",
-                ),
-            ],
-        },
-        "refactor" => Spec {
-            name: "Refactor",
-            risk: TaskRisk::Medium,
-            mode: TaskMode::PlanFirst,
-            evidence: &["full_tests"],
-            questions: &["Is behavior preserved?"],
-            forbidden: &[],
-            criteria: &["Public behavior is unchanged"],
-            preset: "strict",
-            rules: &[
-                (
-                    "tests-first",
-                    "Lock behavior in with tests before moving code",
-                    &["tests/**"],
-                    "test_gap",
-                ),
-                (
-                    "move",
-                    "Perform the mechanical refactor",
-                    &["**"],
-                    "refactor",
-                ),
-            ],
-        },
-        "test_gap" => Spec {
-            name: "Test gap",
-            risk: TaskRisk::Low,
-            mode: TaskMode::Normal,
-            evidence: &["tests"],
-            questions: &["Does the test fail without the fix?"],
-            forbidden: &[],
-            criteria: &["Gap is reproducibly covered"],
-            preset: "fast",
-            rules: &[],
-        },
-        "security_sensitive" => Spec {
-            name: "Security-sensitive change",
-            risk: TaskRisk::Critical,
-            mode: TaskMode::Safe,
-            evidence: &["full_tests", "security_review"],
-            questions: &["Can secrets or privileges cross this boundary?"],
-            forbidden: &[".env", "*.key", "*.pem", "secrets/**"],
-            criteria: &["Threat and regression cases pass"],
-            preset: "paranoid",
-            rules: &[
-                (
-                    "boundary",
-                    "Isolate the security boundary change",
-                    &["**"],
-                    "security_sensitive",
-                ),
-                (
-                    "tests",
-                    "Add threat/regression coverage",
-                    &["tests/**"],
-                    "test_gap",
-                ),
-            ],
-        },
-        "dependency_audit" => Spec {
-            name: "Dependency audit",
-            risk: TaskRisk::High,
-            mode: TaskMode::PlanFirst,
-            evidence: &["dependency_audit", "full_tests"],
-            questions: &["Are provenance and licenses acceptable?"],
-            forbidden: &[],
-            criteria: &["Dependency delta is justified"],
-            preset: "strict",
-            rules: &[],
-        },
-        "performance_investigation" => Spec {
-            name: "Performance investigation",
-            risk: TaskRisk::Medium,
-            mode: TaskMode::PlanFirst,
-            evidence: &["benchmark"],
-            questions: &["Is the comparison reproducible?"],
-            forbidden: &[],
-            criteria: &["Baseline and result are recorded"],
-            preset: "strict",
-            rules: &[
-                (
-                    "baseline",
-                    "Record the reproducible baseline",
-                    &["benches/**", "tests/**"],
-                    "test_gap",
-                ),
-                (
-                    "change",
-                    "Apply and measure the candidate change",
-                    &["**"],
-                    "performance_investigation",
-                ),
-            ],
-        },
-        "docs_update" => Spec {
-            name: "Docs update",
-            risk: TaskRisk::Low,
-            mode: TaskMode::Normal,
-            evidence: &["docs_check"],
-            questions: &["Does documentation match current behavior?"],
-            forbidden: &[],
-            criteria: &["Links and examples validate"],
-            preset: "fast",
-            rules: &[],
-        },
-        "ui_text_change" => Spec {
-            name: "UI text change",
-            risk: TaskRisk::Low,
-            mode: TaskMode::Normal,
-            evidence: &["ui_test"],
-            questions: &["Is the text accessible and consistent?"],
-            forbidden: &[],
-            criteria: &["Affected states render correctly"],
-            preset: "fast",
-            rules: &[],
-        },
-        "migration_plan" => Spec {
-            name: "Migration plan",
-            risk: TaskRisk::High,
-            mode: TaskMode::PlanFirst,
-            evidence: &["migration_test", "rollback_test"],
-            questions: &["Is rollback lossless?"],
-            forbidden: &[],
-            criteria: &["Forward and rollback paths pass"],
-            preset: "paranoid",
-            rules: &[
-                (
-                    "forward",
-                    "Implement the forward migration",
-                    &["migrations/**"],
-                    "migration_plan",
-                ),
-                (
-                    "rollback",
-                    "Implement and test the rollback path",
-                    &["migrations/**", "tests/**"],
-                    "migration_plan",
-                ),
-            ],
-        },
-        _ => {
-            return Err(DraftError::not_found(format!(
-                "unknown task template '{id}'"
-            )))
-        }
-    };
     Ok(TaskTemplate {
         schema_version: crate::contracts::current_version(
             crate::contracts::ContractId::TaskDefinition,
         ),
-        id: id.into(),
-        name: spec.name.into(),
-        default_risk: spec.risk,
-        default_mode: spec.mode,
-        default_required_evidence: spec.evidence.iter().map(|s| s.to_string()).collect(),
-        default_review_questions: spec
-            .questions
+        id: contributed.template_id.qualified(),
+        name: contributed.display_name.clone(),
+        // Neutral defaults. A template says what work looks like; how risky it
+        // is, is what the risk rules decide from the change itself.
+        default_risk: TaskRisk::Medium,
+        default_mode: TaskMode::Normal,
+        default_required_evidence: contributed
+            .required_evidence
             .iter()
-            .map(|q| ReviewQuestion::new(*q))
+            .map(|id| id.qualified())
             .collect(),
-        default_forbidden_zones: spec.forbidden.iter().map(|s| s.to_string()).collect(),
-        recommended_candidate_preset: Some(spec.preset.into()),
-        success_criteria_shape: spec.criteria.iter().map(|s| s.to_string()).collect(),
-        decomposition_rules: spec
-            .rules
+        default_review_questions: contributed
+            .review_questions
             .iter()
-            .map(|(id, description, zones, child)| DecompositionRule {
-                id: id.to_string(),
-                description: description.to_string(),
-                zones: zones.iter().map(|z| z.to_string()).collect(),
-                child_template: Some(child.to_string()),
-            })
+            .map(|question| ReviewQuestion::new(question.as_str()))
             .collect(),
+        // Protections and view rules decide what is off-limits, project-wide.
+        // A template narrows what a task is *about*, and does not carry its own
+        // parallel prohibition list.
+        default_forbidden_zones: Vec::new(),
+        recommended_candidate_preset: None,
+        success_criteria_shape: contributed.success_criteria.clone(),
+        decomposition_rules,
     })
 }
 
-pub fn builtin_templates() -> Vec<TaskTemplate> {
-    BUILTIN_TEMPLATE_IDS
-        .iter()
-        .map(|id| builtin_template(id).expect("built-in template ids resolve"))
-        .collect()
-}
-
-pub fn apply_template(task: &mut TaskDefinition, id: &str) -> DraftResult<()> {
-    let t = builtin_template(id)?;
-    task.template = Some(id.into());
+/// Apply a resolved template to a task.
+pub fn apply_template(task: &mut TaskDefinition, template: &TaskTemplate) -> DraftResult<()> {
+    let t = template.clone();
+    task.template = Some(t.id.clone());
     task.risk = t.default_risk;
     task.mode = t.default_mode;
     task.required_evidence = t.default_required_evidence;
@@ -522,9 +362,9 @@ pub struct Execution {
     pub attempt: u32,
     pub previous_attempt: Option<ExecutionId>,
     pub command: Vec<String>,
-    pub base_stable_head: String,
-    pub parent_pack: Option<String>,
-    pub produced_pack: Option<String>,
+    pub base_baseline: String,
+    pub parent_change: Option<String>,
+    pub produced_change: Option<String>,
     pub evidence_ids: Vec<String>,
     pub receipt_ids: Vec<String>,
     pub started_at: Option<Timestamp>,
@@ -561,9 +401,9 @@ impl Execution {
             attempt: 1,
             previous_attempt: None,
             command,
-            base_stable_head: task.base_stable_head.clone(),
-            parent_pack: task.parent_pack.clone(),
-            produced_pack: None,
+            base_baseline: task.base_baseline.clone(),
+            parent_change: task.parent_change.clone(),
+            produced_change: None,
             evidence_ids: vec![],
             receipt_ids: vec![],
             started_at: None,
@@ -720,7 +560,7 @@ impl ExecutionStore {
         next.stdout_ref = None;
         next.stderr_ref = None;
         next.exit_code = None;
-        next.produced_pack = None;
+        next.produced_change = None;
         self.write(&next)?;
         Ok(next)
     }
@@ -750,7 +590,7 @@ impl TaskDefinition {
     pub fn new(
         name: String,
         goal: String,
-        base_stable_head: String,
+        base_baseline: String,
         created_by: String,
     ) -> DraftResult<Self> {
         validate_name(&name)?;
@@ -765,6 +605,7 @@ impl TaskDefinition {
             schema_version: crate::contracts::current_version(
                 crate::contracts::ContractId::Execution,
             ),
+            generation: 0,
             id: TaskId::generate(),
             name,
             kind: TaskKind::Defined,
@@ -779,12 +620,12 @@ impl TaskDefinition {
             review_questions: Vec::new(),
             candidate_preset: None,
             schedule: None,
-            parent_pack: None,
+            parent_change: None,
             source_context: None,
             created_at: at,
             updated_at: at,
             created_by,
-            base_stable_head,
+            base_baseline,
             status: TaskLifecycleStatus::Open,
             priority: TaskPriority::Normal,
             due_at: None,
@@ -808,13 +649,23 @@ impl crate::contracts::VersionedContract for TaskIndex {
 
 pub struct TaskStore {
     paths: DraftLayout,
+    records: crate::support::record_guard::RevisionedRecordStore<TaskDefinition>,
 }
 
 impl TaskStore {
     pub fn for_root(root: &Path) -> Self {
+        let paths = DraftLayout::for_root(root);
         Self {
-            paths: DraftLayout::for_root(root),
+            records: crate::support::record_guard::RevisionedRecordStore::new(paths.tasks_dir())
+                .with_order(crate::support::lock_order::LockOrder::DomainRecordStore)
+                .counting_conflicts_as(Counter::TaskRecordCasConflicts),
+            paths,
         }
+    }
+
+    /// The record store, for callers committing through the audited path.
+    pub fn records(&self) -> &crate::support::record_guard::RevisionedRecordStore<TaskDefinition> {
+        &self.records
     }
 
     pub fn create(&self, task: &TaskDefinition) -> DraftResult<()> {
@@ -826,7 +677,13 @@ impl TaskStore {
             )
             .with_suggestion(format!("run `draft task {}`", task.name)));
         }
-        write_json(&self.paths.task_file(task.id.as_str()), task)?;
+        // `Absent` is the expected state: a task that already exists must not
+        // be silently overwritten by a second create racing the first.
+        self.records.compare_exchange(
+            task.id.as_str(),
+            &crate::support::record_guard::ExpectedRecordState::Absent,
+            task,
+        )?;
         self.rebuild_index()
     }
 
@@ -864,15 +721,45 @@ impl TaskStore {
     }
 
     /// Persist changes to an existing task definition.
+    ///
+    /// A compare-exchange against the generation the caller read, under the
+    /// task's own lock. Two callers that both read generation N can no longer
+    /// both succeed: the second is told its edit is stale rather than having it
+    /// silently overwrite the first.
     pub fn update(&self, task: &TaskDefinition) -> DraftResult<()> {
-        let file = self.paths.task_file(task.id.as_str());
-        if !file.exists() {
-            return Err(DraftError::not_found(format!(
-                "task '{}' was not found",
-                task.id
-            )));
-        }
-        write_json(&file, task)?;
+        self.records.with_locked_record(
+            task.id.as_str(),
+            crate::support::record_guard::DEFAULT_LOCK_TIMEOUT,
+            |guard| {
+                let Some(current) = guard.current()? else {
+                    return Err(DraftError::not_found(format!(
+                        "task '{}' was not found",
+                        task.id
+                    )));
+                };
+                // The caller's generation is the claim "this is the task I
+                // read". Deriving the expected state from `current` instead
+                // would compare the record against itself and could never
+                // detect that somebody else had committed in between.
+                if current.generation != task.generation {
+                    return Err(DraftError::new(
+                        DraftErrorKind::ConflictDetected,
+                        format!(
+                            "task '{}' has moved on: it is at generation {} but this edit was \
+                                 made against generation {}",
+                            task.id, current.generation, task.generation
+                        ),
+                    )
+                    .with_suggestion(
+                        "Re-read the task and reapply the change against its current state.",
+                    ));
+                }
+                let expected = crate::support::record_guard::ExpectedRecordState::of(&current)?;
+                let mut next = task.clone();
+                next.generation = current.generation + 1;
+                guard.compare_exchange_locked(&expected, &next)
+            },
+        )?;
         self.rebuild_index()
     }
 
@@ -944,7 +831,158 @@ fn validate_name(name: &str) -> DraftResult<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stale_task_edit_is_a_conflict_rather_than_a_silent_overwrite() {
+        // Two callers read the same task, both edit it, both save. Without a
+        // compare-exchange the second write wins and the first person's change
+        // vanishes with no error anywhere — the failure mode where someone's
+        // work disappears and nothing reports it.
+        let directory = tempfile::tempdir().unwrap();
+        let store = TaskStore::for_root(directory.path());
+        let task = TaskDefinition::new(
+            "shared".into(),
+            "do the thing".into(),
+            "head".into(),
+            "act_test".into(),
+        )
+        .unwrap();
+        store.create(&task).unwrap();
+
+        let first = store.resolve("shared").unwrap().unwrap();
+        let second = store.resolve("shared").unwrap().unwrap();
+        assert_eq!(first.generation, second.generation);
+
+        let mut mine = first;
+        mine.goal = "my edit".into();
+        store.update(&mine).unwrap();
+
+        let mut theirs = second;
+        theirs.goal = "their edit".into();
+        let error = store.update(&theirs).unwrap_err();
+        assert_eq!(
+            error.kind,
+            DraftErrorKind::ConflictDetected,
+            "a stale edit must be refused, not applied over the newer one"
+        );
+
+        assert_eq!(
+            store.resolve("shared").unwrap().unwrap().goal,
+            "my edit",
+            "the committed edit survives the refused one"
+        );
+    }
+
+    #[test]
+    fn creating_the_same_task_twice_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TaskStore::for_root(directory.path());
+        let task = TaskDefinition::new(
+            "once".into(),
+            "do the thing".into(),
+            "head".into(),
+            "act_test".into(),
+        )
+        .unwrap();
+        store.create(&task).unwrap();
+        assert!(store.create(&task).is_err());
+    }
+
+    use super::TaskLifecycleStatus;
+
+    #[test]
+    fn only_completed_and_cancelled_are_finished() {
+        assert!(TaskLifecycleStatus::Completed.is_finished());
+        assert!(TaskLifecycleStatus::Cancelled.is_finished());
+
+        // Blocked work is stalled, not finished. Counting it as closed would
+        // drop it out of every "still open" view, which is precisely where the
+        // person who can unblock it would look.
+        for open in [
+            TaskLifecycleStatus::Open,
+            TaskLifecycleStatus::InProgress,
+            TaskLifecycleStatus::Blocked,
+        ] {
+            assert!(!open.is_finished(), "{open:?} is not a finished task");
+        }
+    }
+
     use super::*;
+
+    fn contributed(
+        steps: Vec<draft_extension_contract::TaskTemplateStep>,
+    ) -> draft_extension_contract::TaskTemplateContribution {
+        draft_extension_contract::TaskTemplateContribution {
+            template_id: draft_extension_contract::NamespacedId::parse(
+                "draft.software.project/fix-defect",
+            )
+            .unwrap(),
+            display_name: "Fix a defect".into(),
+            description: None,
+            intent: None,
+            required_evidence: Vec::new(),
+            review_questions: vec!["What proves the defect is gone?".into()],
+            success_criteria: vec!["A test fails before and passes after.".into()],
+            steps,
+        }
+    }
+
+    #[test]
+    fn a_contributed_template_becomes_the_shape_core_works_with() {
+        let template = resolve_template(&contributed(vec![
+            draft_extension_contract::TaskTemplateStep {
+                id: "reproduce".into(),
+                label: "Reproduce the defect".into(),
+                scope: None,
+            },
+            draft_extension_contract::TaskTemplateStep {
+                id: "prove".into(),
+                label: "Prove it with a test".into(),
+                scope: Some(draft_extension_contract::ResourcePredicate::Raw {
+                    of: draft_extension_contract::RawResourcePredicate::PathGlob {
+                        glob: "tests/**".into(),
+                    },
+                }),
+            },
+        ]))
+        .unwrap();
+
+        assert_eq!(template.id, "draft.software.project/fix-defect");
+        assert_eq!(template.name, "Fix a defect");
+        assert_eq!(template.success_criteria_shape.len(), 1);
+        assert_eq!(template.default_review_questions.len(), 1);
+        // Each step becomes a decomposition rule; a scoped step narrows the
+        // child to exactly what the contributor named.
+        assert_eq!(template.decomposition_rules.len(), 2);
+        assert!(template.decomposition_rules[0].zones.is_empty());
+        assert_eq!(template.decomposition_rules[1].zones, vec!["tests/**"]);
+        // Prohibition is project policy, not a template's parallel list.
+        assert!(template.default_forbidden_zones.is_empty());
+    }
+
+    #[test]
+    fn a_scope_a_zone_cannot_express_is_refused_rather_than_dropped() {
+        // Silently unscoping the child would *widen* what an agent may touch,
+        // which is the opposite of what scoping a step is for.
+        let error = resolve_template(&contributed(vec![
+            draft_extension_contract::TaskTemplateStep {
+                id: "classify".into(),
+                label: "Handle every source resource".into(),
+                scope: Some(draft_extension_contract::ResourcePredicate::HasClass {
+                    class_id: draft_extension_contract::NamespacedId::parse(
+                        "draft.language.rust/source",
+                    )
+                    .unwrap(),
+                }),
+            },
+        ]))
+        .unwrap_err();
+        assert!(
+            error.message.contains("classify") && error.message.contains("path glob"),
+            "{}",
+            error.message
+        );
+    }
+
     #[test]
     fn create_resolve_and_conflict() {
         let dir = tempfile::tempdir().unwrap();

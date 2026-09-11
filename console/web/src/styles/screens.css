@@ -534,7 +534,7 @@
 }
 
 /* Editor ------------------------------------------------------------------- */
-.editor-workbench {
+.resource-workbench {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr) 300px;
   gap: var(--space-4);
@@ -630,14 +630,14 @@
   gap: 4px;
 }
 
-.editor-main {
+.resource-main {
   display: flex;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
 }
 
-.editor-tabs {
+.resource-tabs {
   display: flex;
   align-items: stretch;
   border-bottom: 1px solid var(--color-border-default);
@@ -646,11 +646,11 @@
   scrollbar-width: none;
 }
 
-.editor-tabs::-webkit-scrollbar {
+.resource-tabs::-webkit-scrollbar {
   display: none;
 }
 
-.editor-tab {
+.resource-tab {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -664,20 +664,20 @@
   white-space: nowrap;
 }
 
-.editor-tab.active {
+.resource-tab.active {
   background: var(--color-bg-surface);
   color: var(--color-text-default);
   box-shadow: inset 0 2px var(--color-accent-default);
 }
 
-.editor-tab .dirty-dot {
+.resource-tab .dirty-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--color-status-warning);
 }
 
-.editor-tab .close {
+.resource-tab .close {
   display: grid;
   place-items: center;
   width: 18px;
@@ -686,12 +686,12 @@
   color: var(--color-text-muted);
 }
 
-.editor-tab .close:hover {
+.resource-tab .close:hover {
   background: var(--color-bg-inset);
   color: var(--color-text-default);
 }
 
-.editor-path {
+.resource-path {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -701,7 +701,7 @@
   color: var(--color-text-muted);
 }
 
-.editor-path .spacer {
+.resource-path .spacer {
   flex: 1;
 }
 
@@ -743,7 +743,7 @@
   background: var(--color-accent-subtle) !important;
 }
 
-.editor-status {
+.resource-status {
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -754,11 +754,11 @@
   color: var(--color-text-muted);
 }
 
-.editor-status .spacer {
+.resource-status .spacer {
   flex: 1;
 }
 
-.editor-status > span {
+.resource-status > span {
   display: inline-flex;
   align-items: center;
   gap: 4px;

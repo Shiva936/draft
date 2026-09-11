@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/activity-record.schema.json",
+  "title": "Draft Activity Record",
+  "x-draft-format-revision": 1,
+  "description": "One logical record in a project's Activity Ledger. The chain hash and the payload identity are computed over this canonical logical record alone, never over the physical frame that stores it.",
+  "type": "object",
+  "required": ["event_id", "previous_hash", "record_hash", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "description": "Preallocated by the transaction that appends it, so a replayed recovery converges on one record instead of two.",
+      "type": "string",
+      "pattern": "^evt_[A-Za-z0-9_-]+$"
+    },
+    "previous_hash": {
+      "description": "The record this one links onto, or the ledger's genesis hash.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "record_hash": {
+      "description": "domain_hash(\"draft.activity.record/v1\", previous_hash || event_id || canonical(payload)).",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "payload": { "$ref": "#/$defs/payload" }
+  },
+  "$defs": {
+    "payload": {
+      "type": "object",
+      "required": ["kind", "actor", "recorded_at", "metadata"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "description": "A name from the frozen v1 vocabulary. Closed: every entry maps to a named audit fact and a named journal mechanism. There is deliberately no PublicationAttempted.",
+          "type": "string",
+          "minLength": 1
+        },
+        "subject": {
+          "description": "The graph object the event is about, when it has one.",
+          "type": "string",
+          "minLength": 1
+        },
+        "actor": { "type": "string", "minLength": 1 },
+        "recorded_at": {
+          "description": "Nanoseconds since the epoch, supplied by the fact rather than read at append time — an append is idempotent on its payload, and reading the clock again would break that.",
+          "type": "integer"
+        },
+        "metadata": {
+          "description": "Everything else the event needs to be understood without the store that produced it. Redacted before it is written.",
+          "type": ["object", "null"]
+        }
+      }
+    }
+  }
+}

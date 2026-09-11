@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/change-lock.schema.json",
+  "title": "Draft Change Lock",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "change_id",
+    "policy_version",
+    "verification_commands",
+    "dependency_change_ids",
+    "receipt_digests",
+    "base_snapshot_digest",
+    "result_snapshot_digest",
+    "observation_context_digest",
+    "change_set_digest",
+    "resource_state_digests",
+    "change_derivation_revision"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "change_id": {
+      "type": "string",
+      "pattern": "^chg_[A-Za-z0-9_-]+$"
+    },
+    "policy_version": {
+      "type": "string"
+    },
+    "verification_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "command",
+          "command_hash"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "command_hash": {
+            "$ref": "#/$defs/digest"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dependency_change_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^chg_[A-Za-z0-9_-]+$"
+      }
+    },
+    "receipt_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/digest"
+      }
+    },
+    "base_snapshot_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "result_snapshot_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "observation_context_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "change_set_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "resource_state_digests": {
+      "type": "object",
+      "description": "Each touched resource's authoritative result state, keyed by resource id.",
+      "additionalProperties": {
+        "$ref": "#/$defs/digest"
+      }
+    },
+    "change_derivation_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The authoritative change-derivation semantics."
+    },
+    "classification_aggregator_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Class union and collision scoping."
+    },
+    "verification_aggregator_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The five-state lattice."
+    },
+    "risk_aggregator_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Risk rule evaluation and scoring."
+    },
+    "impact_merge_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Element merge and collision scoping."
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": false
+}

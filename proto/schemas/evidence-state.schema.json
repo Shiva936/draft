@@ -1,81 +1,65 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Draft Evidence State",
+  "$id": "https://draft.dev/schemas/evidence-state.schema.json",
+  "title": "Draft Evidence",
+  "x-draft-format-revision": 1,
+  "description": "What was established about one exact ChangeRevision, from exactly which observations. Evidence never carries to another revision: an approval resting on evidence gathered before an edit is an approval of work that was never examined.",
   "type": "object",
-  "required": [
-    "schema_version",
-    "id",
-    "kind",
-    "state",
-    "result",
-    "invalidated_by",
-    "produced_at"
-  ],
+  "required": ["id", "revision", "inputs", "producer", "configuration", "outcome", "context"],
+  "additionalProperties": false,
   "properties": {
-    "schema_version": {
-      "type": "integer",
-      "const": 1
-    },
-    "id": {
-      "type": "string",
-      "pattern": "^evd_[A-Za-z0-9_-]+$"
-    },
-    "task_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "pack_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "execution_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "kind": {
-      "type": "string"
-    },
-    "state": {
-      "enum": [
-        "fresh",
-        "stale",
-        "missing",
-        "failed",
-        "waived",
-        "running",
-        "not_applicable"
-      ]
-    },
-    "result": {},
-    "produced_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "stale_reason": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "invalidated_by": {
+    "id": { "type": "string", "pattern": "^evd_[A-Za-z0-9_-]+$" },
+    "revision": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]+$" },
+    "inputs": {
+      "description": "The exact observations this read. Id and digest together, so substituting the observed bytes behind a stable id cannot silently change what the evidence rests on.",
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "object",
+        "required": ["id", "digest"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^obs_[A-Za-z0-9_-]+$" },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        }
       }
     },
-    "receipt_id": {
-      "type": [
-        "string",
-        "null"
-      ]
+    "producer": {
+      "type": "object",
+      "required": ["producer", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "producer": { "type": "string", "minLength": 1 },
+        "version": {
+          "description": "Exactly as the producer declared it. Compared byte-for-byte and never parsed as semver.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "configuration": {
+      "description": "The digest of the configuration the checks ran under: the same checks under different rules are different evidence.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "outcome": {
+      "description": "Five outcomes, because 'no checks ran' and 'checks ran and passed' are different facts. Only `passed` is a reason to proceed; `unavailable` means nothing could ask, which is never evidence that something is fine.",
+      "enum": ["passed", "failed", "unavailable", "not_applicable", "not_evaluated"]
+    },
+    "context": {
+      "type": "object",
+      "required": ["evaluated_at", "clock_source", "policy_digest", "security_context_digest", "core_evaluator_revision"],
+      "additionalProperties": false,
+      "properties": {
+        "evaluated_at": { "type": "integer" },
+        "clock_source": {
+          "description": "A conclusion reached against a fixed test clock is a different claim from one reached against real time.",
+          "type": "string",
+          "minLength": 1
+        },
+        "policy_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "security_context_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "core_evaluator_revision": { "type": "string", "minLength": 1 }
+      }
     }
-  },
-  "additionalProperties": false,
-  "$id": "https://draft.dev/schemas/evidence-state.schema.json"
+  }
 }

@@ -1,11 +1,10 @@
-import { useState } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
-import type { ExtensionCatalogSourceStatusDto } from "../../contracts";
+import type { CanonicalRevisions, ExtensionCatalogSourceStatusDto } from "../../contracts";
 import { Icon } from "../../icons";
 import { Panel, PanelHeader, Toolbar } from "../../components/layout";
 import { StatusBadge } from "../../components/StatusBadge";
-import { OverflowMenu } from "../../components/Menu";
 import { EmptyState, QueryState } from "../../components/states";
+import { ActionButton, type ActionArguments } from "../../components/actions";
+import type { ActionIndex } from "../../lib/consoleModel";
 import { NONE, formatDateTime } from "../../lib/format";
 
 /**
@@ -17,65 +16,53 @@ import { NONE, formatDateTime } from "../../lib/format";
  */
 export function TrustSourcesPanel({
   sources,
+  query,
+  actions,
+  revisions,
   busy,
-  onAction,
-  onConfirm,
+  onInvoke,
+  onExpired,
 }: {
-  sources: UseQueryResult<ExtensionCatalogSourceStatusDto[]>;
+  sources: ExtensionCatalogSourceStatusDto[];
+  /** Loading and error states for the authoritative model behind `sources`. */
+  query: {
+    isLoading: boolean;
+    error: unknown;
+    data: ExtensionCatalogSourceStatusDto[] | undefined;
+    refetch: () => unknown;
+  };
+  actions: ActionIndex;
+  revisions: CanonicalRevisions;
   busy: boolean;
-  onAction: (path: string, body?: unknown) => void;
-  onConfirm: (message: string, path: string, body?: unknown) => void;
+  onInvoke: (capability: string, args: ActionArguments) => Promise<void> | void;
+  onExpired: () => void;
 }) {
-  const [sourceId, setSourceId] = useState("");
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [trustSource, setTrustSource] = useState("");
-  const [rootJson, setRootJson] = useState("");
-  const [fingerprint, setFingerprint] = useState("");
-
   return (
     <div className="workbench with-detail">
       <Panel className="flush">
         <PanelHeader
           title="Catalog sources"
           icon="database"
-          count={sources.data?.length ?? 0}
+          count={sources.length}
           subtitle="Configuration never implies trust. Console accepts HTTPS sources only."
         />
         <div className="panel-body">
           <Toolbar>
-            <input
-              className="input"
-              aria-label="Source ID"
-              placeholder="Source ID"
-              value={sourceId}
-              onChange={(event) => setSourceId(event.target.value)}
-              style={{ maxWidth: 200 }}
-            />
-            <input
-              className="input"
-              aria-label="HTTPS catalog URL"
-              placeholder="https://catalog.example/"
-              value={sourceUrl}
-              onChange={(event) => setSourceUrl(event.target.value)}
-              style={{ flex: 1, minWidth: 220 }}
-            />
-            <button
+            <ActionButton
+              action={actions.get("extension.source.add")}
+              revisions={revisions}
+              busy={busy}
               className="button primary"
-              disabled={!sourceId || !sourceUrl.startsWith("https://") || busy}
-              onClick={() => {
-                onAction(`/api/v1/extensions/sources/${encodeURIComponent(sourceId)}/add`, { location: sourceUrl });
-                setSourceId("");
-                setSourceUrl("");
-              }}
-            >
-              <Icon name="plus" size={16} />
-              Configure source
-            </button>
+              icon="plus"
+              label="Configure source"
+              onInvoke={onInvoke}
+              onExpired={onExpired}
+            />
           </Toolbar>
         </div>
 
         <QueryState
-          query={sources}
+          query={query}
           skeletonRows={3}
           empty={
             <EmptyState
@@ -85,7 +72,7 @@ export function TrustSourcesPanel({
             />
           }
         >
-          {(items: ExtensionCatalogSourceStatusDto[]) => (
+          {() => (
             <div className="table-wrap">
               <table className="data">
                 <thead>
@@ -99,7 +86,7 @@ export function TrustSourcesPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) => (
+                  {sources.map((item) => (
                     <tr key={item.source.id}>
                       <td>
                         <div className="cell-primary">
@@ -116,6 +103,10 @@ export function TrustSourcesPanel({
                       </td>
                       <td className="shrink">
                         <StatusBadge value={item.trusted ? "trusted" : "untrusted"} />
+                        {item.source.builtin && <StatusBadge value="neutral" label="Built in" />}
+                        {item.source.enabled === false && (
+                          <StatusBadge value="neutral" label="Disabled" />
+                        )}
                       </td>
                       <td className="shrink">
                         <StatusBadge value={item.usability} />
@@ -123,30 +114,49 @@ export function TrustSourcesPanel({
                       <td className="shrink numeric">{item.cached_package_count}</td>
                       <td className="shrink muted">{formatDateTime(item.source.last_refreshed_at) || NONE}</td>
                       <td className="shrink">
-                        <OverflowMenu
-                          label={`Actions for ${item.source.id}`}
-                          items={[
-                            {
-                              label: "Refresh",
-                              icon: "refresh",
-                              disabled: !item.trusted || busy,
-                              reason: "Accept this source's signed root before refreshing",
-                              onSelect: () =>
-                                onAction(`/api/v1/extensions/sources/${encodeURIComponent(item.source.id)}/refresh`),
-                            },
-                            {
-                              label: "Remove source",
-                              icon: "trash",
-                              danger: true,
-                              disabled: busy,
-                              onSelect: () =>
-                                onConfirm(
-                                  `Remove source ${item.source.id}? Installed-package provenance and trust history will be retained.`,
-                                  `/api/v1/extensions/sources/${encodeURIComponent(item.source.id)}/remove`,
-                                ),
-                            },
-                          ]}
-                        />
+                        <span className="button-row">
+                          <ActionButton
+                            action={actions.get("extension.source.refresh", item.source.id)}
+                            revisions={revisions}
+                            busy={busy}
+                            icon="refresh"
+                            onInvoke={onInvoke}
+              onExpired={onExpired}
+                          />
+                          <ActionButton
+                            action={actions.get("extension.source.enable", item.source.id)}
+                            revisions={revisions}
+                            busy={busy}
+                            icon="play"
+                            onInvoke={onInvoke}
+              onExpired={onExpired}
+                          />
+                          <ActionButton
+                            action={actions.get("extension.source.disable", item.source.id)}
+                            revisions={revisions}
+                            busy={busy}
+                            icon="pause"
+                            onInvoke={onInvoke}
+              onExpired={onExpired}
+                          />
+                          <ActionButton
+                            action={actions.get("extension.source.trust", item.source.id)}
+                            revisions={revisions}
+                            busy={busy}
+                            icon="shield-check"
+                            onInvoke={onInvoke}
+              onExpired={onExpired}
+                          />
+                          <ActionButton
+                            action={actions.get("extension.source.remove", item.source.id)}
+                            revisions={revisions}
+                            busy={busy}
+                            className="button danger"
+                            icon="trash"
+                            onInvoke={onInvoke}
+              onExpired={onExpired}
+                          />
+                        </span>
                       </td>
                     </tr>
                   ))}
@@ -163,50 +173,10 @@ export function TrustSourcesPanel({
           Paste root metadata obtained independently of the catalog and confirm its exact SHA-256 fingerprint. This
           changes the canonical extension trust boundary.
         </p>
-        <label className="field">
-          <span>Configured source</span>
-          <input
-            className="input"
-            aria-label="Source to trust"
-            placeholder="Configured source ID"
-            value={trustSource}
-            onChange={(event) => setTrustSource(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Root fingerprint</span>
-          <input
-            className="input"
-            aria-label="Root fingerprint"
-            placeholder="sha256:…"
-            value={fingerprint}
-            onChange={(event) => setFingerprint(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Signed root metadata</span>
-          <textarea
-            className="textarea"
-            aria-label="Signed root metadata"
-            placeholder="Signed root metadata JSON"
-            value={rootJson}
-            onChange={(event) => setRootJson(event.target.value)}
-          />
-        </label>
-        <button
-          className="button danger"
-          disabled={!trustSource || !fingerprint.startsWith("sha256:") || !rootJson || busy}
-          onClick={() =>
-            onConfirm(
-              `Trust root ${fingerprint} for source ${trustSource}? This changes the canonical extension trust boundary.`,
-              `/api/v1/extensions/sources/${encodeURIComponent(trustSource)}/trust`,
-              { root_json: rootJson, fingerprint },
-            )
-          }
-        >
-          <Icon name="shield-check" size={16} />
-          Accept trust root
-        </button>
+        <p className="muted">
+          Choose a configured source above and accept its signed root there; Draft states
+          exactly what it needs and validates the fingerprint itself.
+        </p>
       </Panel>
     </div>
   );

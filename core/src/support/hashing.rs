@@ -1,4 +1,6 @@
-//! Deterministic hashing primitives (TDD §28).
+//! Deterministic hashing primitives.
+//!
+//! See `proto/specs/canonicalization.md`.
 //!
 //! Two things live here:
 //! - [`canonical_json`] / [`sha256_hex`] — the canonical serialization used to
@@ -6,7 +8,7 @@
 //!   machines and serde versions (object keys sorted, no insignificant
 //!   whitespace).
 //!
-//! Workspace/source hashing lives in `workspace::source_view`.
+//! Workspace/source hashing lives in `dcg::source_view`.
 use sha2::{Digest, Sha256};
 
 /// Hex-encode a SHA-256 digest of `bytes`, prefixed `sha256:`.

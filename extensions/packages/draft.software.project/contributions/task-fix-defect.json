@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/fix-defect",
+  "display_name": "Fix a defect",
+  "description": "Correct the reported defect and prove it with a test.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Fix a defect"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "name": "hook-entry",
+  "expect": "accepted_hook_entry",
+  "object": "config",
+  "payload_schema": "config.schema.json",
+  "payload": {
+    "schema_version": 1,
+    "hooks": {
+      "verify": {
+        "kind": "entry",
+        "entry": {
+          "command": "cargo test",
+          "enabled": true,
+          "timeout_ms": 300000,
+          "continue_on_error": false
+        }
+      }
+    }
+  },
+  "invalid_payload": {
+    "schema_version": 1,
+    "hooks": { "verify": { "kind": "raw", "command": "cargo test", "unknown": true } }
+  }
+}

@@ -742,31 +742,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "draft-adapters"
-version = "0.3.4"
-dependencies = [
- "chrono",
- "draft-core",
- "reqwest",
- "semver",
- "serde",
- "serde_json",
- "tar",
- "tempfile",
-]
-
-[[package]]
 name = "draft-cli"
 version = "0.3.4"
 dependencies = [
  "assert_cmd",
  "chrono",
  "clap",
- "draft-adapters",
  "draft-console",
+ "draft-console-tui",
  "draft-core",
+ "draft-extension-service",
  "draft-ipc",
- "draft-tui",
  "predicates",
  "serde",
  "serde_json",
@@ -791,6 +777,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "draft-console-application"
+version = "0.3.4"
+dependencies = [
+ "draft-ipc",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "draft-console-tui"
+version = "0.3.4"
+dependencies = [
+ "crossterm",
+ "draft-console-application",
+ "draft-ipc",
+ "ratatui",
+ "serde_json",
+]
+
+[[package]]
 name = "draft-core"
 version = "0.3.4"
 dependencies = [
@@ -800,8 +807,12 @@ dependencies = [
  "blake3",
  "chrono",
  "criterion",
+ "draft-dcg-contract",
+ "draft-draftpack-contract",
+ "draft-extension-contract",
  "ed25519-dalek",
  "ignore",
+ "libc",
  "rand 0.8.6",
  "rusqlite",
  "serde",
@@ -815,6 +826,56 @@ dependencies = [
  "walkdir",
  "windows-sys 0.59.0",
  "zstd",
+]
+
+[[package]]
+name = "draft-dcg-contract"
+version = "0.3.4"
+dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "draft-draftpack-contract"
+version = "0.3.4"
+dependencies = [
+ "base64",
+ "draft-dcg-contract",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "draft-extension-contract"
+version = "0.3.4"
+dependencies = [
+ "base64",
+ "draft-dcg-contract",
+ "ed25519-dalek",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "draft-extension-service"
+version = "0.3.4"
+dependencies = [
+ "base64",
+ "chrono",
+ "draft-core",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
 ]
 
 [[package]]
@@ -841,6 +902,9 @@ dependencies = [
 [[package]]
 name = "draft-sessions"
 version = "0.3.4"
+dependencies = [
+ "draft-ipc",
+]
 
 [[package]]
 name = "draft-store"
@@ -857,19 +921,6 @@ name = "draft-sync"
 version = "0.3.4"
 
 [[package]]
-name = "draft-tui"
-version = "0.3.4"
-dependencies = [
- "chrono",
- "crossterm",
- "draft-core",
- "draft-ipc",
- "ratatui",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "draft-watcher"
 version = "0.3.4"
 dependencies = [
@@ -881,10 +932,11 @@ dependencies = [
 name = "draftd"
 version = "0.3.4"
 dependencies = [
+ "base64",
  "chrono",
  "clap",
- "draft-adapters",
  "draft-core",
+ "draft-extension-service",
  "draft-ipc",
  "draft-locks",
  "draft-sessions",

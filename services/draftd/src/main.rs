@@ -1,7 +1,7 @@
-//! `draftd` — the local Draft daemon (FR-SVC-002).
+//! `draftd` — the local Draft daemon.
 //!
-//! It is a thin coordination shell over `core::App`: it owns no product logic
-//! (Blueprint §28). It serves local IPC, maintains a workspace registry, and
+//! It is a thin coordination shell over `core::App`: it owns no product logic.
+//! It serves local IPC, maintains a workspace registry, and
 //! manages locks/sessions. Every request is dispatched to the same Draft-native
 //! `core::App` the CLI uses in embedded mode.
 

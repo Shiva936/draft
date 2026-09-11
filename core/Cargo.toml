@@ -7,6 +7,9 @@ edition = "2021"
 testing = []
 
 [dependencies]
+draft-dcg-contract = { version = "0.3.4", path = "../sdk/dcg-contract" }
+draft-draftpack-contract = { version = "0.3.4", path = "../sdk/draftpack-contract" }
+draft-extension-contract = { version = "0.3.4", path = "../sdk/extension-contract" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
@@ -26,6 +29,12 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"
 tar = "0.4"
+
+# The correctness lock is the kernel's, so it needs the platform call. Both are
+# already in the dependency graph transitively; declaring them makes the lock's
+# implementation explicit rather than incidental.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }

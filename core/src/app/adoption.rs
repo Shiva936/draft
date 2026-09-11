@@ -1,11 +1,11 @@
 //! Explicit copied-workspace adoption orchestration.
 
+use crate::project::home::DraftGlobalStore;
+use crate::project::registry::{AdoptionReceipt, ProjectRegistry};
+use crate::project::WorkspaceMetadata;
 use crate::support::common::now;
 use crate::support::error::{DraftError, DraftResult};
 use crate::support::fsutil::{ensure_dir, write_json};
-use crate::workspace::home::DraftGlobalStore;
-use crate::workspace::registry::{AdoptionReceipt, ProjectRegistry};
-use crate::workspace::WorkspaceMetadata;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +20,7 @@ pub fn adopt_copy(root: &Path) -> DraftResult<AdoptionReceipt> {
         ));
     }
     let metadata: WorkspaceMetadata =
-        crate::contracts::read_persisted(&source.join("workspace.json"))?;
+        crate::contracts::read_persisted(&source.join("project.json"))?;
     let origin_workspace_id = metadata.workspace_id.to_string();
     let origin_state_digest = directory_digest(&source)?;
     let staging = tempfile::tempdir()
@@ -61,7 +61,14 @@ pub fn adopt_copy(root: &Path) -> DraftResult<AdoptionReceipt> {
         backup_path: backup.display().to_string(),
     };
     write_json(&receipt_dir.join("adoption-receipt.json"), &receipt)?;
-    ProjectRegistry::global()?.upsert(&init.workspace_id, &root, None)?;
+    ProjectRegistry::global()?.upsert(
+        &init.workspace_id,
+        &root,
+        None,
+        crate::dcg::source_view::WorkspaceRevision::derive(&root)
+            .ok()
+            .map(|revision| revision.content_digest),
+    )?;
     Ok(receipt)
 }
 

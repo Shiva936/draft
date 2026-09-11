@@ -15,10 +15,17 @@ import { Settings } from "./screens/settings/Settings";
 import { ProjectLayout } from "./screens/project/ProjectLayout";
 import { ProjectOverview } from "./screens/project/overview/ProjectOverview";
 import { Tasks } from "./screens/project/tasks/Tasks";
-import { Editor } from "./screens/project/editor/Editor";
+import { Changes } from "./screens/project/work/Changes";
+import { ChangeScope } from "./screens/project/work/ChangeScope";
+import { ResourceBrowser } from "./screens/project/resources/ResourceBrowser";
 import { Events } from "./screens/project/events/Events";
-import { Packs } from "./screens/project/packs/Packs";
-import { Pack } from "./screens/project/packs/pack/Pack";
+import { Observation } from "./screens/project/observation/Observation";
+import { Tools } from "./screens/project/tools/Tools";
+import { Baselines } from "./screens/project/baselines/Baselines";
+import { BaselineScope } from "./screens/project/baselines/BaselineScope";
+import { Publications } from "./screens/project/baselines/Publications";
+import { Providers } from "./screens/project/providers/Providers";
+import { ProjectExtensions } from "./screens/project/extensions/ProjectExtensions";
 import "./styles.css";
 
 const client = new QueryClient({
@@ -47,14 +54,26 @@ function App({ session }: { session: Session }) {
           <Route path="doctor" element={<Doctor />} />
           <Route path="extensions" element={<Extensions />} />
           <Route path="settings" element={<Settings />} />
+          {/* §8.3's project information architecture. Work owns Tasks and
+              Changes; Observation is a view of Resources; Tools is a view of
+              Extensions. The section list itself comes from the generated
+              authoritative IA — see ProjectLayout. */}
           <Route path="projects/:workspaceId" element={<ProjectLayout />}>
             <Route index element={<ProjectOverview />} />
-            <Route path="tasks" element={<Tasks />} />
-            <Route path="editor" element={<Editor />} />
-            <Route path="events" element={<Events />} />
-            <Route path="packs" element={<Packs />}>
-              <Route path=":packId/:tab?" element={<Pack />} />
-            </Route>
+            <Route path="work" element={<Tasks />} />
+            <Route path="work/changes" element={<Changes />} />
+            {/* §8.3 gives a Change and a Baseline their own scopes. Each is
+                rendered from the authoritative model for that subject. */}
+            <Route path="work/changes/:changeId" element={<ChangeScope />} />
+            <Route path="resources" element={<ResourceBrowser />} />
+            <Route path="resources/observation" element={<Observation />} />
+            <Route path="baselines" element={<Baselines />} />
+            <Route path="baselines/publications" element={<Publications />} />
+            <Route path="baselines/:baselineId" element={<BaselineScope />} />
+            <Route path="activity" element={<Events />} />
+            <Route path="providers" element={<Providers />} />
+            <Route path="extensions" element={<ProjectExtensions />} />
+            <Route path="extensions/tools" element={<Tools />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

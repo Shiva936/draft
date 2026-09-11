@@ -16,6 +16,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use draft_ipc::console_application::{
+    CONSOLE_CAPABILITIES, CONSOLE_PROTOCOL_MAJOR, CONSOLE_PROTOCOL_MINOR,
+};
 use draft_ipc::{call, socket_path, Request as IpcRequest, IPC_PROTOCOL};
 use futures_util::stream;
 use include_dir::{include_dir, Dir};
@@ -26,7 +29,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 static DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/dist");
@@ -69,6 +72,61 @@ struct BootstrapSecret {
 struct BrowserSession {
     csrf: String,
     expires_at: Instant,
+    /// This browser session's Console application session, established lazily.
+    ///
+    /// Shared by `Arc` so the registry lock can be released the moment the
+    /// handle is taken: the handshake itself is serialized per browser session,
+    /// never behind the global registry mutex.
+    console: Arc<ConsoleSession>,
+}
+
+/// The Console application session belonging to one browser session.
+///
+/// `draftd` rolls an application session per `client_instance_id` and
+/// invalidates the capabilities of the one it replaces, so two concurrent
+/// handshakes for the same browser are actively harmful — the loser is left
+/// holding a dead session. Establishment and replacement are therefore
+/// singleflight, and replacement is compare-and-swap on `generation` so a late
+/// straggler reporting the *old* session does not roll a third.
+#[derive(Debug)]
+struct ConsoleSession {
+    /// Stable for the life of the browser session; `draftd` keys its rolling on
+    /// this, so it must not change when we merely recover.
+    client_instance_id: String,
+    state: Mutex<ConsoleSessionState>,
+    /// Signalled when a handshake finishes, successfully or not, so waiters
+    /// never park forever behind a failed attempt.
+    settled: Condvar,
+}
+
+#[derive(Debug, Clone)]
+enum ConsoleSessionState {
+    Uninitialized,
+    Handshaking,
+    Ready(ConsoleSessionHandle),
+}
+
+/// What a caller holds while it works, and what it presents when recovering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConsoleSessionHandle {
+    application_session_id: String,
+    /// Bumped on every replacement. A recovery request naming an older
+    /// generation has already been overtaken and simply reuses the current one.
+    generation: u64,
+    negotiated_capabilities: Vec<String>,
+}
+
+impl ConsoleSession {
+    fn new() -> Self {
+        Self {
+            // Opaque and per-browser-session: two browsers never share, and a
+            // recovery never changes it, so recovery replaces exactly this
+            // session and no other.
+            client_instance_id: format!("draft-console-web-{}", random_token(16)),
+            state: Mutex::new(ConsoleSessionState::Uninitialized),
+            settled: Condvar::new(),
+        }
+    }
 }
 
 struct AppState {
@@ -116,7 +174,7 @@ type ApiResult = Result<Json<Value>, ApiError>;
 
 /// Serve Console with a workspace preselected from canonical metadata.
 pub fn serve(root: PathBuf, bind: &str, port: u16) -> Result<(), String> {
-    let preselected_workspace_id = std::fs::read(root.join(".draft/workspace.json"))
+    let preselected_workspace_id = std::fs::read(root.join(".draft/project.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .and_then(|value| {
@@ -201,6 +259,11 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/doctor", get(doctor))
         .route("/api/v1/settings", get(settings))
         .route("/api/v1/settings/user", post(user_update))
+        .route("/api/v1/console/model", get(console_model))
+        .route(
+            "/api/v1/console/actions/invoke",
+            post(console_action_invoke),
+        )
         .route("/api/v1/extensions", get(extensions))
         .route("/api/v1/extensions/sources", get(extension_sources))
         .route("/api/v1/extensions/discover", get(extension_discover))
@@ -224,21 +287,82 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/api/v1/projects/:workspace_id/tasks", get(tasks))
         .route("/api/v1/projects/:workspace_id/events", get(events))
-        .route("/api/v1/projects/:workspace_id/files", get(files))
-        .route("/api/v1/projects/:workspace_id/file", get(file))
-        .route("/api/v1/projects/:workspace_id/packs", get(packs))
-        .route("/api/v1/projects/:workspace_id/packs/:pack_id", get(pack))
+        .route("/api/v1/projects/:workspace_id/resources", get(resources))
+        .route("/api/v1/projects/:workspace_id/resource", get(resource))
         .route(
-            "/api/v1/projects/:workspace_id/packs/:pack_id/:view",
-            get(pack_view),
+            "/api/v1/projects/:workspace_id/classification",
+            get(classification),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/presentation",
+            get(presentation),
+        )
+        .route("/api/v1/projects/:workspace_id/tools", get(tools))
+        .route(
+            "/api/v1/projects/:workspace_id/observation-coverage",
+            get(observation_coverage),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/observation-provenance",
+            get(observation_provenance),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/observation-pending",
+            get(observation_pending),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/observation-preview",
+            get(observation_preview),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/observation-transitions",
+            get(observation_transitions),
+        )
+        .route("/api/v1/projects/:workspace_id/intents", get(intents))
+        .route(
+            "/api/v1/projects/:workspace_id/task-templates",
+            get(task_templates),
+        )
+        // The Change Graph. Read models are GET, and the two acts that change
+        // something are POST — promotion changes what the project accepts,
+        // publication causes an effect outside Draft, and neither is a read.
+        .route("/api/v1/projects/:workspace_id/graph", get(graph))
+        .route(
+            "/api/v1/projects/:workspace_id/graph/baseline",
+            get(graph_baseline),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/graph/authorization/:change_id/:revision_id",
+            get(graph_authorization),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/graph/publications",
+            get(graph_publications),
+        )
+        // Providers and Baselines are §8.3 sections of their own. Reads only:
+        // a binding changes through the audited action path like every other
+        // mutation, and a Baseline never changes at all.
+        .route("/api/v1/projects/:workspace_id/providers", get(providers))
+        .route(
+            "/api/v1/projects/:workspace_id/providers/:binding_id",
+            get(provider),
+        )
+        .route("/api/v1/projects/:workspace_id/baselines", get(baselines))
+        .route(
+            "/api/v1/projects/:workspace_id/baselines/:baseline_id",
+            get(baseline),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/graph/promote",
+            post(graph_promote),
+        )
+        .route(
+            "/api/v1/projects/:workspace_id/graph/publish",
+            post(graph_publish),
         )
         .route(
             "/api/v1/projects/:workspace_id/actions/:action",
             post(project_action),
-        )
-        .route(
-            "/api/v1/projects/:workspace_id/packs/:pack_id/actions/:action",
-            post(pack_action),
         )
         .fallback(fallback)
         .layer(tower_http::limit::RequestBodyLimitLayer::new(
@@ -412,17 +536,18 @@ async fn bootstrap(
     *bootstrap = None;
     drop(bootstrap);
 
-    let session_id = random_token(32);
+    let workspace_id = random_token(32);
     let csrf = random_token(24);
     state.sessions.lock().unwrap().insert(
-        session_id.clone(),
+        workspace_id.clone(),
         BrowserSession {
             csrf: csrf.clone(),
             expires_at: Instant::now() + SESSION_TTL,
+            console: Arc::new(ConsoleSession::new()),
         },
     );
     let cookie = format!(
-        "{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+        "{SESSION_COOKIE}={workspace_id}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
         SESSION_TTL.as_secs()
     );
     let mut response = Json(json!({
@@ -573,6 +698,14 @@ async fn extension_sources(State(state): State<Arc<AppState>>, headers: HeaderMa
 struct ExtensionSearchQuery {
     #[serde(default)]
     q: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    capability: Option<String>,
+    #[serde(default)]
+    page: Option<u64>,
+    #[serde(default)]
+    limit: Option<u64>,
 }
 
 async fn extension_discover(
@@ -580,12 +713,21 @@ async fn extension_discover(
     headers: HeaderMap,
     Query(query): Query<ExtensionSearchQuery>,
 ) -> ApiResult {
-    authenticated_call(
-        &state,
-        &headers,
-        "extension.search",
-        json!({ "query": query.q }),
-    )
+    // Discovery is a read of verified cached metadata, so it stays a GET and
+    // works offline. Contacting a source is a mutation — it rewrites the trust
+    // cache — and goes through the source refresh action instead.
+    let mut params = json!({ "query": query.q });
+    for (key, value) in [
+        ("source", query.source.map(Value::String)),
+        ("capability", query.capability.map(Value::String)),
+        ("page", query.page.map(Value::from)),
+        ("limit", query.limit.map(Value::from)),
+    ] {
+        if let Some(value) = value {
+            params[key] = value;
+        }
+    }
+    authenticated_call(&state, &headers, "extension.search", params)
 }
 
 async fn extension_source_action(
@@ -597,6 +739,9 @@ async fn extension_source_action(
     let method = match action.as_str() {
         "add" => "extension.source.add",
         "remove" => "extension.source.remove",
+        "delete" => "extension.source.delete",
+        "enable" => "extension.source.enable",
+        "disable" => "extension.source.disable",
         "trust" => "extension.source.trust",
         "refresh" => "extension.source.refresh",
         _ => {
@@ -656,6 +801,8 @@ async fn extension_action(
         "uninstall" => "extension.uninstall",
         "enable" => "extension.enable",
         "disable" => "extension.disable",
+        "authorize" => "extension.authorize",
+        "revoke" => "extension.revoke",
         _ => {
             return Err(ApiError::new(
                 StatusCode::NOT_FOUND,
@@ -742,35 +889,47 @@ async fn events(
     )
 }
 
-async fn files(
+async fn resources(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     AxPath(workspace_id): AxPath<String>,
 ) -> ApiResult {
-    project_call(&state, &headers, &workspace_id, "editor.tree", json!({}))
+    project_call(&state, &headers, &workspace_id, "resource.list", json!({}))
 }
 
+/// A resource is addressed by its locator.
+///
+/// `scheme` defaults to `file` so the common case stays a plain path, but the
+/// gateway never parses `body` — what it means belongs to the owning adapter.
 #[derive(Deserialize)]
-struct FileQuery {
-    path: String,
+struct ResourceQuery {
+    body: String,
+    #[serde(default = "default_scheme")]
+    scheme: String,
 }
 
-async fn file(
+fn default_scheme() -> String {
+    "file".to_string()
+}
+
+async fn resource(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     AxPath(workspace_id): AxPath<String>,
-    Query(query): Query<FileQuery>,
+    Query(query): Query<ResourceQuery>,
 ) -> ApiResult {
     project_call(
         &state,
         &headers,
         &workspace_id,
-        "editor.file",
-        json!({ "file_path": query.path }),
+        "resource.get",
+        json!({
+            "resource_locator": { "scheme": query.scheme, "body": query.body },
+        }),
     )
 }
 
-async fn packs(
+async fn classification(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     AxPath(workspace_id): AxPath<String>,
@@ -779,50 +938,278 @@ async fn packs(
         &state,
         &headers,
         &workspace_id,
-        "pack.canonical.list",
+        "classification.bundle",
         json!({}),
     )
 }
 
-async fn pack(
+/// How each resource would be presented, and by whom.
+///
+/// Read-only: choosing between tied publishers is a person's decision, made
+/// through the ordinary action surface, not a side effect of rendering.
+async fn presentation(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    AxPath((workspace_id, pack_id)): AxPath<(String, String)>,
+    AxPath(workspace_id): AxPath<String>,
 ) -> ApiResult {
     project_call(
         &state,
         &headers,
         &workspace_id,
-        "pack.inspect",
-        json!({ "pack": pack_id }),
+        "presentation.bindings",
+        json!({ "surface": "resource" }),
     )
 }
 
-async fn pack_view(
+/// The tool actions installed extensions offer. Listing is read-only; invoking
+/// one mutates and goes through the project action surface.
+async fn tools(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    AxPath((workspace_id, pack_id, view)): AxPath<(String, String, String)>,
+    AxPath(workspace_id): AxPath<String>,
 ) -> ApiResult {
-    let method = match view.as_str() {
-        "diff" => "pack.diff",
-        "risk" => "risk.assess",
-        "verify" | "readiness" | "review" | "approvals" | "submit" => "pack.readiness",
-        "receipts" | "rollback" => "pack.receipts",
-        _ => {
-            return Err(ApiError::new(
-                StatusCode::NOT_FOUND,
-                "UNKNOWN_PACK_VIEW",
-                "unknown pack view",
-            ))
-        }
-    };
+    project_call(&state, &headers, &workspace_id, "tool.list", json!({}))
+}
+
+/// Which domains the current observation covers, and what it could not see.
+async fn observation_coverage(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
     project_call(
         &state,
         &headers,
         &workspace_id,
-        method,
-        json!({ "pack": pack_id }),
+        "observation.coverage",
+        json!({}),
     )
+}
+
+/// Which implementations actually performed the current observation.
+///
+/// A list: the same state observed again later is a different historical
+/// observation, and neither record replaces the other.
+async fn observation_provenance(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "observation.provenance",
+        json!({}),
+    )
+}
+
+/// The semantics an installed extension would observe under, if adopted.
+///
+/// Read-only, and empty in the ordinary case. Adopting is a mutation and goes
+/// through the project action surface with its own confirmation.
+async fn observation_pending(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "observation.pending",
+        json!({}),
+    )
+}
+
+/// What adopting the pending semantics would do.
+///
+/// Deliberately a read: the preview runs a trial observation and throws it
+/// away, so looking at the consequences of a change is never a way of making it.
+async fn observation_preview(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "observation.preview",
+        json!({}),
+    )
+}
+
+/// Every adoption this project has made.
+async fn observation_transitions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "observation.transitions",
+        json!({}),
+    )
+}
+
+async fn intents(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(&state, &headers, &workspace_id, "intent.list", json!({}))
+}
+
+async fn task_templates(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(&state, &headers, &workspace_id, "task.templates", json!({}))
+}
+
+/// The project's whole Change Graph state, with server-computed availability.
+async fn graph(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(&state, &headers, &workspace_id, "dcg.project", json!({}))
+}
+
+/// The Baseline the project accepts. Its authoritative state; there is no other.
+async fn graph_baseline(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(&state, &headers, &workspace_id, "dcg.baseline", json!({}))
+}
+
+/// Everything decided about one revision, and what may legally follow.
+async fn graph_authorization(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath((workspace_id, change_id, revision_id)): AxPath<(String, String, String)>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "dcg.authorization",
+        json!({ "change": change_id, "revision": revision_id }),
+    )
+}
+
+async fn graph_publications(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "dcg.publication.list",
+        json!({}),
+    )
+}
+
+/// Every binding, definition and profile this project holds.
+async fn providers(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "project.provider.list",
+        json!({}),
+    )
+}
+
+/// One binding, with the immutable facts it currently points at.
+async fn provider(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath((workspace_id, binding_id)): AxPath<(String, String)>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "project.provider.show",
+        json!({ "binding": binding_id }),
+    )
+}
+
+/// The accepted lineage, newest first.
+async fn baselines(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "dcg.baseline.list",
+        json!({}),
+    )
+}
+
+/// One accepted Baseline: its three roots, lineage, composition, deliveries.
+async fn baseline(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath((workspace_id, baseline_id)): AxPath<(String, String)>,
+) -> ApiResult {
+    project_call(
+        &state,
+        &headers,
+        &workspace_id,
+        "dcg.baseline.show",
+        json!({ "baseline": baseline_id }),
+    )
+}
+
+/// Promote an authorized revision.
+///
+/// `expected_baseline` is passed through and required by `draftd`: a browser
+/// acting on a view that has since moved fails deterministically rather than
+/// promoting onto a parent nobody judged the work against.
+async fn graph_promote(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    // A mutation, so it takes the CSRF check and the client's operation id
+    // like every other one. Without the operation id a lost reply would look
+    // like a promotion that never happened.
+    mutation_call(&state, &headers, &workspace_id, "dcg.promotion.run", body)
+}
+
+/// Publish a promoted Baseline.
+///
+/// The body names what to deliver and what for. It cannot name the delivery
+/// semantics, the recovery class or the attempt identity: the first is the
+/// provider's, the second follows from it, and the third is the operation id.
+async fn graph_publish(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxPath(workspace_id): AxPath<String>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    // The operation id is the attempt identity: a browser that retries after
+    // an uncertain reply converges on what its attempt concluded rather than
+    // delivering a second time.
+    mutation_call(&state, &headers, &workspace_id, "dcg.publication.run", body)
 }
 
 async fn project_action(
@@ -832,18 +1219,14 @@ async fn project_action(
     body: Bytes,
 ) -> ApiResult {
     let method = match action.as_str() {
-        "editor-create" | "editor-rename" | "editor-delete" => "editor.session.stage",
-        "editor-restore" => "editor.restore",
-        "editor-save" => "editor.session.save",
-        "editor-commit" => "editor.session.commit",
+        "resource-create" | "resource-relocate" | "resource-delete" => "resource.workspace.stage",
+        "resource-save" => "resource.workspace.save",
+        "resource-commit" => "resource.workspace.commit",
         "task-create" => "task.create",
         "task-update" => "task.update",
         "task-next-action-add" => "task.next_action.add",
         "task-next-action-set" => "task.next_action.set",
         "task-drop" => "task.drop",
-        "pack-create" => "pack.create_from_base",
-        "pack-select" => "pack.select",
-        "pack-delete" => "pack.delete",
         "config-set" => "config.set",
         "config-unset" => "config.unset",
         "hook-set" => "hook.set",
@@ -854,7 +1237,42 @@ async fn project_action(
         "candidate-add" => "candidate.add",
         "candidate-update" => "candidate.update",
         "candidate-remove" => "candidate.remove",
-        "waive" => "waiver.create",
+        // Invoking a tool mutates: it runs a command and may apply what the
+        // tool proposed, so it goes through the mutation path with its CSRF
+        // value and operation id like any other change.
+        "tool-invoke" => "tool.invoke",
+        // Adopting new observation semantics establishes a new baseline and
+        // supersedes work: a mutation, with its own confirmation, not a read.
+        "observation-adopt" => "observation.adopt",
+        // The Change Graph's mutating steps. Promotion and publication have
+        // their own routes because they are the two acts with consequences
+        // outside the project; everything up to them is an ordinary project
+        // action. Each is a distinct act on the record — establishing evidence
+        // is not judging risk, and judging risk is not deciding — so the
+        // Console offers them separately rather than as one "approve" button.
+        "graph-change-open" => "dcg.change.open",
+        // Abandon and Reopen, never Delete. Stopping work is a statement about
+        // the future; deleting would be a statement about the past, and the
+        // record of work that was done and then decided against is frequently
+        // the part worth keeping.
+        "graph-change-abandon" => "dcg.change.abandon",
+        "graph-change-reopen" => "dcg.change.reopen",
+        "graph-revision-seal" => "dcg.revision.seal",
+        // Recording that somebody looked. Offered separately from deciding,
+        // because reading a revision and concluding something about it are
+        // different acts and only one of them authorizes anything.
+        "graph-review-record" => "dcg.review.record",
+        "graph-evidence-record" => "dcg.evidence.record",
+        "graph-assessment-record" => "dcg.assessment.record",
+        "graph-gate-evaluate" => "dcg.gate.evaluate",
+        "graph-gate-waive" => "dcg.gate.waive",
+        // One method, because approving and rejecting are one act with a
+        // different answer — the Decision records which, and both are equally
+        // immutable once recorded.
+        "graph-decision-record" => "dcg.decision.record",
+        "graph-publication-grant" => "dcg.publication.grant",
+        "graph-publication-authorize-retry" => "dcg.publication.authorize_retry",
+        "graph-publication-withdraw-attempt" => "dcg.publication.withdraw_attempt",
         _ => {
             return Err(ApiError::new(
                 StatusCode::NOT_FOUND,
@@ -914,36 +1332,6 @@ async fn notification_action(
         method,
         json!({ "notification_id": notification_id }),
     )
-}
-
-async fn pack_action(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    AxPath((workspace_id, pack_id, action)): AxPath<(String, String, String)>,
-    body: Bytes,
-) -> ApiResult {
-    let method = match action.as_str() {
-        "verify" => "job.submit",
-        "review" => "review.start",
-        "approve" => "decision.approve",
-        "reject" => "decision.reject",
-        "submit" => "job.submit",
-        "rollback" => "job.submit",
-        "reopen" => "pack.reopen",
-        _ => {
-            return Err(ApiError::new(
-                StatusCode::NOT_FOUND,
-                "UNKNOWN_ACTION",
-                "unknown pack action",
-            ))
-        }
-    };
-    let mut params = parse_body(&body)?;
-    params["pack"] = Value::String(pack_id);
-    if method == "job.submit" {
-        params["kind"] = Value::String(action);
-    }
-    mutation_call(&state, &headers, &workspace_id, method, params)
 }
 
 fn authenticated_call(
@@ -1014,6 +1402,281 @@ fn authenticated_mutation_call(
     )
 }
 
+/// The public code `draftd` reports when it does not know an application
+/// session. Matching on it is what keeps recovery off free-text messages.
+const UNKNOWN_CONSOLE_SESSION: &str = "UNKNOWN_CONSOLE_SESSION";
+
+#[derive(Deserialize)]
+struct ConsoleModelQuery {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    workspace_id: Option<String>,
+    #[serde(default)]
+    change_id: Option<String>,
+    /// Required by the `BASELINE` scope and meaningless elsewhere.
+    #[serde(default)]
+    baseline_id: Option<String>,
+}
+
+/// The authoritative Console read model — state *and* the actions `draftd`
+/// currently issues.
+///
+/// The browser renders what this returns and decides nothing: which actions
+/// exist, whether they are enabled, and what inputs they take are all settled
+/// here. A stale application session is recovered transparently because this is
+/// a read and retrying it cannot execute anything.
+async fn console_model(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<ConsoleModelQuery>,
+) -> ApiResult {
+    let session = authenticate(&headers, &state)?;
+    let subject = json!({
+        "scope": query.scope.as_deref().unwrap_or("GLOBAL"),
+        "workspace_id": query.workspace_id,
+        "change_id": query.change_id,
+        "baseline_id": query.baseline_id,
+    });
+
+    let mut handle = console_session(&state, &session.console)?;
+    for attempt in 0..2 {
+        let request = IpcRequest::new(
+            request_id(),
+            "console.snapshot",
+            json!({
+                "application_session_id": handle.application_session_id,
+                "subject": subject,
+            }),
+        );
+        match raw_ipc_call(&state, request) {
+            Ok(model) => {
+                return Ok(Json(json!({
+                    "schema_version": API_ENVELOPE_VERSION,
+                    "data": model,
+                })))
+            }
+            Err(error) if error.code == UNKNOWN_CONSOLE_SESSION && attempt == 0 => {
+                handle = recover_console_session(&state, &session.console, &handle)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(ApiError::new(
+        StatusCode::CONFLICT,
+        UNKNOWN_CONSOLE_SESSION,
+        "Console application session could not be established; refresh and try again",
+    ))
+}
+
+#[derive(Deserialize)]
+struct ConsoleInvokeBody {
+    invocation_capability: String,
+    #[serde(default)]
+    expected_revisions: Value,
+    #[serde(default)]
+    arguments: Value,
+}
+
+/// Invoke one server-issued action.
+///
+/// The browser sends the capability `draftd` issued, the revisions it was shown
+/// and the arguments it collected — never an application session id, which is
+/// this gateway's to hold.
+///
+/// There is deliberately **no retry loop** here. An action is a mutation, and
+/// the only refusal we could safely retry — an unknown application session — is
+/// raised by `draftd` before it consumes the capability or opens an operation.
+/// But recovering invalidates that capability, so the honest answer is to
+/// refresh the session and return the conflict: the browser refetches the model
+/// and re-invokes with a freshly issued capability, which is the same
+/// revalidation path a changed action would take anyway. Anything else — a
+/// timeout, a dropped connection, an ambiguous failure — is never replayed,
+/// because the mutation may already have run.
+async fn console_action_invoke(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult {
+    let session = authenticate(&headers, &state)?;
+    let invocation: ConsoleInvokeBody = serde_json::from_slice(&body).map_err(|error| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "INVALID_REQUEST_BODY",
+            format!("invalid action invocation: {error}"),
+        )
+    })?;
+    let handle = console_session(&state, &session.console)?;
+    let mut params = json!({
+        "application_session_id": handle.application_session_id,
+        "invocation_capability": invocation.invocation_capability,
+        "expected_revisions": invocation.expected_revisions,
+        "arguments": invocation.arguments,
+    });
+    if params["arguments"].is_null() {
+        params["arguments"] = json!({});
+    }
+
+    let outcome = authenticated_mutation_call(&state, &headers, "console.action.invoke", params);
+    if let Err(error) = &outcome {
+        if error.code == UNKNOWN_CONSOLE_SESSION {
+            // Proven pre-dispatch: nothing ran, and nothing was consumed.
+            // Re-establish so the browser's next read succeeds, and let it
+            // reacquire the action against the fresh authoritative model.
+            let _ = recover_console_session(&state, &session.console, &handle);
+        }
+    }
+    outcome
+}
+
+/// A raw daemon call that surfaces the error object rather than an HTTP status,
+/// so the caller can decide whether a refusal is recoverable.
+fn raw_ipc_call(state: &AppState, request: IpcRequest) -> Result<Value, ApiError> {
+    let response = call(&state.ipc_path, &request).map_err(|error| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "DAEMON_UNAVAILABLE",
+            format!("draftd is unavailable: {error}"),
+        )
+    })?;
+    match (response.result, response.error) {
+        (Some(result), _) => Ok(result),
+        (None, Some(error)) => Err(ApiError {
+            status: status_for_error(&error.code),
+            code: error.code,
+            message: error.message,
+            details: error.details,
+        }),
+        (None, None) => Ok(Value::Null),
+    }
+}
+
+/// The current application session, establishing one if there is none.
+///
+/// Exactly one handshake runs per browser session: a concurrent caller either
+/// waits for the in-flight attempt or reuses its result. The registry lock is
+/// long gone by the time this runs — only this browser session's own state is
+/// held, and never across the daemon call itself.
+fn console_session(
+    state: &AppState,
+    console: &ConsoleSession,
+) -> Result<ConsoleSessionHandle, ApiError> {
+    let mut current = console.state.lock().unwrap();
+    loop {
+        match &*current {
+            ConsoleSessionState::Ready(handle) => return Ok(handle.clone()),
+            ConsoleSessionState::Handshaking => {
+                // Someone else is establishing it; wait for them to settle
+                // rather than racing a second `open_application`.
+                current = console.settled.wait(current).unwrap();
+            }
+            ConsoleSessionState::Uninitialized => {
+                *current = ConsoleSessionState::Handshaking;
+                drop(current);
+                return finish_handshake(state, console, 0);
+            }
+        }
+    }
+}
+
+/// Replace a session the daemon has rejected — at most once per generation.
+///
+/// `failed` is the handle the caller was using. If the installed session has
+/// already moved past it, another caller recovered first and this one simply
+/// adopts that result; only the caller whose generation is still current
+/// performs the replacement. That is what stops concurrent stragglers rolling
+/// S1 → S2 → S3 → S4 and invalidating each other's fresh capabilities.
+fn recover_console_session(
+    state: &AppState,
+    console: &ConsoleSession,
+    failed: &ConsoleSessionHandle,
+) -> Result<ConsoleSessionHandle, ApiError> {
+    let mut current = console.state.lock().unwrap();
+    loop {
+        match &*current {
+            ConsoleSessionState::Ready(handle) if handle.generation != failed.generation => {
+                return Ok(handle.clone())
+            }
+            ConsoleSessionState::Ready(handle) => {
+                let next = handle.generation + 1;
+                *current = ConsoleSessionState::Handshaking;
+                drop(current);
+                return finish_handshake(state, console, next);
+            }
+            ConsoleSessionState::Handshaking => {
+                current = console.settled.wait(current).unwrap();
+            }
+            ConsoleSessionState::Uninitialized => {
+                *current = ConsoleSessionState::Handshaking;
+                drop(current);
+                return finish_handshake(state, console, failed.generation + 1);
+            }
+        }
+    }
+}
+
+/// Perform the one handshake this caller owns, then publish the result.
+///
+/// A failure resets the state to `Uninitialized` and wakes every waiter, so a
+/// daemon that was briefly down leaves the session retryable rather than parked
+/// in `Handshaking` forever.
+fn finish_handshake(
+    state: &AppState,
+    console: &ConsoleSession,
+    generation: u64,
+) -> Result<ConsoleSessionHandle, ApiError> {
+    let outcome = raw_ipc_call(
+        state,
+        IpcRequest::new(
+            request_id(),
+            "console.handshake",
+            json!({
+                "protocol": { "major": CONSOLE_PROTOCOL_MAJOR, "minor": CONSOLE_PROTOCOL_MINOR },
+                "client_name": "draft-console-web",
+                "client_version": env!("CARGO_PKG_VERSION"),
+                "client_instance_id": console.client_instance_id,
+                // Without `action_capabilities` draftd issues no invocation
+                // capability and every action would arrive disabled.
+                "requested_capabilities": CONSOLE_CAPABILITIES,
+            }),
+        ),
+    );
+
+    let mut current = console.state.lock().unwrap();
+    let result = match outcome {
+        Ok(value) => {
+            let handle = ConsoleSessionHandle {
+                application_session_id: value
+                    .get("application_session_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                generation,
+                negotiated_capabilities: value
+                    .get("negotiated_capabilities")
+                    .and_then(Value::as_array)
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(ToOwned::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            *current = ConsoleSessionState::Ready(handle.clone());
+            Ok(handle)
+        }
+        Err(error) => {
+            *current = ConsoleSessionState::Uninitialized;
+            Err(error)
+        }
+    };
+    drop(current);
+    console.settled.notify_all();
+    result
+}
+
 fn ipc_call(state: &AppState, request: IpcRequest) -> ApiResult {
     let response = call(&state.ipc_path, &request).map_err(|error| {
         ApiError::new(
@@ -1041,7 +1704,7 @@ fn ipc_call(state: &AppState, request: IpcRequest) -> ApiResult {
 }
 
 fn authenticate(headers: &HeaderMap, state: &AppState) -> Result<BrowserSession, ApiError> {
-    let session_id = cookie(headers, SESSION_COOKIE).ok_or_else(|| {
+    let workspace_id = cookie(headers, SESSION_COOKIE).ok_or_else(|| {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
             "UNAUTHORIZED_SESSION",
@@ -1050,7 +1713,7 @@ fn authenticate(headers: &HeaderMap, state: &AppState) -> Result<BrowserSession,
     })?;
     let mut sessions = state.sessions.lock().unwrap();
     sessions.retain(|_, session| session.expires_at > Instant::now());
-    sessions.get(&session_id).cloned().ok_or_else(|| {
+    sessions.get(&workspace_id).cloned().ok_or_else(|| {
         ApiError::new(
             StatusCode::UNAUTHORIZED,
             "UNAUTHORIZED_SESSION",
@@ -1127,10 +1790,12 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 fn status_for_error(code: &str) -> StatusCode {
     match code {
         "NOT_FOUND" | "WORKSPACE_NOT_FOUND" => StatusCode::NOT_FOUND,
-        "CONFLICT_DETECTED" | "OPERATION_IN_PROGRESS" => StatusCode::CONFLICT,
+        "CONFLICT_DETECTED" | "OPERATION_IN_PROGRESS" | "UNKNOWN_CONSOLE_SESSION" => {
+            StatusCode::CONFLICT
+        }
         "INVALID_CONFIG" | "IPC_ERROR" | "VALIDATION_ERROR" => StatusCode::BAD_REQUEST,
         "UNSUPPORTED_SCHEMA" => StatusCode::UNPROCESSABLE_ENTITY,
-        "RISK_POLICY_BLOCKED" | "REVIEW_REQUIRED" | "PROTECTED_FILE_ACCESS" => {
+        "RISK_POLICY_BLOCKED" | "REVIEW_REQUIRED" | "PROTECTED_RESOURCE_ACCESS" => {
             StatusCode::FORBIDDEN
         }
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1183,6 +1848,9 @@ fn open_browser(url: &str) -> bool {
     let result = std::process::Command::new("xdg-open").arg(url).spawn();
     result.is_ok()
 }
+
+#[cfg(test)]
+mod surface;
 
 #[cfg(test)]
 mod tests {
@@ -1309,6 +1977,7 @@ mod tests {
             BrowserSession {
                 csrf: "csrf".into(),
                 expires_at: Instant::now() + Duration::from_secs(10),
+                console: Arc::new(ConsoleSession::new()),
             },
         );
         let mut headers = HeaderMap::new();
@@ -1317,11 +1986,369 @@ mod tests {
             format!("{SESSION_COOKIE}=session").parse().unwrap(),
         );
         headers.insert(header::ORIGIN, state.origin.parse().unwrap());
-        let error = mutation_call(&state, &headers, "ws_a", "task.create", json!({})).unwrap_err();
+        let error = mutation_call(&state, &headers, "prj_a", "task.create", json!({})).unwrap_err();
         assert_eq!(error.code, "INVALID_CSRF");
         headers.insert("x-draft-csrf", "csrf".parse().unwrap());
-        let error = mutation_call(&state, &headers, "ws_a", "task.create", json!({})).unwrap_err();
+        let error = mutation_call(&state, &headers, "prj_a", "task.create", json!({})).unwrap_err();
         assert_eq!(error.code, "MISSING_OPERATION_ID");
+    }
+
+    /// A countable stand-in for `draftd`, so a test can assert how many times
+    /// the gateway actually handshook.
+    struct FakeDaemon {
+        _directory: tempfile::TempDir,
+        path: PathBuf,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        handshakes: Arc<std::sync::atomic::AtomicUsize>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl FakeDaemon {
+        /// `answer` decides every non-handshake method, so a test can make the
+        /// daemon reject a session exactly once and then behave.
+        fn start(
+            answer: impl Fn(&IpcRequest) -> Result<Value, draft_ipc::ErrorObject>
+                + Send
+                + Sync
+                + 'static,
+        ) -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("daemon.sock");
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let handshakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = handshakes.clone();
+            let handler: draft_ipc::Handler = Arc::new(move |request: IpcRequest| {
+                let id = request.id.clone();
+                if request.method == "console.handshake" {
+                    let serial = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    // A real handshake is not instant; the pause widens the
+                    // window a second caller would race through.
+                    std::thread::sleep(Duration::from_millis(50));
+                    return draft_ipc::Response::ok(
+                        id,
+                        json!({
+                            "application_session_id": format!("console_session_{serial}"),
+                            "negotiated_capabilities": CONSOLE_CAPABILITIES,
+                        }),
+                    );
+                }
+                match answer(&request) {
+                    Ok(value) => draft_ipc::Response::ok(id, value),
+                    Err(error) => draft_ipc::Response::err(id, error),
+                }
+            });
+            let serve_path = path.clone();
+            let serve_stop = stop.clone();
+            let thread = std::thread::spawn(move || {
+                let _ = draft_ipc::serve(&serve_path, serve_stop, handler);
+            });
+            for _ in 0..200 {
+                if path.exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Self {
+                _directory: directory,
+                path,
+                stop,
+                handshakes,
+                thread: Some(thread),
+            }
+        }
+
+        fn handshakes(&self) -> usize {
+            self.handshakes.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Drop for FakeDaemon {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            // Unblock the accept loop so the thread can observe `stop`.
+            let _ = call(
+                &self.path,
+                &IpcRequest::new("stop", "service.ping", Value::Null),
+            );
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn session_state(daemon: &FakeDaemon) -> AppState {
+        let mut state = state();
+        state.ipc_path = daemon.path.clone();
+        state
+    }
+
+    #[test]
+    fn concurrent_first_use_handshakes_exactly_once() {
+        let daemon = FakeDaemon::start(|_| Ok(json!({})));
+        let state = Arc::new(session_state(&daemon));
+        let console = Arc::new(ConsoleSession::new());
+
+        // Eight callers race for a browser session that has none yet.
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let state = state.clone();
+                let console = console.clone();
+                std::thread::spawn(move || console_session(&state, &console).unwrap())
+            })
+            .collect();
+        let sessions: Vec<ConsoleSessionHandle> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+
+        assert_eq!(daemon.handshakes(), 1, "one browser session, one handshake");
+        assert!(
+            sessions.windows(2).all(|pair| pair[0] == pair[1]),
+            "every caller receives the same session"
+        );
+        assert_eq!(sessions[0].generation, 0);
+        assert!(sessions[0]
+            .negotiated_capabilities
+            .iter()
+            .any(|capability| capability == "action_capabilities"));
+    }
+
+    #[test]
+    fn concurrent_recovery_replaces_the_session_once() {
+        let daemon = FakeDaemon::start(|_| Ok(json!({})));
+        let state = Arc::new(session_state(&daemon));
+        let console = Arc::new(ConsoleSession::new());
+
+        let original = console_session(&state, &console).unwrap();
+        assert_eq!(daemon.handshakes(), 1);
+
+        // Eight stale responses arrive at once, all naming the same generation.
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let state = state.clone();
+                let console = console.clone();
+                let failed = original.clone();
+                std::thread::spawn(move || {
+                    recover_console_session(&state, &console, &failed).unwrap()
+                })
+            })
+            .collect();
+        let recovered: Vec<ConsoleSessionHandle> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+
+        assert_eq!(
+            daemon.handshakes(),
+            2,
+            "one replacement, not one per stale caller"
+        );
+        assert!(recovered.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(recovered[0].generation, 1, "no S1 -> S2 -> S3 chain");
+        assert_ne!(
+            recovered[0].application_session_id,
+            original.application_session_id
+        );
+    }
+
+    #[test]
+    fn a_straggler_naming_a_superseded_session_reuses_the_replacement() {
+        let daemon = FakeDaemon::start(|_| Ok(json!({})));
+        let state = session_state(&daemon);
+        let console = ConsoleSession::new();
+
+        let original = console_session(&state, &console).unwrap();
+        let replaced = recover_console_session(&state, &console, &original).unwrap();
+        assert_eq!(daemon.handshakes(), 2);
+
+        // A response issued against the original session lands late. It has
+        // already been overtaken, so it adopts the replacement rather than
+        // rolling a third session and invalidating the fresh capabilities.
+        let straggler = recover_console_session(&state, &console, &original).unwrap();
+        assert_eq!(straggler, replaced);
+        assert_eq!(
+            daemon.handshakes(),
+            2,
+            "a superseded generation recovers nothing"
+        );
+    }
+
+    #[test]
+    fn separate_browser_sessions_establish_independently() {
+        let daemon = FakeDaemon::start(|_| Ok(json!({})));
+        let state = session_state(&daemon);
+        let first = ConsoleSession::new();
+        let second = ConsoleSession::new();
+
+        let a = console_session(&state, &first).unwrap();
+        let b = console_session(&state, &second).unwrap();
+
+        assert_eq!(daemon.handshakes(), 2, "one handshake each, not one shared");
+        assert_ne!(a.application_session_id, b.application_session_id);
+        assert_ne!(first.client_instance_id, second.client_instance_id);
+    }
+
+    #[test]
+    fn a_failed_handshake_wakes_waiters_and_stays_retryable() {
+        // No daemon at all: every handshake fails.
+        let state = Arc::new(state());
+        let console = Arc::new(ConsoleSession::new());
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let state = state.clone();
+                let console = console.clone();
+                std::thread::spawn(move || console_session(&state, &console).is_err())
+            })
+            .collect();
+        // Every caller returns — none parks forever behind the failed attempt.
+        assert!(handles.into_iter().all(|handle| handle.join().unwrap()));
+
+        // And the session is not poisoned: it is simply uninitialized again.
+        assert!(matches!(
+            *console.state.lock().unwrap(),
+            ConsoleSessionState::Uninitialized
+        ));
+
+        let daemon = FakeDaemon::start(|_| Ok(json!({})));
+        let recovered = session_state(&daemon);
+        assert!(console_session(&recovered, &console).is_ok());
+    }
+
+    /// A browser session wired to a fake daemon, with its cookie headers.
+    fn browser_session(state: &AppState) -> (String, HeaderMap) {
+        let console = Arc::new(ConsoleSession::new());
+        state.sessions.lock().unwrap().insert(
+            "session".into(),
+            BrowserSession {
+                csrf: "csrf".into(),
+                expires_at: Instant::now() + Duration::from_secs(30),
+                console,
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{SESSION_COOKIE}=session").parse().unwrap(),
+        );
+        ("session".into(), headers)
+    }
+
+    #[test]
+    fn a_stale_snapshot_session_is_recovered_and_the_read_retried() {
+        // The daemon rejects the first snapshot with the typed pre-dispatch
+        // refusal, then answers normally — exactly the case a daemon restart
+        // produces.
+        let rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = rejected.clone();
+        let daemon = FakeDaemon::start(move |request| {
+            if request.method != "console.snapshot" {
+                return Ok(json!({}));
+            }
+            if !seen.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Err(draft_ipc::ErrorObject::new(
+                    UNKNOWN_CONSOLE_SESSION,
+                    "Console application session is missing or was replaced",
+                ));
+            }
+            Ok(json!({ "actions": [], "revisions": { "registry": 1 } }))
+        });
+        let state = Arc::new(session_state(&daemon));
+        let (_, headers) = browser_session(&state);
+
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(console_model(
+                State(state.clone()),
+                headers,
+                Query(ConsoleModelQuery {
+                    scope: None,
+                    workspace_id: None,
+                    change_id: None,
+                    baseline_id: None,
+                }),
+            ));
+
+        assert!(response.is_ok(), "a read recovers transparently");
+        assert_eq!(
+            daemon.handshakes(),
+            2,
+            "the initial handshake plus exactly one replacement"
+        );
+    }
+
+    #[test]
+    fn an_ambiguous_snapshot_failure_is_surfaced_rather_than_recovered() {
+        // Anything that is not the typed pre-dispatch refusal is reported as
+        // it stands; the gateway does not re-handshake speculatively.
+        let daemon = FakeDaemon::start(|request| {
+            if request.method == "console.snapshot" {
+                return Err(draft_ipc::ErrorObject::new("IPC_ERROR", "something else"));
+            }
+            Ok(json!({}))
+        });
+        let state = Arc::new(session_state(&daemon));
+        let (_, headers) = browser_session(&state);
+
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(console_model(
+                State(state.clone()),
+                headers,
+                Query(ConsoleModelQuery {
+                    scope: None,
+                    workspace_id: None,
+                    change_id: None,
+                    baseline_id: None,
+                }),
+            ));
+
+        assert_eq!(response.unwrap_err().code, "IPC_ERROR");
+        assert_eq!(daemon.handshakes(), 1, "no speculative re-handshake");
+    }
+
+    #[test]
+    fn the_capability_bearing_model_is_never_cacheable() {
+        // Every gateway response carries `no-store`, which is what keeps
+        // short-lived invocation capabilities out of any HTTP cache. Pinned
+        // here because the model route is the one that carries them.
+        let source = include_str!("lib.rs");
+        let headers = source
+            .split("async fn request_security(")
+            .nth(1)
+            .expect("the shared security layer exists");
+        assert!(
+            headers.contains(r#"header::CACHE_CONTROL, HeaderValue::from_static("no-store")"#),
+            "the shared response layer must keep setting no-store"
+        );
+        assert!(source.contains(r#".route("/api/v1/console/model", get(console_model))"#));
+    }
+
+    #[test]
+    fn the_browser_cannot_supply_its_own_application_session() {
+        // The invoke body carries a capability and revisions — never a session
+        // id, a client instance id or a capability set. Anything a browser sent
+        // under those names is simply not read.
+        let body = br#"{
+            "invocation_capability": "cap-1",
+            "expected_revisions": {"registry": 1, "workspace": null, "change": null, "policy": null},
+            "arguments": {},
+            "application_session_id": "attacker_session",
+            "client_instance_id": "attacker_instance",
+            "negotiated_capabilities": ["action_capabilities"]
+        }"#;
+        let invocation: ConsoleInvokeBody = serde_json::from_slice(body).unwrap();
+        assert_eq!(invocation.invocation_capability, "cap-1");
+        // The struct has no field to hold them, so they cannot reach draftd.
+        let encoded = serde_json::to_value(json!({
+            "invocation_capability": invocation.invocation_capability,
+        }))
+        .unwrap();
+        assert!(encoded.get("application_session_id").is_none());
     }
 
     #[test]

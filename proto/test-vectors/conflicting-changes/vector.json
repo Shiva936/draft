@@ -1,0 +1,44 @@
+{
+  "expect": "two revisions touching one Resource cannot be shown separable, so composition                  fails rather than assuming they combine",
+  "name": "conflicting-changes",
+  "payload": {
+    "affected_resources": [
+      "res_000000000001"
+    ],
+    "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+    "composition_digest": "sha256:d943dd31f4069e75ad644608d1e8dd24ef57c1e088017d885e82e608fd20cd84",
+    "id": "cmp_d943dd31f406",
+    "members": [
+      {
+        "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+        "change": "chg_000000000001",
+        "revision": "rev_000000000001",
+        "touched": [
+          "res_000000000001"
+        ]
+      },
+      {
+        "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+        "change": "chg_000000000003",
+        "revision": "rev_000000000003",
+        "touched": [
+          "res_000000000001"
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "detail": "both revisions touch these Resources, and nothing explains where inside them",
+        "left": "rev_000000000001",
+        "relation": "conflicting",
+        "right": "rev_000000000003",
+        "shared_resources": [
+          "res_000000000001"
+        ]
+      }
+    ],
+    "schema_version": 1,
+    "status": "failed"
+  },
+  "payload_schema": "composition.schema.json"
+}

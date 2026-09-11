@@ -22,7 +22,8 @@ export function PanelHeader({
   subtitle,
   plain = false,
 }: {
-  title: string;
+  /** Usually a string; a node where the title is itself a link into a scope. */
+  title: React.ReactNode;
   icon?: IconName;
   count?: React.ReactNode;
   action?: React.ReactNode;

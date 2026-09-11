@@ -30,7 +30,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return decode<T>(await fetch(path, { ...init, credentials: "same-origin" }));
 }
 
-export function mutate<T>(path: string, body: unknown = {}): Promise<T> {
+export function newOperationId(): string {
+  return `op_${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+/**
+ * Send a mutation.
+ *
+ * `operationId` identifies *this attempt*, not this call. Draft records the
+ * operation under it, so a request repeated under the same id converges on
+ * what the first one concluded rather than doing the work twice — which for
+ * publication is the difference between one external effect and two. Pass a
+ * stable id when retrying something that already started; omit it for a new
+ * act, which is a fresh id by default.
+ */
+export function mutate<T>(path: string, body: unknown = {}, operationId?: string): Promise<T> {
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
     throw new TypeError("Draft request bodies must be JSON objects");
   }
@@ -39,9 +53,29 @@ export function mutate<T>(path: string, body: unknown = {}): Promise<T> {
     headers: {
       "content-type": "application/json",
       "x-draft-csrf": csrfToken,
-      "x-draft-operation-id": `op_${crypto.randomUUID().replaceAll("-", "")}`,
+      "x-draft-operation-id": operationId ?? newOperationId(),
     },
     body: JSON.stringify({ ...body, schema_version: CONTRACT_VERSIONS.mutationRequest }),
+  });
+}
+
+/**
+ * Invoke one action `draftd` issued.
+ *
+ * The browser sends back exactly what it was given — the capability, the
+ * revisions the model carried, and the arguments collected against the
+ * declared input contract. It never sends an application session id: that
+ * belongs to the gateway, which holds it for the browser session.
+ */
+export function invokeAction<T>(
+  invocationCapability: string,
+  expectedRevisions: unknown,
+  args: Record<string, unknown> = {},
+): Promise<T> {
+  return mutate<T>("/api/v1/console/actions/invoke", {
+    invocation_capability: invocationCapability,
+    expected_revisions: expectedRevisions,
+    arguments: args,
   });
 }
 

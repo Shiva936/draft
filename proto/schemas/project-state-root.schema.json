@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft ProjectStateRoot",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "resources",
+    "relations",
+    "project_state_root"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "resource_id",
+          "state"
+        ],
+        "properties": {
+          "resource_id": {
+            "type": "string",
+            "pattern": "^res_[A-Za-z0-9_-]+$"
+          },
+          "state": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
+    },
+    "project_state_root": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/project-state-root.schema.json"
+}

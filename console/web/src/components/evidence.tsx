@@ -34,7 +34,7 @@ export function EvidenceTile({
 
 export type ChecklistEntry = { id: string; label: string; status: string; detail?: string };
 
-/** Pass/fail evidence list shared by pack verification and inbox evidence. */
+/** Pass/fail evidence list shared by change verification and inbox evidence. */
 export function EvidenceChecklist({ entries }: { entries: ChecklistEntry[] }) {
   return (
     <ul className="checklist">

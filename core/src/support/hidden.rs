@@ -1,4 +1,6 @@
-//! Cross-platform hidden-directory handling for `.draft/` (PRD §9.2, TDD §8).
+//! Cross-platform hidden-directory handling for `.draft/`.
+//!
+//! See `docs/internals/storage-and-events.md`.
 //!
 //! On Unix/macOS the leading `.` already hides the directory; we additionally
 //! tighten permissions where the store holds secrets. On Windows the dot is not

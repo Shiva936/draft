@@ -17,7 +17,7 @@ draft config set user.email "ada@example.com"
 ## Capture A Baseline
 
 ```bash
-draft checkpoint "before parser cleanup"
+draft change checkpoint "before parser cleanup"
 ```
 
 A checkpoint stores a snapshot of the current workspace content. Draft uses snapshots to determine what changed later. The scanner walks the workspace directly and always excludes `.draft/`.
@@ -32,41 +32,43 @@ draft status
 
 Status compares the current workspace to the latest snapshot and reports added, modified, deleted, renamed, type-changed, and permission-changed files.
 
-## Create A Pack
+## Create A Change
 
 ```bash
-draft create "parser cleanup"
-draft list
-draft pack
+draft change new "parser cleanup" --scope src/parser.rs
+draft change list
+draft change revision seal <chg-id>
 ```
 
-A Pack is Draft’s reviewable unit. It contains a patch reference, evidence references, task links, review decisions, approvals, risk results, verification results, submit receipts, and provenance hashes.
+A Change is the unit of proposed work. Sealing observes the project's current state and records it as an immutable revision; sealing the same state twice is the same revision, so a re-run is not a second thing to review.
 
-## Verify And Review
+## Evidence, assessment, gate, decision
 
 ```bash
-draft verify -p <Pack-id-or-name>
-draft risk -p <Pack-id-or-name>
-draft review -p <Pack-id-or-name>
-draft approve -p <Pack-id-or-name> --reason "verified locally"
+draft change evidence run <rev-id>
+draft change assess <rev-id> --risk low --rationale "small, covered by tests"
+draft change gates evaluate <rev-id>
+draft change decide <rev-id> --approve
 ```
 
-Verification runs configured commands and stores stdout, stderr, exit code, and timing as evidence. Risk analysis records findings that policy can use. Approval is required before submit when the default policy is active.
+Each of those is a separate act, and the separations are the point. Evidence says what was observed. An assessment says what somebody judged it to mean. A gate says whether the required conditions hold. A Decision authorizes — and still does not accept anything.
 
-## Submit
+Every one of them binds one exact revision and never carries to another.
+
+## Promote
 
 ```bash
-draft submit -p <Pack-id-or-name>
-draft receipt list
-draft receipt show <receipt-id>
+draft promote <chg-id> <rev-id>
+draft baseline show
+draft baseline receipts
 ```
 
-Submit finalizes the approved Pack and writes a durable receipt. With the default `merge_and_dispose` mode, Draft verifies the resulting project state, advances `stable_head`, runs configured after-submit hooks, and disposes only mutable Pack staging. Immutable revisions and trust history remain. `dispose_only` delegates permanence to configured hooks and does not advance `stable_head`. A required hook failure preserves staging. If `.draft/` appears in the submit candidate, Draft aborts before hooks run.
+Promotion is the only command that changes what this project accepts. It requires an approving Decision citing a satisfied Gate over the exact revision, and it refuses — rather than rebases — a promotion decided against a Baseline the project has since moved past. It issues one signed receipt and appends the events that say what it did.
 
-## Roll Back
+## Recover
 
 ```bash
-draft rollback <chk-id|pck-id|rcp-id>
+draft recover run <chk-id|chg-id|evt-id>
 ```
 
 Rollback infers the target type from the ID prefix. Rollback never restores `.draft/`.
@@ -74,13 +76,13 @@ Rollback infers the target type from the ID prefix. Rollback never restores `.dr
 ## Inspect Events
 
 ```bash
-draft event
-draft event --raw
+draft activity list
+draft activity list --raw
 draft doctor
-draft receipt verify --all
+draft doctor receipts --all
 ```
 
-`draft event` is a readable timeline derived from the stored event stream. `draft event --raw` prints the underlying JSONL records for audit, debugging, replay, and tooling. `draft doctor` and `draft receipt verify --all` verify event, receipt, and transparency integrity.
+`draft activity list` is a readable timeline derived from the Activity Ledger. `draft activity list --raw` prints each logical record as JSON for audit, debugging, replay, and tooling. `draft doctor` and `draft doctor receipts --all` verify the Activity chain, the receipts, and the transparency chain.
 
 ## Optional Local Services
 
@@ -100,9 +102,9 @@ No. Draft has no native commit, push, pull request, merge request, publish, or h
 
 Draft stores local metadata under `.draft/`. Treat it as sensitive because it can contain file content, command output, evidence, receipts, and event history.
 
-### What Is The Difference Between `draft event` And `draft event --raw`?
+### What Is The Difference Between `draft activity list` And `draft activity list --raw`?
 
-`draft event` renders a readable timeline from stored event records. `draft event --raw` prints the underlying JSONL event envelopes. Draft stores only the raw event stream.
+`draft activity list` renders a readable timeline from the Activity Ledger. `--raw` prints each logical record as JSON. Draft stores only the framed records; the timeline is derived.
 
 ### Can I Use Draft Offline?
 
@@ -114,4 +116,4 @@ No. The CLI works without `draftd`. Service crates support optional local backgr
 
 ### What Should I Do Before Risky Work?
 
-Run `draft checkpoint "before work"` so you have a clear rollback target.
+Run `draft change checkpoint "before work"` so you have a clear rollback target.

@@ -5,61 +5,128 @@
   "required": [
     "schema_version",
     "id",
-    "base_stable_head",
-    "pack_ids",
-    "composition_hash",
-    "dependency_order",
+    "base_baseline",
+    "members",
     "status",
-    "affected_paths"
+    "relations",
+    "affected_resources",
+    "composition_digest"
   ],
   "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
     "id": {
       "type": "string",
       "pattern": "^cmp_[A-Za-z0-9_-]+$"
     },
-    "base_stable_head": {
-      "type": "string"
+    "base_baseline": {
+      "$ref": "#/$defs/baseline_id"
     },
-    "pack_ids": {
+    "members": {
       "type": "array",
       "items": {
-        "type": "string",
-        "pattern": "^pck_[A-Za-z0-9_-]+$"
-      }
-    },
-    "composition_hash": {
-      "type": "string"
-    },
-    "dependency_order": {
-      "type": "array",
-      "items": {
-        "type": "string"
+        "$ref": "#/$defs/member"
       }
     },
     "status": {
       "enum": [
-        "created",
         "verified",
         "failed"
       ]
     },
-    "affected_paths": {
+    "relations": {
       "type": "array",
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/relation"
       }
     },
-    "conflicts": {
+    "affected_resources": {
       "type": "array",
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/resource_id"
       }
     },
-    "schema_version": {
-      "type": "integer",
-      "const": 1
+    "composition_digest": {
+      "type": "string"
     }
   },
   "additionalProperties": false,
+  "$defs": {
+    "resource_id": {
+      "type": "string",
+      "pattern": "^res_[A-Za-z0-9_-]+$"
+    },
+    "revision_id": {
+      "type": "string",
+      "pattern": "^rev_[A-Za-z0-9_-]+$"
+    },
+    "member": {
+      "type": "object",
+      "required": [
+        "change",
+        "revision",
+        "base_baseline",
+        "touched"
+      ],
+      "properties": {
+        "change": {
+          "type": "string",
+          "pattern": "^chg_[A-Za-z0-9_-]+$"
+        },
+        "revision": {
+          "$ref": "#/$defs/revision_id"
+        },
+        "base_baseline": {
+          "$ref": "#/$defs/baseline_id"
+        },
+        "touched": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource_id"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "relation": {
+      "type": "object",
+      "required": [
+        "left",
+        "right",
+        "relation"
+      ],
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/revision_id"
+        },
+        "right": {
+          "$ref": "#/$defs/revision_id"
+        },
+        "relation": {
+          "enum": [
+            "independent",
+            "conflicting",
+            "indeterminate"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "shared_resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource_id"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "baseline_id": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
   "$id": "https://draft.dev/schemas/composition.schema.json"
 }

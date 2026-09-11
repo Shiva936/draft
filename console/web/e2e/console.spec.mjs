@@ -40,7 +40,15 @@ test("real canonical project navigation and keyboard workflow", async ({ page })
   await expect(page.getByRole("heading", { name: runtime.projectName })).toBeVisible();
 
   const projectNav = page.getByRole("navigation", { name: "Project navigation" });
-  for (const tab of ["Overview", "Tasks", "Editor / Files", "Events", "Packs"]) {
+  for (const tab of [
+    "Overview",
+    "Work",
+    "Resources",
+    "Baselines",
+    "Activity",
+    "Providers",
+    "Extensions",
+  ]) {
     await expect(projectNav.getByRole("link", { name: tab, exact: true })).toBeVisible();
   }
 
@@ -62,75 +70,155 @@ test("project switching moves between the registry and a project context", async
   await expect(page.getByRole("navigation", { name: "Project navigation" })).toBeVisible();
 });
 
-test("project-level navigation reaches every canonical section", async ({ page }) => {
+test("project-level navigation is the frozen §8.3 architecture", async ({ page }) => {
   const projectNav = page.getByRole("navigation", { name: "Project navigation" });
+
+  // Exactly §8.3's sections, in order. The section list is generated from the
+  // same Rust definition the daemon serves, so this asserts the browser
+  // renders what the authority offers rather than a list of its own.
+  await expect(projectNav.getByRole("link")).toHaveText([
+    "Overview",
+    "Work",
+    "Resources",
+    "Baselines",
+    "Activity",
+    "Providers",
+    "Extensions",
+  ]);
+
   for (const [tab, heading] of [
-    ["Tasks", "Tasks"],
-    ["Events", "Events"],
-    ["Packs", "Packs"],
+    ["Work", "Tasks"],
+    ["Activity", "Activity"],
+    // Baselines is the project's authoritative state; Providers is how it is
+    // attached to what observes it. Both must resolve with nothing installed,
+    // because "nothing is bound" is an answer these screens exist to give.
+    ["Baselines", "Accepted Baseline"],
+    ["Providers", "Bindings"],
+    ["Resources", "Resources"],
   ]) {
     await projectNav.getByRole("link", { name: tab, exact: true }).click();
     await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
   }
-  await projectNav.getByRole("link", { name: "Editor / Files", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Files" })).toBeVisible();
+
+  // Work nests Tasks and Changes; Resources nests Observation; Extensions
+  // nests Tools. Coverage and Tools must still resolve — they moved, they did
+  // not disappear.
+  await projectNav.getByRole("link", { name: "Work", exact: true }).click();
+  const workNav = page.getByRole("navigation", { name: "Work navigation" });
+  await expect(workNav.getByRole("link")).toHaveText(["Tasks", "Changes"]);
+  await workNav.getByRole("link", { name: "Changes", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Changes", exact: true }).first()).toBeVisible();
+
+  await projectNav.getByRole("link", { name: "Resources", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Resources navigation" })
+    .getByRole("link", { name: "Observation", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: "Coverage", exact: true }).first()).toBeVisible();
+
+  await projectNav.getByRole("link", { name: "Extensions", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Extensions navigation" })
+    .getByRole("link", { name: "Tools", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: "Tools", exact: true }).first()).toBeVisible();
+
+  await projectNav.getByRole("link", { name: "Baselines", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Baselines navigation" })
+    .getByRole("link", { name: "Publications", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: "Publication", exact: true }).first()).toBeVisible();
 });
 
-test("task, attributed tree edit, and pack workflows persist through real Draft APIs", async ({ page }) => {
+test("task, attributed tree edit, and Change workflows persist through real Draft APIs", async ({ page }) => {
   test.setTimeout(240_000);
 
-  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Tasks", exact: true }).click();
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Work", exact: true }).click();
   await page.getByRole("button", { name: "Create task" }).first().click();
   const createTask = page.getByRole("dialog", { name: "Create task" });
   await createTask.getByLabel("Task name").fill("console-e2e-task");
   await createTask.getByLabel("Task goal").fill("Prove canonical browser mutations");
-  await createTask.getByLabel("Task success criterion").fill("The persisted file and pack are visible");
+  await createTask.getByLabel("Task success criterion").fill("The persisted file and Change are visible");
   await createTask.getByRole("button", { name: "Create task", exact: true }).click();
   await expect(page.getByRole("cell", { name: /console-e2e-task/ })).toBeVisible();
 
-  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Editor / Files", exact: true }).click();
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Resources", exact: true }).click();
   await page.getByLabel("Tree edit attribution").first().selectOption({ label: "Task · console-e2e-task" });
-  await page.getByRole("button", { name: "New file", exact: true }).first().click();
-  const newFile = page.getByRole("dialog", { name: "New file" });
-  await newFile.getByLabel("Destination path").fill("console-e2e.txt");
-  await newFile.getByRole("button", { name: "Stage file", exact: true }).click();
-  await expect(page.getByText(/Session /i).first()).toBeVisible();
+  await page.getByRole("button", { name: "New resource", exact: true }).first().click();
+  const newFile = page.getByRole("dialog", { name: "New resource" });
+  await newFile.getByLabel("Destination locator").fill("console-e2e.txt");
+  await newFile.getByRole("button", { name: "Stage resource", exact: true }).click();
+  await expect(page.getByText(/Workspace /i).first()).toBeVisible();
 
-  await page.getByRole("button", { name: "Commit to context" }).click();
+  await page.getByRole("button", { name: "Commit workspace" }).click();
   await expect(page.getByRole("button", { name: "console-e2e.txt" })).toBeVisible();
 
-  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Packs", exact: true }).click();
-  await page.getByRole("button", { name: "New pack" }).click();
-  const createPack = page.getByRole("dialog", { name: "Create pack" });
-  await createPack.getByLabel("New pack name").fill("console-e2e-pack");
-  await createPack.getByRole("button", { name: "Create pack", exact: true }).click();
-  await expect(page.getByRole("button", { name: /console-e2e-pack/ })).toBeVisible();
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Baselines", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Accepted Baseline" })).toBeVisible();
 });
 
-test("pack lifecycle surfaces only the actions core reports as valid", async ({ page }) => {
-  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Packs", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Pack actions" })).toBeVisible();
+test("the Change Graph names each act separately and none of them promotes", async ({ page }) => {
+  const projectNav = page.getByRole("navigation", { name: "Project navigation" });
+  await projectNav.getByRole("link", { name: "Baselines", exact: true }).click();
 
-  // Evidence tabs are canonical and must all resolve without a client error.
-  for (const tab of ["Diff", "Verify", "Risk", "Review", "Approvals", "Submit", "Receipts", "Rollback", "Summary"]) {
-    await page.getByRole("navigation", { name: "Pack views" }).getByRole("link", { name: tab, exact: true }).click();
-    await expect(page.getByRole("navigation", { name: "Pack views" }).getByRole("link", { name: tab, exact: true })).toHaveClass(/active/);
-    await expect(page.locator(".error-state")).toHaveCount(0);
-  }
+  // The three roots are shown distinctly. Collapsing them would let "what is
+  // accepted" and "what proves it" read as one answer.
+  await expect(page.getByRole("heading", { name: "Accepted Baseline" })).toBeVisible();
+  await expect(page.getByText("Project state root")).toBeVisible();
+  await expect(page.getByText("State evidence root")).toBeVisible();
+  await expect(page.getByText("Coverage evidence root")).toBeVisible();
+
+  // Composition is immutable accepted provenance, never a current route.
+  await expect(page.getByRole("heading", { name: "Composition" })).toBeVisible();
+  // Recoverability is asked of the anchors, not inferred from files on disk.
+  await expect(page.getByText("Recoverability")).toBeVisible();
+
+  // Publication is a sibling view, not a field of a Baseline: delivering one
+  // has no authority over what the project accepts.
+  await page
+    .getByRole("navigation", { name: "Baselines navigation" })
+    .getByRole("link", { name: "Publications", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: "Publication", exact: true })).toBeVisible();
+
+  // Authorization lives with the Change it authorizes, under Work.
+  await projectNav.getByRole("link", { name: "Work", exact: true }).click();
+  await page
+    .getByRole("navigation", { name: "Work navigation" })
+    .getByRole("link", { name: "Changes", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { name: "Changes", exact: true }).first()).toBeVisible();
+
+  await expect(page.locator(".error-state")).toHaveCount(0);
 });
 
-test("destructive file actions require an explicit confirmation", async ({ page }) => {
-  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Editor / Files", exact: true }).click();
+test("providers render bindings, immutable definitions and profiles separately", async ({ page }) => {
+  await page
+    .getByRole("navigation", { name: "Project navigation" })
+    .getByRole("link", { name: "Providers", exact: true })
+    .click();
+
+  // Mutable bindings and the immutable facts they point at are separate
+  // panels, because an unbind moves one and cannot touch the others.
+  await expect(page.getByRole("heading", { name: "Bindings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Semantic definitions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Operational profiles" })).toBeVisible();
+  await expect(page.locator(".error-state")).toHaveCount(0);
+});
+
+test("destructive resource actions require an explicit confirmation", async ({ page }) => {
+  await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Resources", exact: true }).click();
   await page.getByLabel("Tree edit attribution").first().selectOption({ index: 1 });
 
-  await page.getByRole("button", { name: "File tree actions" }).click();
-  await page.getByRole("menuitem", { name: "Delete tree…" }).click();
-  const dialog = page.getByRole("dialog", { name: "Delete tree" });
-  await dialog.getByLabel("Source path").fill("console-e2e.txt");
+  await page.getByRole("button", { name: "Resource tree actions" }).click();
+  await page.getByRole("menuitem", { name: "Remove resources…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Remove resources" });
+  await dialog.getByLabel("Source locator").fill("console-e2e.txt");
 
   // Dismissing the confirmation must leave canonical state untouched.
   page.once("dialog", (confirmation) => confirmation.dismiss());
-  await dialog.getByRole("button", { name: "Stage deletion", exact: true }).click();
+  await dialog.getByRole("button", { name: "Stage removal", exact: true }).click();
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("button", { name: "console-e2e.txt" })).toBeVisible();
@@ -224,7 +312,8 @@ test("every system screen has no serious accessibility violations", async ({ pag
 
 test("project screens have no serious accessibility violations", async ({ page }) => {
   const projectNav = page.getByRole("navigation", { name: "Project navigation" });
-  for (const tab of ["Overview", "Tasks", "Events", "Packs"]) {
+  // One per §8.3 section, including the two the rewrite added.
+  for (const tab of ["Overview", "Work", "Baselines", "Providers", "Activity", "Extensions"]) {
     await projectNav.getByRole("link", { name: tab, exact: true }).click();
     await page.waitForTimeout(500);
     const results = await new AxeBuilder({ page }).analyze();
@@ -236,7 +325,7 @@ test("project screens have no serious accessibility violations", async ({ page }
 });
 
 test("daemon loss transitions the shell to its reconnectable offline state", async ({ page }) => {
-  const result = spawnSync(draft, ["service", "stop"], {
+  const result = spawnSync(draft, ["daemon", "stop"], {
     cwd: runtime.testHome,
     env: { ...process.env, HOME: runtime.testHome, DRAFT_GLOBAL_HOME: runtime.globalStore },
     encoding: "utf8",

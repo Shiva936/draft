@@ -1,12 +1,23 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, mutate, settleJob } from "../../api";
-import type { DiscoveredExtensionDto, ExtensionCatalogSourceStatusDto, ServiceJob } from "../../contracts";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { api, invokeAction, settleJob } from "../../api";
+import type {
+  CanonicalRevisions,
+  DiscoveredExtensionDto,
+  ExtensionCatalogSourceStatusDto,
+  ServiceJob,
+} from "../../contracts";
+import { ActionButton, type ActionArguments } from "../../components/actions";
+import {
+  ActionIndex,
+  projected,
+  useConsoleModel,
+  useRefreshConsoleModel,
+} from "../../lib/consoleModel";
 import { Icon } from "../../icons";
 import { Definitions, PageHeader, Panel, SearchField, Tabs, Toolbar } from "../../components/layout";
 import { StatusBadge } from "../../components/StatusBadge";
 import { DetailDrawer } from "../../components/DetailDrawer";
-import { Menu } from "../../components/Menu";
 import { JobBanner } from "../../components/JobBanner";
 import { EmptyState, InlineError, QueryState } from "../../components/states";
 import { NONE, formatDateTime, humanize, shortDigest } from "../../lib/format";
@@ -20,6 +31,7 @@ type InstalledExtension = {
     publisher: string;
     draft_api: string;
     contributions?: { id: string; kind: string }[];
+    permissions?: string[];
     documentation?: string[];
     licenses?: string[];
   };
@@ -27,6 +39,30 @@ type InstalledExtension = {
   enabled: boolean;
   installed_at: string;
   provenance?: any;
+  /** Permissions the package asks for. */
+  declared_permissions?: string[];
+  /** Permissions currently authorized for this exact installed artifact. */
+  authorized_permissions?: string[];
+  /** Present when the package is installed but some capability is withheld. */
+  pending_authorization?: {
+    extension_id: string;
+    package_version: string;
+    missing_permissions: string[];
+    superseded_by_update: boolean;
+  } | null;
+};
+
+/** The wording used wherever a permission is presented for a decision. */
+function permissionSummary(permissions: string[]): string {
+  return permissions.length === 0 ? "no additional capabilities" : permissions.join(", ");
+}
+
+/** What the Global model carries for this screen. */
+type ExtensionsContent = {
+  extensions?: {
+    installed?: InstalledExtension[];
+    sources?: ExtensionCatalogSourceStatusDto[];
+  };
 };
 
 /**
@@ -37,52 +73,58 @@ type InstalledExtension = {
  * them, and every mutation keeps its contextual confirmation.
  */
 export function Extensions() {
-  const queryClient = useQueryClient();
   const [tab, setTab] = useState("installed");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [job, setJob] = useState<ServiceJob | null>(null);
 
-  const installed = useQuery({ queryKey: ["extensions"], queryFn: () => api<InstalledExtension[]>("/api/v1/extensions") });
-  const sources = useQuery({
-    queryKey: ["extension-sources"],
-    queryFn: () => api<ExtensionCatalogSourceStatusDto[]>("/api/v1/extensions/sources"),
-  });
+  // State and the actions Draft issues arrive together, from one revision.
+  const model = useConsoleModel();
+  const refresh = useRefreshConsoleModel();
+  const content = (model.data?.content ?? {}) as ExtensionsContent;
+  const extensions = content.extensions?.installed ?? [];
+  const sourceRecords = content.extensions?.sources ?? [];
+  const revisions: CanonicalRevisions =
+    model.data?.revisions ?? { registry: 0, workspace: null, change: null, policy: null };
+  // Indexed by stable machine identity, never by label or list position.
+  const actions = useMemo(() => new ActionIndex(model.data?.actions ?? []), [model.data]);
+
+  // Discovery is a separate, ephemeral paged read. Its rows carry candidate
+  // identity only — never eligibility, which Draft re-resolves at invocation.
   const discovery = useQuery({
     queryKey: ["extension-discovery", search],
     enabled: tab === "discover",
     queryFn: () => api<DiscoveredExtensionDto[]>(`/api/v1/extensions/discover?q=${encodeURIComponent(search)}`),
   });
 
-  const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["extensions"] });
-    void queryClient.invalidateQueries({ queryKey: ["extension-sources"] });
-    void queryClient.invalidateQueries({ queryKey: ["extension-discovery"] });
-  };
-
   const action = useMutation({
-    mutationFn: async ({ path, body }: { path: string; body?: unknown }) =>
-      settleJob(await mutate<any>(path, body ?? {}), setJob),
+    mutationFn: async ({
+      capability,
+      args,
+    }: {
+      capability: string;
+      args: ActionArguments;
+    }) => settleJob(await invokeAction<any>(capability, revisions, args), setJob),
     onSuccess: () => {
       setJob(null);
+      // Never patch lifecycle locally: the next action set is Draft's to
+      // reissue, and the capabilities we held are spent.
       refresh();
+      void discovery.refetch();
     },
     onError: () => setJob(null),
   });
 
-  const confirm = (message: string, path: string, body: unknown = {}) => {
-    if (window.confirm(message)) action.mutate({ path, body });
-  };
+  const invoke = (capability: string, args: ActionArguments) =>
+    action.mutateAsync({ capability, args }).then(() => undefined);
 
-  const extensions = installed.data ?? [];
   const active = extensions.find((extension) => extension.manifest.id === selected) ?? null;
   const updates = useMemo(
     () =>
-      (discovery.data ?? []).filter((item) => {
-        const current = extensions.find((extension) => extension.manifest.id === item.target.id);
-        return current && current.manifest.version !== item.target.version;
-      }),
-    [discovery.data, extensions],
+      (discovery.data ?? []).filter((item) =>
+        Boolean(actions.get("extension.update", item.target.id)),
+      ),
+    [discovery.data, actions],
   );
 
   const filteredInstalled = extensions.filter((extension) =>
@@ -99,29 +141,21 @@ export function Extensions() {
         subtitle="Signed catalogs, declarative packages, and canonical enablement state."
         status={<StatusBadge value={extensions.length > 0 ? "healthy" : "neutral"} label={`${extensions.length} installed`} />}
         actions={
-          <Menu
-            label="Extension actions"
-            items={[
-              { label: "Refresh state", icon: "refresh", onSelect: refresh },
-              {
-                label: "Update all",
-                icon: "download",
-                disabled: extensions.length === 0 || action.isPending,
-                reason: "No extensions are installed",
-                onSelect: () =>
-                  confirm(
-                    "Update every installed catalog extension to the newest currently trusted compatible target? Prior versions will be preserved for rollback after failures.",
-                    "/api/v1/extensions/actions/update-all",
-                  ),
-              },
-            ]}
-            trigger={({ open, toggle }) => (
-              <button className="button" onClick={toggle} aria-haspopup="menu" aria-expanded={open}>
-                <Icon name="more-vertical" size={16} />
-                Actions
-              </button>
-            )}
-          />
+          <span className="button-row">
+            <button className="button" onClick={refresh}>
+              <Icon name="refresh" size={16} />
+              Refresh state
+            </button>
+            {/* Offered, and enabled, only when Draft's own update plan says so. */}
+            <ActionButton
+              action={actions.get("extension.update_all")}
+              revisions={revisions}
+              busy={action.isPending}
+              icon="download"
+              onInvoke={invoke}
+              onExpired={refresh}
+            />
+          </span>
         }
       />
 
@@ -134,7 +168,7 @@ export function Extensions() {
         onSelect={setTab}
         tabs={[
           { id: "installed", label: "Installed", count: extensions.length },
-          { id: "sources", label: "Catalog sources", count: sources.data?.length ?? 0 },
+          { id: "sources", label: "Catalog sources", count: sourceRecords.length },
           { id: "discover", label: "Discover" },
           { id: "updates", label: "Updates", count: updates.length },
         ]}
@@ -142,10 +176,13 @@ export function Extensions() {
 
       {tab === "sources" ? (
         <TrustSourcesPanel
-          sources={sources}
+          sources={sourceRecords}
+          query={projected(model, sourceRecords)}
+          actions={actions}
+          revisions={revisions}
           busy={action.isPending}
-          onAction={(path, body) => action.mutate({ path, body })}
-          onConfirm={confirm}
+          onInvoke={invoke}
+          onExpired={refresh}
         />
       ) : (
         <>
@@ -170,7 +207,7 @@ export function Extensions() {
             <Panel className="flush">
               {tab === "installed" && (
                 <QueryState
-                  query={installed}
+                  query={projected(model, extensions)}
                   skeletonRows={4}
                   empty={
                     <EmptyState
@@ -221,6 +258,8 @@ export function Extensions() {
                             </span>
                             <span className="extension-state">
                               <StatusBadge value={extension.enabled ? "enabled" : "disabled"} />
+                              {(extension.pending_authorization?.missing_permissions?.length ?? 0) >
+                                0 && <StatusBadge value="warning" label="Needs authorization" />}
                               <span>v{extension.manifest.version}</span>
                             </span>
                           </button>
@@ -257,8 +296,19 @@ export function Extensions() {
                       <div className="rows">
                         {shown.map((item) => {
                           const current = extensions.find((extension) => extension.manifest.id === item.target.id);
-                          const mode = current ? "update" : "install";
-                          const usable = item.freshness === "usable";
+                          // A row already installed uses the targeted update
+                          // action Draft issued for it; anything else uses the
+                          // one parameterized install action, prefilled from
+                          // this candidate. The prefill is input, not
+                          // eligibility — Draft re-resolves source, trust,
+                          // freshness and compatibility when it runs.
+                          const update = actions.get("extension.update", item.target.id);
+                          const install = actions.get("extension.install");
+                          const candidate: ActionArguments = {
+                            extension_id: item.target.id,
+                            source_id: item.source_id,
+                            version: item.target.version,
+                          };
                           return (
                             <div
                               className="extension-row"
@@ -278,20 +328,16 @@ export function Extensions() {
                                 </span>
                               </span>
                               <span className="extension-state">
-                                <button
+                                <ActionButton
+                                  action={update ?? install}
+                                  revisions={revisions}
+                                  busy={action.isPending}
                                   className="button primary"
-                                  disabled={!usable || action.isPending || current?.manifest.version === item.target.version}
-                                  title={usable ? undefined : "Expired or untrusted metadata cannot authorize install"}
-                                  onClick={() =>
-                                    confirm(
-                                      `${humanize(mode)} ${item.target.id} v${item.target.version} from trusted catalog ${item.catalog_id}? Artifact digest: ${item.target.sha256}`,
-                                      `/api/v1/extensions/${encodeURIComponent(item.target.id)}/${mode}`,
-                                      { source_id: item.source_id, version: item.target.version },
-                                    )
-                                  }
-                                >
-                                  {humanize(mode)}
-                                </button>
+                                  label={update ? "Update" : "Install"}
+                                  prefill={candidate}
+                                  onInvoke={invoke}
+                                  onExpired={refresh}
+                                />
                                 {current && <span>installed v{current.manifest.version}</span>}
                               </span>
                             </div>
@@ -307,18 +353,11 @@ export function Extensions() {
             {active && tab === "installed" && (
               <ExtensionDetail
                 extension={active}
+                actions={actions}
+                revisions={revisions}
                 busy={action.isPending}
-                onToggle={() =>
-                  action.mutate({
-                    path: `/api/v1/extensions/${encodeURIComponent(active.manifest.id)}/${active.enabled ? "disable" : "enable"}`,
-                  })
-                }
-                onUninstall={() =>
-                  confirm(
-                    `Uninstall ${active.manifest.id} v${active.manifest.version}? Package bytes will be preserved in recoverable storage and provenance remains in audit history.`,
-                    `/api/v1/extensions/${encodeURIComponent(active.manifest.id)}/uninstall`,
-                  )
-                }
+                onInvoke={invoke}
+              onExpired={refresh}
                 onClose={() => setSelected(null)}
               />
             )}
@@ -331,18 +370,25 @@ export function Extensions() {
 
 function ExtensionDetail({
   extension,
+  actions,
+  revisions,
   busy,
-  onToggle,
-  onUninstall,
+  onInvoke,
+  onExpired,
   onClose,
 }: {
   extension: InstalledExtension;
+  actions: ActionIndex;
+  revisions: CanonicalRevisions;
   busy: boolean;
-  onToggle: () => void;
-  onUninstall: () => void;
+  onInvoke: (capability: string, args: ActionArguments) => Promise<void> | void;
+  onExpired: () => void;
   onClose: () => void;
 }) {
   const contributions = extension.manifest.contributions ?? [];
+  const declared = extension.declared_permissions ?? extension.manifest.permissions ?? [];
+  const authorized = extension.authorized_permissions ?? [];
+  const pending = extension.pending_authorization ?? null;
   return (
     <DetailDrawer
       title={extension.manifest.name}
@@ -352,14 +398,56 @@ function ExtensionDetail({
       onClose={onClose}
       footer={
         <>
-          <button className="button" disabled={busy} onClick={onToggle}>
-            <Icon name={extension.enabled ? "pause" : "play"} size={16} />
-            {extension.enabled ? "Disable" : "Enable"}
-          </button>
-          <button className="button danger" disabled={busy} onClick={onUninstall}>
-            <Icon name="trash" size={16} />
-            Uninstall
-          </button>
+          <ActionButton
+            action={actions.get("extension.enable", extension.manifest.id)}
+            revisions={revisions}
+            busy={busy}
+            icon="play"
+            onInvoke={onInvoke}
+            onExpired={onExpired}
+          />
+          <ActionButton
+            action={actions.get("extension.disable", extension.manifest.id)}
+            revisions={revisions}
+            busy={busy}
+            icon="pause"
+            onInvoke={onInvoke}
+            onExpired={onExpired}
+          />
+          <ActionButton
+            action={actions.get("extension.authorize", extension.manifest.id)}
+            revisions={revisions}
+            busy={busy}
+            className="button primary"
+            icon="shield-check"
+            onInvoke={onInvoke}
+            onExpired={onExpired}
+          />
+          <ActionButton
+            action={actions.get("extension.revoke", extension.manifest.id)}
+            revisions={revisions}
+            busy={busy}
+            icon="key"
+            onInvoke={onInvoke}
+            onExpired={onExpired}
+          />
+          <ActionButton
+            action={actions.get("extension.update", extension.manifest.id)}
+            revisions={revisions}
+            busy={busy}
+            icon="download"
+            onInvoke={onInvoke}
+            onExpired={onExpired}
+          />
+          <ActionButton
+            action={actions.get("extension.uninstall", extension.manifest.id)}
+            revisions={revisions}
+            busy={busy}
+            className="button danger"
+            icon="trash"
+            onInvoke={onInvoke}
+            onExpired={onExpired}
+          />
         </>
       }
     >
@@ -379,6 +467,31 @@ function ExtensionDetail({
           <dt>Licenses</dt>
           <dd>{extension.manifest.licenses?.join(", ") || NONE}</dd>
         </Definitions>
+      </section>
+
+      <section className="stack tight">
+        <h3>Capabilities</h3>
+        {declared.length === 0 ? (
+          <p className="muted">
+            This package asks for no capabilities. Its contributions are data only.
+          </p>
+        ) : (
+          <>
+            <Definitions rows>
+              <dt>Requested</dt>
+              <dd className="mono">{declared.join(", ")}</dd>
+              <dt>Authorized</dt>
+              <dd className="mono">{authorized.length > 0 ? authorized.join(", ") : NONE}</dd>
+            </Definitions>
+            {pending && pending.missing_permissions.length > 0 && (
+              <p className="muted">
+                {pending.superseded_by_update
+                  ? `This build has not been authorized. A grant for an earlier version does not carry over — ${permissionSummary(pending.missing_permissions)} needs authorizing again.`
+                  : `Installed and enabled. Its declared commands stay inert until ${permissionSummary(pending.missing_permissions)} is authorized.`}
+              </p>
+            )}
+          </>
+        )}
       </section>
 
       <section className="stack tight">

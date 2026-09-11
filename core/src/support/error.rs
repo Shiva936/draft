@@ -24,17 +24,57 @@ pub enum DraftErrorKind {
     RiskPolicyBlocked,
     ReviewRequired,
     ConflictDetected,
-    SubmitFailed,
+    /// A configured hook exited non-zero, or could not be run.
+    HookFailed,
     ProjectScopeRequired,
     TaskDefinitionConflict,
     CandidateNotConfigured,
     ExecutionLimitExceeded,
-    ProtectedFileAccess,
+    ProtectedResourceAccess,
+    /// An installed, trusted artifact has no grant permitting this operation.
+    ///
+    /// Distinct from a missing capability: the knowledge is present and only the
+    /// permission is absent, so the fix is to authorize rather than to install.
+    CapabilityNotAuthorized,
+    /// Nothing installed can perform this operation at all.
+    ///
+    /// The other half of the pair above, and kept separate for the same reason
+    /// `unavailable` and `not_applicable` are: "nobody can do this" and "someone
+    /// can but you have not allowed it" have different fixes, and collapsing
+    /// them would send the reader to the wrong one.
+    CapabilityUnavailable,
+    /// Work was derived under observation semantics no longer in force.
+    ///
+    /// Not a corruption and not a conflict: the work is intact and still
+    /// readable. What is missing is a shared frame in which to compare it to the
+    /// project, so it must be re-derived before it can change anything.
+    ContextSuperseded,
+    /// An authorization was assembled from facts about a different revision.
+    ///
+    /// Deliberately distinct from [`ContextSuperseded`]. That one says the work
+    /// itself no longer has a frame; this one says the facts are intact and
+    /// simply do not describe the revision being promoted. A Decision judged
+    /// one exact revision and a Gate evaluated one exact revision, and a
+    /// promotion citing either about a different one is not authorized by it.
+    StaleRevision,
+    /// The Baseline a promotion was decided against is no longer the accepted
+    /// one.
+    ///
+    /// The work and the judgement are both intact; the project moved underneath
+    /// them. Draft refuses rather than rebasing, because an authorization given
+    /// against one Baseline says nothing about another.
+    StaleBaseline,
     EvidenceStale,
     ApprovalInvalidated,
     RegistryStale,
     LockActive,
-    SubmitReadinessBlocked,
+    /// The Gate a promotion needs is not satisfied.
+    GateUnsatisfied,
+    /// Coverage a promotion requires was never established.
+    ///
+    /// Absence has to be proved rather than assumed, so an unestablished
+    /// domain is a refusal and not an empty result.
+    CoverageIncomplete,
     DirtyWorkspace,
     UnsupportedSchema,
     CorruptData,
@@ -60,17 +100,23 @@ impl DraftErrorKind {
             DraftErrorKind::RiskPolicyBlocked => "RISK_POLICY_BLOCKED",
             DraftErrorKind::ReviewRequired => "REVIEW_REQUIRED",
             DraftErrorKind::ConflictDetected => "CONFLICT_DETECTED",
-            DraftErrorKind::SubmitFailed => "SUBMIT_FAILED",
+            DraftErrorKind::HookFailed => "HOOK_FAILED",
             DraftErrorKind::ProjectScopeRequired => "PROJECT_SCOPE_REQUIRED",
             DraftErrorKind::TaskDefinitionConflict => "TASK_DEFINITION_CONFLICT",
             DraftErrorKind::CandidateNotConfigured => "CANDIDATE_NOT_CONFIGURED",
             DraftErrorKind::ExecutionLimitExceeded => "EXECUTION_LIMIT_EXCEEDED",
-            DraftErrorKind::ProtectedFileAccess => "PROTECTED_FILE_ACCESS",
+            DraftErrorKind::ProtectedResourceAccess => "PROTECTED_RESOURCE_ACCESS",
+            DraftErrorKind::CapabilityNotAuthorized => "CAPABILITY_NOT_AUTHORIZED",
+            DraftErrorKind::CapabilityUnavailable => "CAPABILITY_UNAVAILABLE",
+            DraftErrorKind::ContextSuperseded => "CONTEXT_SUPERSEDED",
+            DraftErrorKind::StaleRevision => "STALE_REVISION",
+            DraftErrorKind::StaleBaseline => "STALE_BASELINE",
             DraftErrorKind::EvidenceStale => "EVIDENCE_STALE",
             DraftErrorKind::ApprovalInvalidated => "APPROVAL_INVALIDATED",
             DraftErrorKind::RegistryStale => "REGISTRY_STALE",
             DraftErrorKind::LockActive => "LOCK_ACTIVE",
-            DraftErrorKind::SubmitReadinessBlocked => "SUBMIT_READINESS_BLOCKED",
+            DraftErrorKind::GateUnsatisfied => "GATE_UNSATISFIED",
+            DraftErrorKind::CoverageIncomplete => "COVERAGE_INCOMPLETE",
             DraftErrorKind::DirtyWorkspace => "DIRTY_WORKSPACE",
             DraftErrorKind::UnsupportedSchema => "UNSUPPORTED_SCHEMA",
             DraftErrorKind::CorruptData => "CORRUPT_DATA",

@@ -1,19 +1,19 @@
-//! Workspace lock manager (FR-SVC-006). Thin, named wrapper over the core
-//! advisory file lock ([`draft_core::support::lock::FileGuard`]). Locks live under
+//! Workspace lock manager. A thin, named wrapper over the core
+//! advisory file lock ([`draft_core::support::process_lock::ProcessFileLock`]). Locks live under
 //! `.draft/locks/` so they coordinate across the CLI (embedded) and `draftd`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use draft_core::support::error::DraftResult;
-use draft_core::support::lock::FileGuard;
+use draft_core::support::process_lock::ProcessFileLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockType {
     WorkspaceRead,
     WorkspaceWrite,
     OperationLogAppend,
-    Submit,
+    Promotion,
     CheckpointRestore,
     VerificationRun,
 }
@@ -24,7 +24,7 @@ impl LockType {
             LockType::WorkspaceRead => "workspace-read.lock",
             LockType::WorkspaceWrite => "workspace-write.lock",
             LockType::OperationLogAppend => "operation-log.lock",
-            LockType::Submit => "submit.lock",
+            LockType::Promotion => "promotion.lock",
             LockType::CheckpointRestore => "checkpoint-restore.lock",
             LockType::VerificationRun => "verification-run.lock",
         }
@@ -45,7 +45,7 @@ impl LockManager {
 
     /// Acquire a named lock, waiting up to `timeout`. The returned guard
     /// releases the lock on drop.
-    pub fn acquire(&self, lock: LockType, timeout: Duration) -> DraftResult<FileGuard> {
-        FileGuard::acquire(&self.locks_dir.join(lock.file_name()), timeout)
+    pub fn acquire(&self, lock: LockType, timeout: Duration) -> DraftResult<ProcessFileLock> {
+        ProcessFileLock::acquire_exclusive(&self.locks_dir.join(lock.file_name()), timeout)
     }
 }

@@ -1,0 +1,36 @@
+{
+  "rules": [
+    {
+      "code": "draft.language.javascript-typescript/dependency-lockfile",
+      "weight": 4,
+      "when": {
+        "condition": "resources_matching",
+        "predicate": {
+          "predicate": "raw",
+          "of": {
+            "predicate": "path_glob",
+            "glob": "**/package-lock.json"
+          }
+        },
+        "at_least": 1
+      },
+      "explanation": "a dependency lockfile changed"
+    },
+    {
+      "code": "draft.language.javascript-typescript/dependency-lockfile-pnpm",
+      "weight": 4,
+      "when": {
+        "condition": "resources_matching",
+        "predicate": {
+          "predicate": "raw",
+          "of": {
+            "predicate": "path_glob",
+            "glob": "**/pnpm-lock.yaml"
+          }
+        },
+        "at_least": 1
+      },
+      "explanation": "a dependency lockfile changed"
+    }
+  ]
+}

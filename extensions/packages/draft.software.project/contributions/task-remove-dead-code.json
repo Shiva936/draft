@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/remove-dead-code",
+  "display_name": "Remove dead code",
+  "description": "Delete what nothing reaches.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Remove dead code"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

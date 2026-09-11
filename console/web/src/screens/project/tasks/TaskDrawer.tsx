@@ -41,7 +41,7 @@ export function TaskDrawer({
 
   const dirty = status !== (view.task.status ?? "open") || priority !== (view.task.priority ?? "normal");
   const due = daysUntil(view.task.due_at);
-  const packs = view.produced_packs ?? [];
+  const changes = view.produced_changes ?? [];
 
   return (
     <DetailDrawer
@@ -148,15 +148,15 @@ export function TaskDrawer({
         </Definitions>
       </section>
 
-      {packs.length > 0 && (
+      {changes.length > 0 && (
         <section className="stack tight">
-          <h3>Produced packs</h3>
+          <h3>Produced changes</h3>
           <div className="rows">
-            {packs.map((packId) => (
-              <Link className="row-item" key={packId} to={`../packs/${encodeURIComponent(packId)}/summary`}>
+            {changes.map((changeId) => (
+              <Link className="row-item" key={changeId} to="../graph">
                 <Icon name="layers" size={16} />
                 <div className="row-main">
-                  <strong className="mono">{packId}</strong>
+                  <strong className="mono">{changeId}</strong>
                 </div>
                 <Icon name="external-link" size={14} />
               </Link>

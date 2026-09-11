@@ -1,0 +1,16 @@
+[package]
+name = "draft-extension-conformance"
+version = "0.3.4"
+edition = "2021"
+description = "Conformance tests for the official Draft extension packages."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+draft-extension-contract = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

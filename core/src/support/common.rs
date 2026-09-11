@@ -42,6 +42,32 @@ impl From<&str> for WorkspacePath {
     }
 }
 
+/// Who a change is on behalf of.
+///
+/// A small tagged identifier and nothing else. It lives here because two layers
+/// need it and neither may depend on the other: the layer that owns resource
+/// mutation carries it in a plan, and the layer that stages edits records it on
+/// a session.
+#[derive(Debug, Clone, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EditAttribution {
+    Task { id: String },
+    Change { id: String },
+    CandidateExecution { id: String },
+    Review { id: String },
+}
+
+impl EditAttribution {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Task { id }
+            | Self::Change { id }
+            | Self::CandidateExecution { id }
+            | Self::Review { id } => id,
+        }
+    }
+}
+
 /// Declares a string-newtype identifier with the common impls Draft relies on
 /// (serde, Display, From<String>/&str, `new()`, `as_str()`, random `generate()`).
 #[macro_export]
@@ -88,9 +114,10 @@ macro_rules! id_newtype {
 }
 
 // Draft-owned stable IDs (DR-001).
-id_newtype!(
-    /// Identifies a Draft workspace.
-    WorkspaceId, "ws_");
+// The project identity is `draft_dcg_contract::ids::ProjectId`. It is not
+// redefined here: one canonical value has exactly one Rust type, and a second
+// definition could drift from the one that travels in canonical facts.
+// `project::mint_project_id` mints one — Core mints, the contract validates.
 id_newtype!(
     /// Identifies a Draft change.
     DraftChangeId, "chg_");
@@ -99,16 +126,26 @@ id_newtype!(
     /// monotonic sequence number is the file name; this is a stable handle).
     OperationId, "op_");
 id_newtype!(
-    /// Identifies a review session.
-    ReviewSessionId, "rev_");
+    /// Identifies a Change: one unit of proposed work.
+    ChangeId, "chg_");
 id_newtype!(
-    /// Identifies a Draft checkpoint.
-    CheckpointId, "chk_");
-id_newtype!(
-    /// Identifies an immutable Draft pack.
-    PackId, "pck_");
-id_newtype!(
-    /// Identifies a canonical workspace snapshot.
+    /// Identifies a stored project-state snapshot file.
+    ///
+    /// Still `chk_`, and deliberately **not** an `obs_` Observation. What this
+    /// names is the artifact the rollback machinery reads back:
+    /// `snapshots/<chk_>.json`, plus an optional handle on
+    /// `ObservationRunProvenance` that sits *beside* its `runs` rather than
+    /// standing in for them.
+    ///
+    /// The DCG acceptance path proves the distinction. It derives its own
+    /// `run_` id from what was observed and never reads this one, so a
+    /// snapshot and an observation run are two identities over the same act,
+    /// and renaming one into the other would assert an equivalence the code
+    /// contradicts.
+    ///
+    /// The real remedy is not a prefix change: returning to a prior state is
+    /// what Baseline lineage does in the DCG, and this family retires with the
+    /// checkpoint/rollback mechanism it serves.
     SnapshotId, "chk_");
 id_newtype!(
     /// Identifies an immutable rollback plan.

@@ -6,11 +6,13 @@ This is an intentional compatibility cut. Earlier authoritative data and wire fo
 
 The release establishes:
 
-- a compile-time-closed typed contract registry with independently evolvable policies and stable unversioned IPC, Console, extension, pack, archive, registry, event, receipt, operation, task, evidence, and configuration names;
+- a compile-time-closed typed contract registry with independently evolvable policies and stable unversioned IPC, Console, extension, Change, archive, registry, Activity, receipt, operation, task, evidence, and configuration names;
 - `/api/v1/...` Console routes with generated response envelopes and request/SSE versions derived from their registered contract metadata;
 - the `draft-ipc` protocol and `draftpack` archive identifiers;
-- immutable pack manifests and revisions with digest-bound lifecycle, risk, verification, review, approval, quarantine, submit, and rollback records;
-- ledger-scoped event hashing and signed receipts that cannot be transplanted between workspace or system ledgers;
+- the Draft Change Graph: Resources and Relations, Changes and sealed ChangeRevisions, Evidence, Assessments, Reviews, immutable Decisions and Gates, a journalled Promotion into an immutable Baseline, and a separately identified Publication lifecycle;
+- one Activity Ledger — framed, hash-chained, serialized by a correctness lock, with `events/events.log` the sole authoritative file, a closed v1 vocabulary where every event names an audit-fact owner and a journal mechanism, and exactly one converter and one appender;
+- receipts that attest a Promotion, a publication outcome or an authorized resolution of one, stored create-once under a preallocated `rcp_` id and verified at three levels reported separately;
+- ledger-scoped record hashing, so a record cannot be transplanted between one project's Activity and another's;
 - deterministic canonical source views whose content digests exclude workspace identity and ambient filesystem metadata;
 - one durable operation subsystem with distinct recovery, lease, and job data;
 - typed HTTPS-catalog, trusted-local-catalog, and direct-local extension provenance;
@@ -21,8 +23,6 @@ The release establishes:
 
 `draft_version: 0.3.4` is product/provenance metadata, not a workspace compatibility gate. Compatibility follows the registered contracts present. Extension `draft_api` remains a separate product SemVer constraint.
 
-Safety remains fail-closed: `.draft/` never enters a source view or artifact, corrupt authoritative bytes remain untouched, signed evidence is bound to exact immutable revisions, and derived indexes rebuild only after their authoritative inputs validate.
-
-The retired `draft identity` surface and `identity.*` profile namespace are not accepted. Retired profile files and combined actor/profile records are reported as unsupported pre-release state without consuming or migrating their values; diagnostic/recovery paths may report or safely remove that state only.
+Safety remains fail-closed: `.draft/` never enters a source view or artifact, corrupt authoritative bytes remain untouched, every immutable fact is bound create-once to the digest of its own canonical bytes and verified on load, and derived indexes rebuild only after their authoritative inputs validate.
 
 See [CHANGELOG.md](CHANGELOG.md), the [protocol index](docs/internals/protocol.md), and the [command reference](docs/reference/commands.md) for the frozen contract.

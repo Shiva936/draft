@@ -8,7 +8,8 @@ production=(
   "$root_dir/cli/src"
   "$root_dir/services"
   "$root_dir/console/src"
-  "$root_dir/tui/src"
+  "$root_dir/console/application/src"
+  "$root_dir/console/tui/src"
 )
 
 if rg -n '\bSCHEMA_VERSION\b' "${production[@]}" --glob '*.rs'; then

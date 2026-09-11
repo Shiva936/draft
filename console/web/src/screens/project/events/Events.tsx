@@ -9,19 +9,24 @@ import { EmptyState, QueryState } from "../../../components/states";
 import { humanize, relative } from "../../../lib/format";
 import { EventDetail } from "./EventDetail";
 
+/** One Activity event, exactly as `core::read_model::activity` projects it. */
 export type CanonicalEvent = {
   event_id: string;
-  type?: string;
-  event_type?: string;
-  time: string;
-  subject_id: string | null;
-  actor_id: string;
-  candidate_id: string | null;
-  previous_event_hash: string;
-  event_hash: string;
-  receipt_id: string | null;
+  /** The frozen v1 vocabulary name. */
+  kind: string;
+  subject: string | null;
+  actor: string;
+  /** Nanoseconds since the epoch. */
+  recorded_at: number;
+  previous_hash: string;
+  record_hash: string;
   metadata: Record<string, unknown>;
 };
+
+/** Activity records nanoseconds; the browser reads milliseconds. */
+export function eventTime(event: CanonicalEvent): number {
+  return Math.floor(event.recorded_at / 1_000_000);
+}
 
 const RANGES = [
   { value: "all", label: "All time" },
@@ -50,16 +55,16 @@ export function Events() {
 
   const events = query.data ?? [];
   const types = useMemo(() => [...new Set(events.map(eventType))].sort(), [events]);
-  const actors = useMemo(() => [...new Set(events.map((event) => event.actor_id).filter(Boolean))].sort(), [events]);
+  const actors = useMemo(() => [...new Set(events.map((event) => event.actor).filter(Boolean))].sort(), [events]);
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     const cutoff = RANGE_MS[range] ? Date.now() - RANGE_MS[range] : null;
     return events.filter((event) => {
       if (type !== "all" && eventType(event) !== type) return false;
-      if (actor !== "all" && event.actor_id !== actor) return false;
-      if (cutoff !== null && Date.parse(event.time) < cutoff) return false;
-      if (needle && !`${eventType(event)} ${event.subject_id ?? ""} ${event.actor_id}`.toLowerCase().includes(needle))
+      if (actor !== "all" && event.actor !== actor) return false;
+      if (cutoff !== null && eventTime(event) < cutoff) return false;
+      if (needle && !`${eventType(event)} ${event.subject ?? ""} ${event.actor}`.toLowerCase().includes(needle))
         return false;
       return true;
     });
@@ -112,7 +117,7 @@ export function Events() {
                     >
                       <Icon name={eventIcon(eventType(event))} size={16} className={eventTone(eventType(event))} />
                       <span className="timeline-body">
-                        <time>{relative(event.time)}</time>
+                        <time>{relative(eventTime(event))}</time>
                         <strong>{humanize(eventType(event))}</strong>
                       </span>
                     </button>
@@ -125,7 +130,7 @@ export function Events() {
 
         <Panel className="flush">
           <PanelHeader
-            title="Events"
+            title="Activity"
             icon="activity"
             count={filtered.length}
             action={<span className="result-count">{live ? "Live updates" : "Paused"}</span>}
@@ -168,12 +173,12 @@ export function Events() {
                       </td>
                       <td className="shrink">
                         <span className="avatar-label">
-                          <CandidateAvatar name={event.actor_id} />
-                          <span className="truncate">{event.actor_id}</span>
+                          <CandidateAvatar name={event.actor} />
+                          <span className="truncate">{event.actor}</span>
                         </span>
                       </td>
-                      <td className="shrink mono">{event.subject_id ?? <span className="empty-cell">—</span>}</td>
-                      <td className="shrink muted">{relative(event.time)}</td>
+                      <td className="shrink mono">{event.subject ?? <span className="empty-cell">—</span>}</td>
+                      <td className="shrink muted">{relative(eventTime(event))}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -189,7 +194,7 @@ export function Events() {
 }
 
 export function eventType(event: CanonicalEvent): string {
-  return event.type ?? event.event_type ?? "event";
+  return event.kind || "event";
 }
 
 function eventIcon(type: string) {
