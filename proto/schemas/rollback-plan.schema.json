@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/rollback-plan.schema.json",
+  "title": "Draft Rollback Plan",
+  "type": "object",
+  "required": [
+    "schema_version", "id", "rollback_snapshot_id", "affected_files",
+    "destructive", "warnings"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^rbp_[A-Za-z0-9_-]+$" },
+    "rollback_snapshot_id": { "type": "string", "pattern": "^chk_[A-Za-z0-9_-]+$" },
+    "affected_files": { "type": "array", "items": { "type": "string" } },
+    "destructive": { "type": "boolean" },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

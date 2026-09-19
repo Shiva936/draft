@@ -47,7 +47,13 @@ while IFS= read -r manifest; do
       fail "$manifest package '$package_name' has version '$package_version', expected '$expected'"
     fi
   fi
-done < <(git ls-files '*Cargo.toml')
+done < <(
+  find . \
+    \( -path './.git' -o -path './target' -o -path './fuzz/target' -o -path './console/web/node_modules' \) \
+    -prune -o \
+    -name Cargo.toml -type f -print \
+    | sort
+)
 
 if [ -f Cargo.lock ]; then
   while IFS='|' read -r package_name package_version; do
@@ -85,8 +91,7 @@ check_contains() {
 check_contains README.md "version-v${expected}" "README version badge"
 check_contains README.md "Draft v${expected}|v${expected}" "README release version"
 check_contains RELEASE_NOTES.md "v${expected}" "release notes version"
-check_contains docs/installation.md "Draft v${expected}|v${expected}" "installation doc version"
-check_contains docs/release-compliance.md "v${expected}" "release compliance version"
+check_contains docs/guides/installation.md "Draft v${expected}|v${expected}" "installation doc version"
 
 if [ "$failures" -ne 0 ]; then
   exit 1

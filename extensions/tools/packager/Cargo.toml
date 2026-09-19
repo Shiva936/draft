@@ -1,0 +1,17 @@
+[package]
+name = "draft-extension-packager"
+version = "0.3.4"
+edition = "2021"
+description = "Validate, package, and sign official Draft extension artifacts and catalogs."
+
+[[bin]]
+name = "draft-extension-packager"
+path = "src/main.rs"
+
+[dependencies]
+draft-extension-contract = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+base64 = "0.22"
+tar = "0.4"

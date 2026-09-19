@@ -1,14 +1,16 @@
-//! `draft service` subcommands + service-aware routing helpers.
+//! `draft daemon` subcommands + service-aware routing helpers.
 //!
 //! The daemon (`draftd`) is optional (NFR-006). Safe commands always fall back
 //! to embedded mode when it is not running (FR-CLI-003).
 
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use draft_core::error::DraftError;
-use draft_ipc::{call, is_running, socket_path, Request};
+use draft_core::support::error::DraftError;
+use draft_ipc::{
+    call, is_running, socket_path, HandshakeRequest, HandshakeResponse, Request, IPC_PROTOCOL,
+};
 
 use crate::{output, ServiceAction};
 
@@ -51,9 +53,25 @@ pub fn handle(action: ServiceAction, cwd: &Path) -> Result<(), DraftError> {
             }
             let _ = call(
                 &socket_path(),
-                &Request::new("cli", "service.shutdown", serde_json::Value::Null),
+                &mutation_request("service.shutdown", serde_json::Value::Null),
             );
             output::success("Requested draftd shutdown.");
+            Ok(())
+        }
+        ServiceAction::Restart => {
+            if daemon_running() {
+                let _ = call(
+                    &socket_path(),
+                    &mutation_request("service.shutdown", serde_json::Value::Null),
+                );
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while daemon_running() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            ensure_daemon()?;
+            register_workspace(cwd);
+            output::success("Restarted draftd.");
             Ok(())
         }
         ServiceAction::Status { json } => {
@@ -96,6 +114,83 @@ pub fn handle(action: ServiceAction, cwd: &Path) -> Result<(), DraftError> {
     }
 }
 
+/// Ensure the daemon is available for a Console session.
+pub fn ensure_daemon() -> Result<(), DraftError> {
+    if daemon_running() {
+        if daemon_console_compatible() {
+            return Ok(());
+        }
+        let _ = call(
+            &socket_path(),
+            &mutation_request("service.shutdown", serde_json::Value::Null),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while daemon_running() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if daemon_running() {
+            return Err(DraftError::new(
+                draft_core::support::error::DraftErrorKind::ServiceUnavailable,
+                "the running draftd is incompatible with Console and could not be replaced",
+            ));
+        }
+    }
+    spawn_daemon().map_err(|error| {
+        DraftError::new(
+            draft_core::support::error::DraftErrorKind::ServiceUnavailable,
+            format!("could not start draftd: {error}"),
+        )
+    })?;
+    if wait_for_daemon(Duration::from_secs(5)) && daemon_console_compatible() {
+        Ok(())
+    } else {
+        Err(DraftError::new(
+            draft_core::support::error::DraftErrorKind::ServiceUnavailable,
+            "draftd did not become ready before timeout",
+        ))
+    }
+}
+
+fn daemon_console_compatible() -> bool {
+    let request = Request::new(
+        "console-handshake",
+        "service.handshake",
+        serde_json::to_value(HandshakeRequest {
+            protocol: IPC_PROTOCOL.into(),
+            schema_version: draft_core::contracts::current_version(
+                draft_core::contracts::ContractId::IpcHandshakeRequest,
+            ),
+            requested_capabilities: vec!["console_http".into()],
+            client_name: "draft-console".into(),
+            client_version: draft_core::DRAFT_VERSION.into(),
+        })
+        .unwrap_or(serde_json::Value::Null),
+    );
+    call(&socket_path(), &request)
+        .ok()
+        .filter(|response| {
+            response.ok
+                && response.protocol == IPC_PROTOCOL
+                && draft_core::contracts::supports_version(
+                    draft_core::contracts::ContractId::IpcResponse,
+                    response.schema_version,
+                )
+        })
+        .and_then(|response| response.result)
+        .and_then(|value| serde_json::from_value::<HandshakeResponse>(value).ok())
+        .is_some_and(|handshake| {
+            handshake.protocol == IPC_PROTOCOL
+                && draft_core::contracts::supports_version(
+                    draft_core::contracts::ContractId::IpcHandshakeResponse,
+                    handshake.schema_version,
+                )
+                && handshake
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "console_http")
+        })
+}
+
 fn wait_for_daemon(timeout: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < timeout {
@@ -110,32 +205,107 @@ fn wait_for_daemon(timeout: Duration) -> bool {
 fn register_workspace(path: &Path) {
     let _ = call(
         &socket_path(),
-        &Request::new(
-            "cli",
+        &mutation_request(
             "workspace.register",
             serde_json::json!({ "path": path.display().to_string() }),
         ),
     );
 }
 
-/// Spawn `draftd --detach`, trying PATH first then a binary next to `draft`.
-fn spawn_daemon() -> std::io::Result<()> {
-    if std::process::Command::new("draftd")
+fn mutation_request(method: &str, params: serde_json::Value) -> Request {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let operation_id = format!(
+        "op_cli_{}_{}_{}",
+        std::process::id(),
+        nonce,
+        method.replace('.', "_")
+    );
+    Request::new(format!("req_{operation_id}"), method, params).with_operation_id(operation_id)
+}
+
+/// Ask the daemon to shut down and wait, bounded, until it has.
+pub fn stop_and_wait(timeout: Duration) -> Result<(), DraftError> {
+    if !daemon_running() {
+        return Ok(());
+    }
+    let _ = call(
+        &socket_path(),
+        &mutation_request("service.shutdown", serde_json::Value::Null),
+    );
+    let deadline = Instant::now() + timeout;
+    while daemon_running() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if daemon_running() {
+        return Err(DraftError::new(
+            draft_core::support::error::DraftErrorKind::ServiceUnavailable,
+            "draftd did not stop before the timeout",
+        ));
+    }
+    Ok(())
+}
+
+/// Start the daemon at exactly `draftd` and wait, bounded, until it is running
+/// and answers `service.status`.
+pub fn start_at_and_wait(draftd: &Path, timeout: Duration) -> Result<(), DraftError> {
+    std::process::Command::new(draftd)
         .arg("--detach")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .is_ok()
+        .map_err(DraftError::from)?;
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if status_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(DraftError::new(
+        draft_core::support::error::DraftErrorKind::ServiceUnavailable,
+        "draftd did not become healthy before the timeout",
+    ))
+}
+
+/// Running *and* answering `service.status` — never process existence alone.
+pub fn status_ok() -> bool {
+    daemon_running()
+        && call(
+            &socket_path(),
+            &Request::new("cli", "service.status", serde_json::Value::Null),
+        )
+        .is_ok_and(|response| response.ok)
+}
+
+/// Spawn `draftd --detach`, preferring the binary shipped next to this CLI so
+/// Console cannot accidentally pair with an older installation from PATH.
+fn spawn_daemon() -> std::io::Result<()> {
+    let sibling = std::env::current_exe()?
+        .parent()
+        .map(|d| {
+            d.join(if cfg!(windows) {
+                "draftd.exe"
+            } else {
+                "draftd"
+            })
+        })
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no sibling dir"))?;
+    if sibling.is_file()
+        && std::process::Command::new(&sibling)
+            .arg("--detach")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
     {
         return Ok(());
     }
-    // Fall back to a sibling binary (cargo target dir layout).
-    let sibling = std::env::current_exe()?
-        .parent()
-        .map(|d| d.join("draftd"))
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no sibling dir"))?;
-    std::process::Command::new(sibling)
+    std::process::Command::new("draftd")
         .arg("--detach")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

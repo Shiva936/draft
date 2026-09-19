@@ -1,0 +1,8 @@
+{
+  "class_id": "example.vector/document",
+  "display_name": "Vector document",
+  "applies_to": {
+    "predicate": "media_type",
+    "equals": "application/vector"
+  }
+}

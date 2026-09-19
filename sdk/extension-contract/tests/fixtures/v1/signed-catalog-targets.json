@@ -1,0 +1,31 @@
+{
+  "signed": {
+    "schema_version": 1,
+    "catalog_id": "vector-catalog",
+    "role": "targets",
+    "version": 7,
+    "expires_at": "2030-01-01T00:00:00Z",
+    "packages": [
+      {
+        "id": "example.vector",
+        "version": "1.2.3",
+        "publisher": "example",
+        "draft_api": "^0.3.4",
+        "artifact_path": "packages/example.vector-1.2.3.tar",
+        "length": 716,
+        "sha256": "sha256:75573270d12bba030aafca09419d33f72ece1a09315a63d6e9b67a9050c64ddf",
+        "name": "V1 Vector",
+        "description": "Frozen contract vector",
+        "keywords": ["vector", "v1"],
+        "capabilities": ["file_association"]
+      }
+    ],
+    "delegations": []
+  },
+  "signatures": [
+    {
+      "key_id": "vector-key",
+      "signature": "k7oeHP8n996519LaEYa5ygKuvNnzh19x3+w27JxWT9nmMlvrLOsHRJQrgkVxKiXBKkZQBWQrVmPGcaHWnUB3CQ=="
+    }
+  ]
+}

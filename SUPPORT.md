@@ -6,7 +6,7 @@ Draft is pre-1.0 open-source software. Support is community-oriented and best-ef
 
 - Read [README.md](README.md) for the project overview and quick start.
 - Read [docs/README.md](docs/README.md) for topic documentation.
-- Check [docs/faq.md](docs/faq.md) for common questions.
+- Check the [FAQ](docs/guides/getting-started.md#faq) for common questions.
 - Use [SECURITY.md](SECURITY.md) for suspected vulnerabilities.
 
 ## Good Issue Reports
@@ -24,4 +24,3 @@ Include:
 ## Boundaries
 
 Draft is local-first. It does not provide hosted collaboration, remote synchronization, pull requests, deployment, or native VCS operations. Hook commands may call external tools, but those commands are user-owned shell behavior.
-

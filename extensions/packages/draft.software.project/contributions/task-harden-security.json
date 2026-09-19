@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/harden-security",
+  "display_name": "Harden security",
+  "description": "Close a specific security gap.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Harden security"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

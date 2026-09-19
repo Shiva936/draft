@@ -14,7 +14,7 @@ Preferred short description:
 
 > Draft is a local-first review, verification, approval, receipts, and rollback layer for software changes.
 
-Avoid saying Draft replaces Git, code hosts, CI, deployment systems, agents, or editors. Draft is designed to sit in front of those tools as a local review boundary.
+Avoid saying Draft replaces Git, code hosts, CI, deployment systems, agents, or editors. Draft is designed to sit in front of those tools as a local change control boundary.
 
 ## Logos And Assets
 
@@ -23,4 +23,3 @@ Project assets live under `assets/`. Use them in ways that make it clear you are
 ## Tone
 
 Keep public language precise, calm, and implementation-grounded. Prefer “local,” “reviewable,” “receipt-backed,” and “auditable” over broad claims.
-

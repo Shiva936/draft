@@ -1,0 +1,48 @@
+{
+  "name": "config",
+  "payload_schema": "config.schema.json",
+  "payload": {
+    "schema_version": 1,
+    "user": {
+      "name": "Ada",
+      "email": "display contact"
+    },
+    "hooks": {
+      "verify": {
+        "kind": "entry",
+        "entry": {
+          "command": "cargo test",
+          "enabled": true,
+          "cwd": "workspace"
+        }
+      }
+    },
+    "protected": {
+      "protected_resources": [
+        {
+          "pattern": ".env",
+          "reason": "secrets"
+        }
+      ]
+    },
+    "owners": {
+      "core/**": [
+        "@core"
+      ]
+    },
+    "candidates": {
+      "codex": {
+        "kind": "agent",
+        "command": "codex {{instruction}}",
+        "can_edit": true
+      }
+    }
+  },
+  "invalid_payload": {
+    "schema_version": 1,
+    "unknown_section": {}
+  },
+  "expect": {
+    "valid": true
+  }
+}

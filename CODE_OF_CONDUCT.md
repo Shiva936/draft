@@ -23,4 +23,3 @@ Maintainers may moderate issues, discussions, pull requests, and other project s
 ## Reporting
 
 For conduct concerns, contact the maintainers through the project’s listed community or maintainer channels. If the concern is security-sensitive, use [SECURITY.md](SECURITY.md).
-

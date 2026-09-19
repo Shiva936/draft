@@ -1,0 +1,227 @@
+.empty-state,
+.error-state {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: var(--space-3);
+  min-height: 200px;
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+}
+
+.empty-state .icon,
+.error-state .icon {
+  color: var(--color-text-muted);
+}
+
+.error-state .icon {
+  color: var(--color-status-danger);
+}
+
+.empty-state strong,
+.error-state strong {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+}
+
+.empty-state p,
+.error-state p {
+  max-width: 460px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-small);
+}
+
+.empty-state.inline,
+.error-state.inline {
+  min-height: 120px;
+  padding: var(--space-6) var(--space-4);
+}
+
+.full-state {
+  min-height: 100vh;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.spinner {
+  width: 26px;
+  height: 26px;
+  border: 2.5px solid var(--color-border-default);
+  border-top-color: var(--color-accent-default);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.skeleton {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.skeleton > span {
+  display: block;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-subtle),
+    var(--color-bg-inset),
+    var(--color-bg-subtle)
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.3s linear infinite;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+}
+
+.banner > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.banner strong {
+  display: block;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+}
+
+.banner p {
+  margin-top: 2px;
+  font-size: var(--font-size-small);
+  color: var(--color-text-muted);
+}
+
+.banner.warning {
+  border-color: color-mix(in srgb, var(--color-status-warning) 36%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-status-warning) 8%, var(--color-bg-surface));
+}
+
+.banner.warning > .icon {
+  color: var(--color-status-warning);
+}
+
+.banner.running > .icon {
+  color: var(--color-status-running);
+}
+
+.inline-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  color: var(--color-status-danger);
+  font-size: var(--font-size-small);
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  text-align: center;
+}
+
+.auth-page .brand {
+  margin-bottom: var(--space-4);
+}
+
+.auth-page .brand img {
+  width: 54px;
+  height: 54px;
+}
+
+.auth-page p {
+  max-width: 520px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-small);
+}
+
+/* Modal -------------------------------------------------------------------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: var(--color-bg-overlay);
+}
+
+.modal {
+  width: min(520px, 100%);
+  max-height: calc(100vh - var(--space-12));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+
+.modal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.modal > .modal-body {
+  overflow: auto;
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.modal > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border-default);
+  background: var(--color-bg-subtle);
+}
+
+.data-view {
+  margin: 0;
+  padding: var(--space-4);
+  max-height: 620px;
+  overflow: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-default);
+  font-size: var(--font-size-small);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -2,183 +2,230 @@
 
 All notable public changes to Draft are tracked here.
 
-## v0.3.3
+## v0.3.4
 
-Draft v0.3.3 finalizes the local branchless stability model: project stability
-is defined by verified stable base states, not branches. Changepacks remain
-independent, composable, portable, signed, locally verifiable units of change —
-and are now temporary until `draft save` finalizes and disposes them.
+Draft v0.3.4 is the frozen pre-release contract cleanup. The displayed product, Cargo, npm, and CLI version remains `0.3.4`; each independently persisted or transmitted contract owns its schema policy and supports numeric `schema_version: 1` in this release.
 
-### Added
+### Breaking rename to Packs, and a pre-release compatibility cut
 
-- Top-level `proto/` protocol contract layer: 16 specs, 8 JSON schemas, and 13
-  test vectors with schema-validated positive/negative payload fixtures.
-- Stable base and `stable_head`: `draft init` creates the initial verified
-  stable base and writes `stable_head` with an `InitialStableBaseCreated`
-  receipt; `stable_head` metadata is hash-verified on every read.
-- Project-state verification gate: before `stable_head` advances, Draft
-  re-verifies the composed final state (workspace hash, `.draft/` exclusion,
-  pack evidence, previous `stable_head` integrity, and full trust-ledger
-  verification), recording `ProjectStateVerificationStarted`,
-  `ProjectStateVerified`, or `ProjectStateVerificationFailed`. Failure
-  preserves the pack and never advances `stable_head`.
-- `draft save` finalization pipeline with canonical events (`SaveStarted`,
-  `SaveHookStarted/Completed/Failed`, `StableHeadAdvanced`, `SaveFinalized`,
-  `PackDisposed`/`PackDisposalFailed`) and configurable save modes via
-  `[save].pack_disposal`: `merge_and_dispose` (default — merge into Draft's
-  stable base, advance `stable_head`, dispose) and `dispose_only` (delegate
-  permanence externally through hooks, dispose without advancing).
-- Phased save hooks: `[hooks.save].before` runs before finalization,
-  `[hooks.save].after` runs after `stable_head` advancement and before
-  disposal; hook failure fails the save and preserves pack metadata.
-- Changepack disposal with minimal stable metadata retention: successful saves
-  remove pack workspace/staging/review/verification/risk metadata; compact
-  provenance remains in `stable_head`, receipts, events, and indexes.
-- `draft close [--force]`: removes Draft metadata without touching project
-  files, refuses unsafe pending state by default, and records
-  `CloseStarted`/`CloseCompleted`/`CloseFailed`.
-- `draft gc`: maintenance under a lock — prunes disposed/orphaned pack
-  metadata and temp/cache files, rebuilds the stable-graph and affected-path
-  indexes, validates `stable_head`, and records `GcStarted`/`GcCompleted`/
-  `GcFailed`.
-- Composition validation for independent/dependent/conflicting packs:
-  hunk-aware conflict detection, topological dependency ordering with cycle
-  failure, a deterministic `composition_hash`, and `CompositionCreated`/
-  `CompositionVerified`/`CompositionFailed` events on `draft pack compose`
-  and `draft compose`.
-- Deterministic verification cache keys (`verification_key` over
-  `workspace_hash + config_hash + toolchain_hash + verification_command_hash +
-  environment_hash`) persisted in `verify.json`, plus new performance-ready
-  artifacts: a verification cache manifest, an affected-path index, and an
-  incremental workspace-hash cache.
-- Non-destructive migration from a v0.3.2 `.draft/`: `stable_head` is
-  initialized on first open, pending packs are preserved, nothing is disposed,
-  and a `MigrationCompleted` event is recorded.
-- Rollback guidance for disposed packs: `draft rollback pck_<id>` on a saved
-  and disposed pack fails clearly and points to the `rcp_<id>` receipt.
+v0.3.4 was never tag-released, so this is a clean cut rather than a migration: there is none, no alias, and no compatibility reader. Earlier `.draft/` trees and wire formats are rejected.
 
-### Changed
+- **The work object is a Pack.** `Change` (`chg_`) is now **ChangePack** (`cpk_`), a project-local governable work lineage; `ChangeRevision` (`rev_`) is now **RevisionPack** (`rpk_`), an immutable exact revision of it. The derivation seeds are unchanged; only the family prefixes moved. `draft change …` is `draft pack …`, with the same 46 command paths. Durable names say which member they own: governance facts bind `revision_pack`, owning fields are `change_pack`, cross-layer ids are `change_pack_id` / `revision_pack_id`, IPC methods are `dcg.change_pack.*` / `dcg.revision_pack.seal`, the Console scope is `CHANGE_PACK` with a tagged `ConsoleSubject`, Activity records `ChangePackCreated` … `RevisionPackSealed`, and storage reclaims `.draft/packs/` for `packs/change/` and `packs/revision/`.
+- **Content revisions and review progress are not RevisionPacks** and say so: `ChangePackContentRevisionRecord` (`content_revision_id`, initially `content_initial`) and the descriptive `ReviewProgressState` in `review-progress.json`.
+- **The portable `.draftpack` transfer surface is removed** — `draft export`, `draft import`, the archive, its contract crate, its import quarantine and its fuzz target. Cross-project Pack transfer is deferred; nothing in this release reserves a name or format for it.
+- **`draft update` and `draft uninstall`** manage the local installation: a dedicated installation root with a receipt, signed release manifests, transactional two-binary replacement, a resumable uninstall, and a `--purge` that deletes the global store only once its new `home.json` ownership marker proves it is Draft's.
 
-- Default CLI output is human-readable everywhere; machine-readable JSON is
-  emitted only with `--json`, or `--raw` where already supported.
-- After-save hooks now run after `stable_head` advancement (and still before
-  disposal), matching the finalization design; before-save hook or
-  verification failure leaves `stable_head` unchanged.
-- The v0.3.2 `riskv2`/`verifyv2` modules are renamed to `risk`/`verification`
-  (same explainable rule-first risk engine and evidence-based selection, plus
-  the new project-state verification).
-- Saved changepacks are no longer retained in `.draft/`: disposal is the final
-  step of every successful save, so `.draft/` does not grow into a duplicate
-  history store.
-- `storage doctor` no longer applies the legacy `receipt_hash` rule to
-  canonical Ed25519-signed receipts (those verify through the trust ledger).
+### The Console renders the model's architecture, not its own
 
-### Safety
+The browser and the terminal frontend used to keep their own navigation, and what they showed had drifted from what the ontology says. A single "Graph" screen held the accepted Baseline, the authorization chain and Publication at once; the daemon still served a Change scope named after retired acts — Verify, Risk, Approvals, Submit, Rollback — that nothing had offered for two releases.
 
-- `stable_head` advances only after successful project-state verification.
-- Pack disposal happens only as the final successful step; every failure path
-  (hooks, verification, receipt write, disposal) preserves recoverable state.
-- Every `.draft/` path (any nesting, case-insensitive) remains hard-excluded
-  from pack/diff/import/export/save/rollback/scan/hash operations.
-- Fail closed on any trust/path/hash/receipt/event verification failure.
+- **Project navigation is `Overview · Work (Tasks, Changes) · Resources (Resources, Observation) · Baselines (Baselines, Publications) · Activity · Providers · Extensions (Extensions, Tools)`.** The nesting is the content: Tasks and Changes are the two things a person does _to_ a project, an observation is evidence _about_ a Resource, and a tool exists only because an extension contributes it. None of those is a top-level concept, and a flat list of screens said otherwise.
+- **The architecture is defined once and generated everywhere.** `draftd` serves it from the Console application protocol, and the browser's copy is generated from that same definition. A frontend can no longer show a section the authority does not offer, or quietly lose one it does.
+- **A Change has fourteen views, one per act** — Summary, Intent, Scope, Revisions, Impact, Representations, Evidence, Assessments, Review, Decisions, Gates, Promotion, Receipts, Recovery — and every one is backed by the application API that owns the question. Intent comes from the canonical definition; Scope reports the declaration _and_ its resolution, which are different facts; Impact is the Stage 11 report; Recovery is classified by the promotion restart table and never inferred from whether a journal file happens to exist.
+- **A Baseline is its own scope**: Summary, State root, Evidence root, Coverage, Lineage, Composition, Recoverability, Receipts, Publications. The three roots stay three answers. It offers no action at all, because an accepted historical node is not editable.
+- **Providers reach the Console.** Bindings are mutable and the semantic definitions and operational profiles they point at are not, so they render as separate panels. Unbind and Rebind run the audited application operation the CLI calls — MutationJournal, AuditFact, Activity — and a provider offer depends on the binding store alone, so sealing a revision elsewhere does not invalidate it.
+- **Publication is still not Promotion.** It is a view under Baselines rather than a field of one, and a delivery that fails leaves the accepted Baseline exactly as it was.
 
-### Compatibility
+### One Activity Ledger, and one place that writes it
 
-- No `draft log`; `draft event` remains the event surface with only `--page`
-  and `--limit` (no `-p`/`-l`). Rollback still accepts `chk_`/`pck_`/`rcp_`.
-- Existing v0.3.2 workspaces migrate automatically and non-destructively.
+Draft used to keep two records of what happened: a JSON-lines event log written by whichever subsystem was closest, and a framed Activity Ledger nothing reached. Two records of one act, with no rule for which is authoritative, is worse than one.
 
-### Documentation
+- **`events/events.log` is the sole authoritative Activity file.** It is framed rather than one JSON object per line, so a crash part-way through an append is distinguishable from damage to a record that was committed: an incomplete final frame truncates safely, and a complete-but-invalid one is never truncated and never replayed over. `events/events.index` is derived and fully rebuildable. There is no `events.jsonl`, no alias, and no compatibility reader.
+- **The vocabulary is closed**, and every entry names a durable audit-fact owner and a journal mechanism. There is deliberately no `PublicationAttempted`: the durable dispatch boundary happens _before_ Draft invokes a provider, so an event named "attempted" there could outlive a crash in which nothing was sent. `PublicationDispatchCommitted` names exactly what is true at that point.
+- **Exactly one place converts a domain fact into an event and appends it.** Lower layers persist audit facts carrying a preallocated event id; they never construct a payload and never call the ledger. That is what lets the append be the drain step of a durable transaction rather than a side effect somebody remembered — and `recorded_at` comes from the fact rather than the clock, so a replayed drain produces byte-identical bytes and converges.
+- **The machine-scoped audit chain** — configuring a catalog source, trusting a root, installing a package — moved to the same framed storage under its own vocabulary, and survives every project being removed.
 
-- New docs: stability model, save modes, config, changepacks, composition,
-  events, Git workflows, Draft-only workflows, and DraftHub readiness
-  (v0.4.0 preview), alongside updated close/gc/hooks/receipts/rollback docs.
+### Receipts attest three things
 
-## v0.3.2
+A v1 receipt attests a Promotion that accepted a Baseline, a publication attempt's primary outcome, or an authorized resolution of one. Nothing else.
 
-Draft v0.3.2 turns Draft into a verified **changepack system**. Changepacks are
-not branches — they are independent, composable, portable, signed, locally
-verifiable units of change.
+- **Local acts are no longer receipted.** A checkpoint, a decision, a sealed revision are already immutable facts in their own stores; minting a signature over them too gave a reader two records of one act. `draft recover` now names the Activity event that recorded a checkpoint (`evt_`) instead of a receipt.
+- **The signed bytes are a canonical message**, framed under a frozen domain separator, covering the payload _and_ the signer binding — so a valid signature cannot be kept and re-attributed to a different signer, and a signed payload cannot be re-filed under a different receipt id.
+- **Verification reports three levels separately**: signature, trust at issuance, trust now. What cannot be determined reads `unknown`, never `valid`, because "the key could not be resolved" and "the receipt is forged" are different answers.
+- **Promotion issues its receipt for real.** The receipt id, the signer binding and every Activity event id are preallocated in the promotion journal, so replaying finalization after a crash writes the same receipt under the same id and appends the same events instead of accumulating a second set.
 
-### Added
+### The domain-neutral model
 
-- Two hidden metadata stores: global `~/.draft/` and project `<root>/.draft/`,
-  with config/policy precedence (CLI > project > global > default).
-- Ed25519-signed receipts, a hash-chained canonical event log, and a
-  tamper-evident transparency chain; `draft receipt verify <rcp_id>` / `--all`.
-- Canonical pack `manifest.json` + `pack.lock.json`, ten intents, and a
-  local/imported state model.
-- Portable `.draftpack` import/export (format `draftpack/2`) with quarantine,
-  unique-name enforcement (`--name`), `--dry-run`, and a hardened
-  untrusted-import boundary (path traversal, absolute, `.draft/`, symlink,
-  hardlink, device, invalid UTF-8, oversized, zip-bomb, wrong-schema receipts,
-  tampered content objects — all rejected fail-closed).
-- Content-embedded exports: a `.draftpack` carries the content-addressed
-  objects its patch references, so an importing workspace re-verifies the
-  actual change content and `draft save` applies it — conflict-checked
-  against each file's recorded base version, checkpointed first, and promoted
-  out of quarantine on success.
-- The full imported-pack lifecycle: `imported_quarantined → import_verified →
-  import_approved → import_saved` (or terminal `import_rejected`), driven by
-  `draft verify`, `draft approve`/`reject`, and `draft save`; origin trust
-  marks are stripped at import.
-- Enforced policy layer with field-level precedence (project > global > safe
-  default): approval-for-save, critical-risk blocking, high-risk approval,
-  workspace re-verification, local re-verification of imports, and
-  intent-based full/fuzz verification escalation; malformed policy files fail
-  closed.
-- Rollback by canonical signed receipt: `draft rollback rcp_<id>` verifies the
-  receipt and resolves rollback-eligible event types through their subject
-  (legacy rollback receipts keep working).
-- The persisted risk report now includes the ML-ready feature vector, real
-  dependency counts, and candidate rollback-rate signals.
-- `draft doctor --global` lists every protocol adapter's status; `acp-comm`
-  (Agent Communication Protocol) is explicitly experimental.
-- Explainable rule-first risk model, a basic offline LSIF symbol index, and
-  evidence-based test/fuzz selection: `draft verify <pck_id> --explain/--full/--fuzz`.
-- Pack algebra: `draft pack inspect|depends|conflicts|compose`.
-- `draft init --global`, `draft doctor [--global]`, `draft identity status`,
-  `draft config get/set [--global]`, `draft save --dry-run`,
-  `draft rollback --dry-run`.
-- AG-UI Review Cockpit (`draft cockpit`) — a local-only browser UI with CSRF
-  protection and no key exposure.
-- Real MCP/ACP/A2A adapters (`draft mcp`, `draft acp`, `draft a2a`).
-- Criterion benchmark suite, stable security-fixture tests, and nightly
-  cargo-fuzz targets for the parsers.
+Draft's frozen boundary is **human control over agent-scale changes**. This release makes the platform's own model match it: Draft manages resources, changes, evidence and approvals, and every domain-specific meaning arrives from an installed, authorized extension. Software is the first ecosystem Draft supports, not the thing it is built from.
 
-### Safety
+- **Resources replace files.** A resource is identified by an opaque `ResourceLocator{scheme, body}` that Core never parses, and carries a mandatory `state_digest`. A `file`-scheme body looks like a path because Draft's own filesystem adapter chose paths; a catalog, timeline or record-set adapter's does not, and nothing in Core treats them differently.
+- **Change identity is separate from change explanation.** A `ChangeSet` records what provably changed between two observed states, in neutral aspects — `added`, `removed`, `content_changed`, `metadata_changed`, `relocated`, `form_changed`, `attributes_changed`. How a change is _explained_ is a derived `ChangeRepresentationBundle` contributed by an extension. Installing one never alters what the transition is.
+- **Absence must be proved.** Every snapshot records which coverage domains its adapter enumerated and what it could not see. `Added` and `Removed` are derived only where coverage proves them; otherwise Draft records a `PresenceUncertain` or `AbsenceUncertain` derivation gap. A scan that failed no longer reads as a deletion.
+- **Classification is set-valued.** A resource carries every class an installed extension assigns — a Rust file is a text document _and_ a language source — and only two incompatible definitions of the _same_ class collide, scoped to that class alone.
+- **Nothing installed reports `unavailable`, not `not_applicable`.** `not_applicable` means Draft asked and nothing applied; where no capability existed to ask, the state now says so. Both are refused by the same gate, but only one tells the reader that installing something would change the answer.
+- **Missing capability is its own answer.** Verification reports one of five states (`passed`, `failed`, `unavailable`, `not_evaluated`, `not_applicable`); no checks can never mean passed, and an optional pass never masks a required gap. Risk reports `unassessed` rather than defaulting to `low`. Each needs an explicit, expiring human waiver naming it before submit proceeds.
+- **Observation and restoration are different capabilities.** Knowing a past `state_digest` proves what was there; putting it back takes a `RecoveryAnchor` captured at that time under live fencing, holding enough material to recreate the complete resource state rather than only its bytes.
 
-- Every `.draft/` path (any nesting, case-insensitive) is hard-excluded from
-  pack/diff/import/export/save/rollback/scan operations.
-- The private signing key lives only in `~/.draft/keys/signing.key` (0600).
-- Fail closed on any trust/path/hash/receipt/event verification failure.
+### Composition, impact and proof coverage are answers, not guesses
 
-### Compatibility
+Three questions a reviewer actually asks now have commands, and each is deliberately weaker than it could be.
 
-- No `draft log`; `draft event` remains the event surface with only `--page`
-  and `--limit` (no `-p`/`-l`). Rollback still accepts `chk_`/`pck_`/`rcp_`.
-- One-time, idempotent migration of an existing v0.3.1 `.draft/`.
+- **`draft change compose` / `disperse` compose sealed revisions, not Changes.** A Change is an intention that can be resealed; a revision is what was sealed. Composition holds only when every pair is independent _and_ every member came from the same Baseline. The relationship vocabulary is `independent`, `conflicting`, `indeterminate` — there is no `dependent` and no topological ordering, because what a revision was built on is its base Baseline, which `draft change depends` reports from lineage. The Pack-era dependency-hash field went with it: `ChangeLockfile.dependency_pack_hashes` is now `dependency_change_ids`, named for what it has always held.
+- **`draft change impact` reports what an authorized extractor found**, and nothing else. Directory layout, dependency edges, graph proximity and name similarity produce no elements at all. Resources nothing installed can extract from are reported as `unextractable`, because otherwise "no elements" would mean both "nothing is in there" and "nothing knows how to look".
+- **`draft change coverage` is hard to satisfy on purpose.** A Resource is covered when evidence read an observation of _that exact Resource_. Same directory, imported by, adjacent in the graph, reachable from something tested and named similarly are each rejected: every one would produce a confident `covered` for a Resource nothing has ever verified. Indirect coverage needs somebody to have said so, and each indirect source reports its own availability rather than letting "nowhere to record that" read as "nothing asserts it".
 
-## v0.3.1
+### Every sealed revision is explained
 
-Draft v0.3.1 focuses on local verified ChangePacks, review, approval, receipts, rollback, and public documentation readiness.
+`draft change revision seal` now records a `ChangeRepresentationBundle` bound to that exact revision, derived from the same observations the revision was sealed over — deriving it later would explain a workspace that has since moved. `draft change representation {list,show}` reads them.
 
-### Added
+Each touched Resource names the strategy that explains it: a contributed presentation where one claims the Resource by specificity, and otherwise the neutral rendering that always exists and no extension contributes. The neutral rendering says what Core can justify and no more — which Resource changed, between which two authoritative state digests, and a whole-Resource conflict claim, because Draft cannot say where inside a Resource the work landed. It does not diff content or interpret a domain; doing either would make Core the semantic authority for every kind of Resource.
 
-- Native `.draft/` workspace store for config, objects, snapshots, ChangePacks, events, receipts, evidence, tasks, runs, and rebuildable indexes.
-- Local ChangePack flow: checkpoint, create, verify, risk, review, approve or reject, save, receipt inspection, and rollback.
-- Append-only hash-chained event stream with human-readable and raw `draft event` output.
-- `draft event --raw` for JSONL event records and a normal human-readable timeline derived from those records.
-- Candidate and task commands for local execution profiles and task provenance.
-- Optional opaque `hooks.save` execution after Draft approval, policy, and `.draft/` safety checks.
-- Storage maintenance commands and local service crates for optional background flows.
+Representations are what let `compare`, `compose` and `conflicts` answer more finely than whole-Resource overlap.
 
-### Safety
+### Providers are managed through their own commands
 
-- `.draft/` is hard-excluded from status, snapshots, ChangePacks, save candidates, rollback plans, watcher paths, and hook candidate checks.
-- Failed saves record receipts and events.
-- Hooks are captured as command evidence but are not interpreted as native Git, host, deployment, or remote operations.
+`draft project provider {list,show,bind,redefine,profile,unbind,rebind}` is the surface for what a project is attached to. The immutable semantic definition and operational profile are supplied as canonical JSON documents deserialized _exactly_ into the frozen structures they name — the command line adds no vocabulary of its own, and an unknown field is refused rather than ignored.
 
-### Documentation
+Every binding mutation is a journalled, audited transaction, so a crash between the record moving and the Activity append is decidable rather than a guess. `unbind` deletes nothing: history stays verifiable, and only new work is refused.
 
-- Public README, user guides, command reference, safety model, release compliance, support, conduct, brand, and roadmap documentation.
+### Authority can be read and withdrawn
+
+`draft authority {list,show,revoke}` joins `grant`, and `grant` now honours `--capability` and `--to` instead of assuming publication. `draft authority executor {grant,list,revoke}` is the same machinery over `draft.change.operate/v1`: permission to carry out work here is not permission to announce anything outside.
+
+Revoking writes an immutable `AuthorityRevocation` naming the grant by exact reference and moves it out of the project's security state under the control lock. Nothing is deleted, and a receipt issued while the grant was live stays valid history — a revocation blocks new operations and never rewrites old ones.
+
+### An action descriptor is judged against the project, not against the request
+
+A Console action capability now carries the authoritative watermark it was offered against — the project control generation, the exact Change's generation, the provider-binding and publication-control folds, the evidence, gate and decision counts, and the Activity tail. Invoking it re-reads those from the stores and refuses when anything the offer depended on has moved.
+
+The check it replaces compared the descriptor with the revisions the client sent back, which proves only that the client echoed what it was given. Between the offer and the invocation the project can move, and that window is exactly where a stale action lands. A refusal now names what moved, and increments `read_model_stale_rejections`.
+
+### Every frozen operational counter is wired
+
+All 46 §2.57 counters now have a production emission boundary, and `scripts/check-telemetry-completeness.sh` fails three ways rather than two: a counter with no call site, a call site for an undeclared counter, and — now that the vocabulary is fully implemented — any frozen counter missing from the emitted set. Test-only call sites do not count, and the frozen name list is checked against §2.57 exactly, because an operator's dashboards are written against those names.
+
+### Committed protocol vectors, and a registry that notices a deletion
+
+`proto/test-vectors/registry.json` names every committed vector, and the runner fails if the registry and the directory disagree in either direction — so removing coverage is a reviewed diff rather than a silent loss.
+
+The new vectors are generated from real canonical values rather than transcribed, so a field added to a frozen type shows up as a diff. They cover the three Baseline roots, coverage cross-field validity, and the §2.46 Publication family — each carrying a `self_consistency_violation`: a payload that is schema-valid and hashes perfectly to its own outer digest, and is still rejected because its derived or cross-object fields disagree with their canonical inputs. An implementation that checked only the digest would accept every one of them.
+
+### The command surface follows the model
+
+The CLI is organised around what Draft manages rather than around the storage artifacts it happens to keep. Every command has exactly one spelling: renamed commands are **removed** at their old names rather than kept as aliases, so a script that used an old name fails loudly instead of drifting.
+
+- **`draft change ...`** is now the home for everything done to or about a Change: `new`, `list`, `show`, `select`, `inspect`, `depends`, `conflicts`, `compose`, `disperse`, `compare`, `checkpoint`, `intent {show,set,amend}`, `scope`, `impact`, `coverage`, `representation {list,show}`, `revision {seal,list,show}`, `evidence {run,list,show}`, `assess`, `review`, `decide`, `gates {evaluate,list,waive}`, `receipts`, `abandon`, `reopen`, `candidate`.
+- **Creating a Change and sealing a revision are separate verbs on separate nouns.** `draft change new` declares intent and scope; `draft change revision seal` captures the workspace as a revision of it. Sealing lives under `revision` because that is what it produces.
+- **There is no `delete`.** `draft pack -d` is gone with no replacement. Abandoning a Change retains every definition, revision, decision, receipt and event, and the Change stays listed — the record of work that was done and then decided against is frequently the part worth keeping. Both transitions are recorded as `change.abandoned` and `change.reopened`.
+- **The outcome of a decision is stated, not inferred from which command ran.** `draft change decide --approve | --reject | --request-changes` replaces `draft approve` / `draft reject`.
+- **`doctor` is read-only; `maintenance` is what changes storage.** `draft doctor gc|compact|prune|stats` are gone. `draft maintenance gc|compact|stats|index-rebuild|remove-project` performs them, `gc` never deletes canonical history, and `draft doctor storage` reports without touching anything. `draft maintenance prune` is removed from v1.
+- **Verifying a receipt is a diagnosis.** `draft doctor receipts [<rcp_>] [--all]` replaces `draft receipt verify`; reading receipts stays with the Change at `draft change receipts`.
+- Other renames: `draft event` → `draft activity {list,show,verify}`; `draft rollback` → `draft recover {plan,run}`; `draft observation` → `draft resource observation`; `draft tool` → `draft extension tool`; `draft hook` / `draft ignore` → `draft config {hook,ignore}`; `draft service` → `draft daemon`; `draft close` → `draft maintenance remove-project`; `draft pack --export` / `--import` → `draft export` / `draft import`.
+
+### Behaviour changes
+
+- **`draft recover run` now removes resources the target proves were absent**, and reports `Complete`, `Incomplete` or `Refused` with a typed cause — target state unknown, recovery material unavailable, current observation incomplete, restore verification failed, adapter recovery unavailable, or context incompatible. `Complete` requires a full post-restore re-observation whose every locator and state digest equals the target's: applying the changes successfully is not completion. The CLI reports planned removals before applying them.
+- **Composition is decided by evidence, not by path overlap.** Two sealed revisions that leave one Resource in the _same_ state now agree rather than conflict. Two that leave it in different states conflict. Two edits to different regions of one Resource compose only when an installed comparison capability can show the regions are separable; without one, Draft says it cannot establish separability and fails closed. `Indeterminate` is reported as itself, distinct from `Conflicting`.
+- **`draft init` records what it observed.** The initial Baseline's snapshot is a real observation of the project as it stands, so a first Change in a non-empty directory derives real changes instead of coverage gaps.
+- **Project-configured risk rules are evaluated.** A rule written in `risk.toml` now runs through exactly the same path as a contributed one; previously only contributed rules supplied their predicates. Expressing a domain judgement never requires publishing a package.
+- **Every fact a risk rule may test is actually supplied.** A rule naming a contributed change metric, a declared intent or a candidate's rollback history now fires; previously all three reached the evaluator empty, so those conditions could never match. The canonical pack manifest also records the pack's declared intent and the candidate that produced it rather than a fixed placeholder.
+- **Protections, view rules, thresholds, budgets and verification escalations contributed by an installed `control_policy` are enforced.** They were collected and then never read. Core now ships exactly one protection — `.draft/**`, structurally, ahead of any rule list — and `.env`, `*.pem`, `*.key`, `id_rsa`, `*.p12`, `*.pfx`, `.aws/credentials`, `.npmrc` and `.pypirc` are protected by `draft.filesystem.policy` and `draft.software.project` instead of by Core. A refusal names the source that asked for it, and a protection written for `file`-scheme locators never captures another scheme.
+- **The canonical workspace view and the authoritative snapshot apply the same contributed exclusions**, so a resource a view rule removed can never look like a reason to re-verify.
+- **A pack's intent is a namespaced id from a contributed vocabulary**, not one of ten Core-defined constants. `draft change new --intent` resolves it against what is installed and names what is available when it cannot; `draft change intent show` lists them. Draft owns only `draft.core/unspecified`. Verification escalation follows: the package that declares an intent declares what accepting it requires, and contributed escalations only ever add.
+- **Task decomposition follows a contributed template's steps.** With no template installed there is nothing to decompose into, and the view reports an empty set rather than inventing child tasks.
+- **Task templates are contributed.** Core's ten built-in software templates are gone; `--template` resolves against installed `task_template` contributions, and `draft task templates` lists them. A template step scoped by a predicate a task zone cannot express is refused rather than silently unscoped.
+- **Observation provenance is persisted and readable.** `draft resource observation show|coverage|provenance` reports the semantics in force, what one observation covered and could not see, and which implementation actually performed it. The store is an append-only multimap keyed by the observed state's digest: the same state observed again is a _different_ historical observation and gets its own immutable record, so a receipt that relied on the first keeps pointing at the first. Draft's own observer is recorded as a Core component and revision, never as a fabricated producer, attestation or grant.
+- **A declared command's arguments are interpolated, strictly.** `{{request}}`, `{{input_dir}}`, `{{output_dir}}` and `{{metadata_dir}}` resolve to paths in the operation's own runtime scope; a placeholder Draft does not bind is an error rather than a literal `{{name}}` handed to the process. The three agent packages previously wrote `{{prompt}}`, which nothing bound.
+- **Tool actions can be run.** `draft extension tool` lists what installed extensions offer and runs one. A tool returns findings and proposed mutations only — its response has nowhere to put an operation id, an actor, a precondition or a plan — and Draft authors the operation that applies them, under its own attribution and through the same protections, path safety and workspace lease as a human edit. A proposal Draft refuses stops the whole operation, and an action proposing a mutation its declared effect does not permit is refused rather than downgraded to its findings.
+- **Presentation is resolved by specificity**, with `draft change representation list` reporting whether a resource is claimed, tied between publishers, or falls back to the neutral rendering that always exists and no extension contributes.
+- **Contributed identifiers are checked for namespace ownership**, at packaging time alongside payload decoding and validation, and again when contributions are resolved. A package minting an id outside its own namespace, or carrying an invalid contribution, now fails to package instead of installing cleanly and silently contributing nothing. A consequence worth stating plainly: a class id has exactly one publisher, so two publishers can no longer dispute one — the remaining collision case is a package that declares the same id twice and means different things by it, and that stays scoped to the disputed id.
+- **`draft index rebuild` really rebuilds.** The derived SQLite index recorded snapshots by manifest hash and file count; it now records the snapshot digest and resource count, matching the model everything else uses. A rebuild also drops and recreates its derived tables when the recorded index revision is not the one the build writes, so a stale table shape can no longer survive a rebuild and fail on the first insert. Authoritative state is never touched — the index is re-derived from it.
+- **Observation semantics are pinned, and change only when somebody adopts them.** Every observation is taken under the context the project _adopted_, not under whatever is installed at that instant. Installing, updating, disabling or removing anything whose effective adapter or view-rule semantics differ records a pending candidate and changes nothing; `draft resource observation pending|preview|adopt|transitions` reports it, shows what adopting would do without doing any of it, and installs a new baseline atomically under the project lease. A package update with identical observation semantics is the fast path: no candidate, no rebaseline, no supersession — only a new provenance record naming the new build. Work derived under retired semantics becomes `context_superseded`: readable, but requiring re-derivation before it can change or be submitted.
+- **Acceptance is its own layer.** `AcceptanceContext` is built from policy alone — there is no parameter through which a change set or candidate could reach it — so tightening a policy invalidates a readiness _answer_ and never supersedes work, manufactures a change, or moves a `ChangeSet` digest. Each requirement carries its own digest, so re-evaluating reuses human decisions whose requirement still reads the same and asks only for what actually changed. `AcceptanceContextProvenance` records which Core and extension policy artifacts a context was assembled from, kept out of the context digest so identical policy from two package revisions keeps one set of requirements and two histories.
+- **The `ResourceSource` port is the only way into project state.** Draft's own filesystem observer is Core code reached through exactly the same trait a contributed adapter implements — enumerate, describe, bounded content and materialization, Draft-authored mutation, fenced anchor capture and restore. A contributed `resource_adapter` for any non-`file` scheme runs through the production command adapter, with Core computing every state digest from the adapter's declared state, scoping every coverage domain to the adapter's binding, applying contributed view rules itself, and crossing `operation::process::run` with the producer's attestation and the authorization decision that permitted it. An unauthorized adapter cannot observe.
+- **The adapter protocol names a resource's generation `generation`, not `observation_token`.** Command output is redacted before Draft parses it, and that redactor treats any key containing "token" as a credential — correctly, since it cannot tell which ones are. A field named `observation_token` was replaced with `[REDACTED]`, so every command-backed adapter response arrived as malformed JSON. The redactor is right and unchanged; the field name was wrong, and `generation` is the more honest name for what it holds.
+- **Asking what observation context is in force answers with the adopted one.** `draft resource observation show` and every caller behind it read the persisted active context. They previously recomputed it from whatever contributions were installed at that instant, which is the effective context — a different question, and the difference between the two is exactly what a pending context is for. A project that had adopted one set of semantics could be told it was observing under another.
+- **The acceptance context's tolerances are actually consulted.** `allow_incomplete_observation`, `allow_derivation_gaps` and `require_full_recovery` were hashed into the context digest and then never read, so the context could commit to "this project tolerates incomplete observation" while the evaluator required completeness anyway — and full recovery was required despite the policy saying it was not. The evaluator now reads them. Where a tolerance applies the requirement is satisfied, still listed, and its detail still records exactly what could not be established: tolerating uncertainty is not the same as not having any.
+- **Review and approval cannot be waived.** A waiver is itself a human judgement, so accepting one in place of a review or an approval would mean somebody signing off on not having to sign off. Protections remain unwaivable for the older reason: they exist to be what nobody can wave through in a hurry. The evaluator and the waiver policy the acceptance context commits to now read this from one place, so a stored context can no longer claim a requirement is waivable that the evaluator would refuse.
+- **Console action capabilities are measured against an injectable clock.** Production behaviour is unchanged — the 30-second lifetime still applies — but issuing and consuming now read the same clock, so a test can prove what a capability _means_ without racing the machine.
+- **Change-set integrity is checked by canonical identity.** Reformatting a stored change set is no longer reported as tampering, while editing its contents — even with the stored digest left alone — now is.
+- **`PROTECTED_FILE_ACCESS` is `PROTECTED_RESOURCE_ACCESS`**, and the project config key `[protected].protected_files` is `protected_resources`. A protection applies to a resource identified by an opaque locator; only the `file` scheme's bodies are paths, and the old names asserted otherwise on every other scheme. The HTTP projection is unchanged: the code still maps to `403`.
+- Candidate limits are expressed in resources and bytes (`max_resources_changed`, `max_output_bytes_changed`) rather than lines; `can_run_tests` is `can_verify` and `supports_patch_output` is `proposes_mutations`. `block_if_tests_fail` is `block_on_failed_verification`, and `repository_path` is `project_path`.
+- Excluding another tool's control directory (`.git`, `.hg`, `.svn`), build output and installed dependencies is now a **view rule** contributed by `draft.software.project`, adopted through an audited observation change. Draft's own `.draft/**` remains excluded structurally, by Core, and no contribution can widen or narrow it.
+
+---
+
+The sections below record earlier v0.3.4 development, before the Draft Change Graph rewrite above superseded it. They are kept because the work was real and some of it still stands, but where they say **pack** they mean what is now a Change and its sealed revisions, and where they describe a Pack-era surface the rewrite has replaced it. Read them as history of this release, not as a description of what Draft does now.
+
+### Commands and surfaces
+
+- `draft change inspect` reports the change-set, base and result snapshot digests, the observation context, the count of resources changed, derivation gaps **in their own field**, the five-state verification result, and the classification and representation digests as diagnostics.
+- `draft change evidence run` reports every selected check with its outcome, the artifact that contributed it, and the decision that permitted it — trust and authorization shown as the separate facts they are.
+- `draft change depends` reports shared **elements** through the impact index; `--diff-stable` is `--compare-stable`; dry runs report affected **resources**.
+- IPC: `editor.*` became `resource.*`, `pack.diff` became `pack.changes`, and `classification.bundle` was added. The Console gateway serves `/resources`, `/resource` and `/classification`; the pack view `diff` is `changes`. Project navigation reads **Resources**, and the pack tab reads **Changes**.
+- The Console renders every class a resource carries and says plainly when publishers disagree. It also names the presentation Draft resolved for the open resource, reporting a tie between publishers as ambiguous rather than settling it by rendering one, and falling back to the neutral presentation where nothing binds.
+- **Syntax highlighting follows the resolved presentation binding.** A `text_editor` presentation names a grammar in its config and the Console loads the matching asset, so the two vocabularies stay on their own sides: an extension says which grammar its resources want, and the Console owns what a grammar _is_. The Console no longer holds a table mapping contributed class ids to grammars, and adding a grammar is additive Console work that changes no domain model. There is still no filename fallback: an unhighlighted resource is correct where a wrongly highlighted one is not.
+- **New Console surfaces: Observation and Tools.** Observation shows coverage — every domain named by the `(adapter binding, local id)` pair it actually is, with incomplete domains explained in the adapter's own words and never described as folders — alongside the observation history, which lists every historical record for the observed state, shows what each run attempted separately from what it committed, and distinguishes Draft's own Core observer from an extension observer with a producer, attestation and authorization. Tools lists contributed actions with what each matches and whether its artifact is authorized, and separates previewing a tool's proposals from applying them.
+- The gateway serves `/tools`, `/presentation`, `/observation-coverage`, `/observation-provenance`, `/intents` and `/task-templates`; `tool-invoke` joins the project action surface.
+
+### Official packages
+
+Fifteen first-party packages, all declarative data with no executable code:
+
+- **`draft.text.document`** — the package that makes line-level review possible. Configures Draft's own `sequence_alignment` engine to split on `0x0A` and emit regions in the `draft.text.document/line` coordinate space.
+- **`draft.software.project`** — view rules, CI/container/breadth risk rules, an intent vocabulary and ten task templates.
+- **`draft.software.security-policy`** — application-domain security risk rules, separate so a project can take one without the other.
+- **`draft.filesystem.policy`** — protections for credential-shaped resources.
+- **`draft.agent.codex`**, **`draft.agent.claude`**, **`draft.agent.cursor`** — one artifact each, with separate signature, attestation, authorization and update lineage. Their tool actions return **proposed mutations only**; Draft authors the operation id, attribution, preconditions and plan.
+- **Nine `draft.language.*` packages** — classification, verification checks, risk rules and presentation bindings.
+
+### Platform and extension boundary
+
+- Draft Core is domain-neutral. Classification, comparison, element extraction, verification checks, presentation and risk rules are all contributed by extensions rather than built in. Core keeps the change-control semantics — tasks, packs, evidence, verification, risk, review, provenance, recovery and receipts — and ships no domain rules of its own, not even a default risk rule.
+- `draft-extension-contract` now lives at `sdk/extension-contract/` as the portable public boundary holding manifest and contribution vocabulary, package and catalog rules, canonical JSON, digests, compatibility metadata and Ed25519 verification. Its finalized pre-release package and crate identity replaces the earlier provisional naming; format revision 1 and all wire behavior remain unchanged and are frozen by packaged compatibility vectors.
+- `services/adapters` is now `services/extension-service`, which owns sources, catalog trust, discovery, acquisition, validation, installation, installed state and authorization. Extension semantics moved to Draft Core.
+- `/extensions/` holds the first-party packages, their packaging tool and standalone conformance tests as a separate workspace. Draft builds and passes its tests with the directory deleted, and the packages build, sign and verify with no Draft platform present.
+- Trusting a source, installing a package, authorizing a capability and running a declared command are four separate decisions. A capability grant binds to one exact artifact — id, source, publisher, version and content digest — so every update requires reauthorization, including one requesting identical permissions. Superseded grants are retained for audit, and trusted provenance never implies a permission.
+- Extensions may declare structured commands as `program` plus arguments. Draft runs them itself, directly and never through a shell, with a cleared environment, a workspace-confined working directory, an enforced time limit and redacted bounded output. Unauthorized commands are removed before Draft's domain logic sees them.
+- Catalog sources gained enabled/disabled state, `show`, and refresh-all. Removing a source stops discovery and updates from it and never uninstalls anything. Discovery searches signed id, name, description, keywords and capabilities, reads verified cache so it works offline, and refuses to resolve an ambiguous id across sources. Updates follow the source recorded at install.
+- New commands: `draft extension authorize`, `draft extension revoke`, `draft extension source show|enable|disable|delete`, plus `--grant` on install and update, `--local`/`--https`/`--root`/`--root-sha256` on `source add`, and `--source`/`--capability`/`--page`/`--limit`/`--refresh` on search. No command, flag, route or workflow was removed.
+- Draft ships no extension packages and installs none on first run. A build may carry an official source's URL and pinned root fingerprint; without both, no official source exists and Draft is fully functional. The key `draft-official` conveys no trust on its own.
+- Contributed rules resolve deterministically. Every applicable contribution is collected and coalesced by meaning: extensions that agree resolve to one answer carrying all of them, and extensions that disagree produce an explicit ambiguity that Draft reports rather than settling. Nothing is selected by the order packages happened to be read, and candidates are ordered by extension id for reproducible diagnostics only. What composition means is defined per contribution kind: classification is a keyed union, comparison resolves uniquely, verification composes through the five-state lattice, presentation is selected by specificity, and risk aggregates.
+- Classification is contributed, authoritative and set-valued. A resource carries every class an installed extension assigns it, and the list reaches the Console through `draftd` as a list. Only two incompatible definitions of the same class collide, and that collision is scoped to that class. Available over IPC as `classification.bundle`.
+- A package declaring a contribution this Draft build has no subsystem for is refused at install, naming the contribution and the kind. It is not installed, not enabled and not reported healthy. The portable format still accepts the whole published vocabulary, so an author may target a newer Draft; whether _this_ build can consume it is a separate, explicit decision.
+
+### Behaviour changes
+
+- A fresh installation no longer infers `cargo test`, `pytest`, `npm test` or `go test`. `draft change evidence run` still runs, still honours the project's `verify.toml`, still writes evidence and still returns the same exit codes; with no capability installed it reports `unavailable` and names the resources no installed extension could check. Installing and authorizing the matching language extension restores the previous commands exactly.
+- Element extraction — and the cross-pack element-level conflict detection built on it — is unavailable until the relevant extension is installed. Resource-state, policy, verification and dependency conflict detection are unaffected.
+- Ecosystem lockfile, CI and container risk rules moved out of Core defaults into `draft.language.*` and `draft.software.project`. A project's persisted `risk.toml` is unaffected.
+- The structured verification-command representation changes the verification cache key once. The cache is rebuildable by design.
+- Console actions carry a typed input contract. An action declares its inputs — text, select with server-supplied options, boolean, confirmation — each with a stable machine id separate from its label, and `draftd` validates every submitted argument against that contract: undeclared keys, missing required values, wrong types and select values outside the server's own set are all refused. Frontend checks are a convenience, never the decision. An invocation capability is bound to the action, its target entity, the authoritative revision and a digest of the declared inputs, so a client holding a stale option set cannot act on it.
+- Extension management is reachable from the Console TUI as well as the CLI and the browser. Install, update, enable, disable, authorize, revoke and the catalog-source operations are offered as authoritative actions on the global scope, targeted at the extension or source they act on. Eligibility is computed by `draftd` — authorize appears only while something is awaiting authorization, revoke only while a grant binds — and every action runs through the same `extension.*` operations the other clients already use. No route, command or flow was removed to achieve this.
+- A capability the user can resolve is reported with the remedy `draftd` chose for it, referring to a currently issued and currently eligible action. Frontends render that link; they never work out from a capability kind or a label which action would help.
+- The Console no longer carries its own language table. A resource's classes come from the authoritative read model, and the browser's syntax-highlighting registry selects a rendering asset by contributed class, degrading to plain text for a class it has no grammar for. There is no filename fallback: with nothing installed a resource renders as plain text, which is correct.
+- The browser Console now speaks the same Console application protocol the terminal does. `GET /api/v1/console/model` returns the authoritative read model — state and the actions `draftd` currently issues, from one revision — and `POST /api/v1/console/actions/invoke` runs one of them. Both are additions; every existing extension route keeps its exact path, payload and status codes as a compatibility adapter over the same `extension.*` operations.
+- The Extensions screen no longer decides anything. Install, update, enable, disable, authorize, revoke and the catalog-source operations are rendered from server-issued actions looked up by stable action id and target id, and a control exists only because Draft issued it and is enabled only because Draft enabled it. The rules the browser used to apply — that an enabled extension shows Disable, that a pending authorization means Authorize, that an untrusted source cannot refresh, that a built-in source cannot be removed — now live in `draftd`, which is where they were always decided for the CLI.
+- Update All is offered from the same authoritative update plan the operation executes, and that plan is a local read: deriving the Console model never refreshes a catalog, contacts a source or downloads a package. Its outcomes keep "nothing newer to do" and "cannot determine until a source is refreshed" as separate answers rather than one blocked bucket.
+- The gateway owns the Console application session for a browser session, establishes it once under a per-session singleflight, and replaces it at most once per generation so concurrent stale responses cannot roll a chain of sessions and invalidate each other's capabilities. A session Draft no longer knows is reported as `UNKNOWN_CONSOLE_SESSION` before anything dispatches, which is what makes recovering a read safe and replaying a mutation unnecessary.
+- Invocation capabilities are short-lived and stay that way: they are never persisted in browser storage, the model that carries them is never cached, and a capability the browser can see has expired triggers a refresh instead of being spent. The browser clock is an optimization only — `draftd` decides what a capability is still worth.
+
+### Canonical contracts
+
+- Contract membership is a compile-time-closed `ContractId` enum. Every production Rust type maps statically through `VersionedContract`, each entry owns independent current/supported policy, and arbitrary runtime registration or string-selected dispatch is forbidden.
+- Every Draft-owned schema, filename, identifier, module, protocol, and API is stable and unversioned. IPC uses `protocol: "draft-ipc"`; Console HTTP intentionally uses `/api/v1/...`; Draftpack uses the format identifier `draftpack`.
+- IPC, Console JSON bodies and responses, SSE data payloads, extensions, registries, operations, events, receipts, packs, revisions, lifecycle, quarantine, evidence, and archives require numeric `schema_version: 1`.
+- Missing or malformed schema markers fail validation on wire input and report corruption for authoritative persisted state. Other numeric schema versions report an unsupported-schema error.
+- Rust transport types own the generated IPC and Console JSON Schema and TypeScript contracts; drift checks compare generated temporary output with committed assets.
+- Persisted and wire artifacts remain self-describing; registry metadata validates their declared version and never reinterprets existing bytes. Container-owned internal rows inherit that container version, while independently signed, hashed, copied, persisted, transmitted, or decoded members are separate contracts.
+- `draft_version` is product/provenance metadata, not a compatibility gate. Extension `draft_api` remains a separate constraint against product API SemVer.
+
+### Canonical domain state
+
+- Immutable pack manifests are digest-bound to every immutable pack revision. Lifecycle, quarantine, verification, risk, review, decisions, rollback, and signed receipts remain separate records bound to exact revision digests.
+- Draftpack archives embed content objects and authenticate the complete member set. Import validates the header, artifact digest, manifest, revision, lifecycle, provenance, evidence, and content objects before quarantine.
+- Project and system event ledgers share one ledger-scoped, domain-separated hash chain. Signed receipts link to exact events and cannot be transplanted between workspace or system ledger identities.
+- Canonical source digests depend only on normalized, ordered source entries and explicit semantic metadata. Workspace identity and ambient filesystem data do not influence the content digest.
+- Durable operations, recovery details, fenced leases, and asynchronous jobs use one operation subsystem while retaining their distinct responsibilities.
+- Extension provenance distinguishes verified HTTPS catalogs, explicitly trusted local catalogs, and direct user-authorized local packages.
+- `user.name` and optional `user.email` are canonical project/global display/contact configuration. Project overrides global, missing name resolves to non-persisted `unknown`, empty values are rejected, and profile values never affect security identity, keys, trust, authorization, attribution, receipts, hashes, digests, or ownership.
+
+### Architecture and safety
+
+- `draft-core` is organized into `app`, `contracts`, `support`, `workspace`, `task`, `pack`, `review`, `trust`, `operation`, and `read_model` namespaces. Architecture checks enforce dependency direction, storage ownership, and the absence of UI styling and persisted models under orchestration modules.
+- Browser Console ownership moved to `console/` (`console/web/` and `console/dist/`). It owns HTTP/browser transport, session security, DTOs, embedded assets, and presentation only; canonical domain behavior remains in `draftd`, services, and core. Intentional external AG-UI adapter support is unchanged.
+- Terminal Console ownership moved from the legacy root `tui/` crate to `console/tui/`, behind the typed `console/application/` client and separately versioned post-transport Console handshake. The CLI now requires `draft console web` or `draft console tui`; command-level `--tui` flags are retired.
+- The standalone `draft identity` profile command and `identity.*` namespace were removed. Retired profile state fails closed without parsing or migration; Doctor/status recovery and `draft maintenance remove-project` may only report, guide removal, or safely remove an unsupported workspace.
+- This release is an intentional source- and data-compatibility cut. Draft does not parse, translate, repair, or rewrite earlier authoritative formats. Unsupported or corrupt bytes remain untouched.
+- Fresh state initializes only when authoritative state is genuinely absent. Rebuildable indexes and caches regenerate only after canonical authoritative inputs validate successfully.
+- Doctor reports unsupported schema, corruption, and validation failures as distinct categories and does not offer automated conversion or repair.

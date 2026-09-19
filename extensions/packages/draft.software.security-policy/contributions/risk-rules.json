@@ -1,0 +1,124 @@
+{
+  "rules": [
+    {
+      "code": "draft.software.security-policy/authentication-surface",
+      "weight": 6,
+      "when": {
+        "condition": "any",
+        "of": [
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/auth/**"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/authn/**"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/authz/**"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/session/**"
+              }
+            },
+            "at_least": 1
+          }
+        ]
+      },
+      "explanation": "an authentication or authorization surface changed",
+      "required_action": "require review by someone who owns this surface"
+    },
+    {
+      "code": "draft.software.security-policy/credential-surface",
+      "weight": 8,
+      "when": {
+        "condition": "any",
+        "of": [
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/secret*/**"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/credential*/**"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/*.pem"
+              }
+            },
+            "at_least": 1
+          },
+          {
+            "condition": "resources_matching",
+            "predicate": {
+              "predicate": "raw",
+              "of": {
+                "predicate": "path_glob",
+                "glob": "**/*.key"
+              }
+            },
+            "at_least": 1
+          }
+        ]
+      },
+      "explanation": "credential material or its handling changed",
+      "required_action": "confirm no secret is being committed"
+    },
+    {
+      "code": "draft.software.security-policy/unverified-change",
+      "weight": 5,
+      "when": {
+        "condition": "evidence_state",
+        "verification": "unavailable"
+      },
+      "explanation": "no capability was available to verify this change",
+      "required_action": "install a verification capability or waive explicitly"
+    }
+  ]
+}

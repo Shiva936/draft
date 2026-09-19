@@ -1,0 +1,11 @@
+{
+  "preset_id": "draft.agent.claude/default",
+  "display_name": "Claude Code",
+  "execution": {
+    "execution": "tool_action",
+    "action_id": "draft.agent.claude/run"
+  },
+  "limits": {
+    "max_resources_changed": 200
+  }
+}

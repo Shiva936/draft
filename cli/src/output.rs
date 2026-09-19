@@ -1,9 +1,21 @@
 //! Terminal output helpers for Draft-native CLI responses.
 
-use draft_core::error::DraftError;
+use draft_core::support::error::DraftError;
 
 pub fn header(title: &str) {
     println!("\n\x1b[1m{title}\x1b[0m");
+}
+
+pub fn section(title: &str) {
+    println!("\n{title}:");
+}
+
+pub fn bullet(value: &str) {
+    println!("  - {value}");
+}
+
+pub fn line(value: &str) {
+    println!("  {value}");
 }
 
 pub fn field(label: &str, value: &str) {
@@ -37,7 +49,7 @@ pub fn print_json<T: serde::Serialize>(value: &T) {
 }
 
 /// Render any serializable value as human-readable `key value` lines
-/// (SRS-FR-130/131: default output is human-readable; JSON only via flags).
+/// Default output is human-readable; JSON only via an explicit flag.
 pub fn print_human<T: serde::Serialize>(value: &T) {
     match serde_json::to_value(value) {
         Ok(v) => print_human_value(&v, 1),

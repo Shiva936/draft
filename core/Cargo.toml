@@ -1,12 +1,14 @@
 [package]
 name = "draft-core"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 
 [features]
 testing = []
 
 [dependencies]
+draft-dcg-contract = { version = "0.3.4", path = "../sdk/dcg-contract" }
+draft-extension-contract = { version = "0.3.4", path = "../sdk/extension-contract" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
@@ -26,9 +28,20 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"
 tar = "0.4"
+# Installation lifecycle: SemVer release selection and the two release
+# archive formats (`.tar.gz` everywhere, `.zip` for Windows).
+semver = "1"
+flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# The correctness lock is the kernel's, so it needs the platform call. Both are
+# already in the dependency graph transitively; declaring them makes the lock's
+# implementation explicit rather than incidental.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Registry", "Win32_Globalization", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
 
 [dev-dependencies]
 arbitrary = { version = "1", features = ["derive"] }

@@ -1,0 +1,41 @@
+{
+  "expect": "revisions touching disjoint Resources from the same Baseline compose",
+  "name": "independent-change-packs",
+  "payload": {
+    "affected_resources": [
+      "res_000000000001",
+      "res_000000000002"
+    ],
+    "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+    "composition_digest": "sha256:b0c31d7c7bfc3ac04a15fd5e3a5a09ec9ca1b44a1aa42565d382064ecb1a7ea8",
+    "id": "cmp_b0c31d7c7bfc",
+    "members": [
+      {
+        "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+        "change_pack": "cpk_000000000001",
+        "revision_pack": "rpk_000000000001",
+        "touched": [
+          "res_000000000001"
+        ]
+      },
+      {
+        "base_baseline": "sha256:26fcd88e361a9e6332805a88b8fc443ca4bf5b42bc94880d83da95db7fd26e77",
+        "change_pack": "cpk_000000000002",
+        "revision_pack": "rpk_000000000002",
+        "touched": [
+          "res_000000000002"
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "left": "rpk_000000000001",
+        "relation": "independent",
+        "right": "rpk_000000000002"
+      }
+    ],
+    "schema_version": 1,
+    "status": "verified"
+  },
+  "payload_schema": "composition.schema.json"
+}

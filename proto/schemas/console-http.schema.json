@@ -1,0 +1,1751 @@
+{
+  "$id": "https://draft.dev/schemas/console-http.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ActionInputField": {
+      "additionalProperties": false,
+      "description": "One declared input of an action.",
+      "properties": {
+        "help": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Stable machine identity: the key the client submits and the server validates. Never a label.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ActionInputKind"
+        },
+        "label": {
+          "description": "Human label. Presentation only.",
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "label",
+        "required"
+      ],
+      "type": "object"
+    },
+    "ActionInputKind": {
+      "description": "The shape of one action input.\n\nDeliberately small and semantic. A frontend maps these to whatever controls suit it — a Web form, a TUI prompt — but neither invents an input Draft did not declare, and neither decides what is valid.",
+      "oneOf": [
+        {
+          "description": "Free text, optionally bounded.",
+          "properties": {
+            "max_length": {
+              "default": null,
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "text"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "One of a server-supplied set. The set is part of the input contract, so a client holding a stale set cannot invoke against it.",
+          "properties": {
+            "options": {
+              "items": {
+                "$ref": "#/definitions/SelectOption"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": [
+                "select"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "options",
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A true/false flag.",
+          "properties": {
+            "type": {
+              "enum": [
+                "boolean"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An explicit acknowledgement, which must be `true` to proceed.",
+          "properties": {
+            "type": {
+              "enum": [
+                "confirmation"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ActionPresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "type": "string"
+        },
+        "disabled_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "expires_at_unix_ms": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "input_contract_digest": {
+          "default": "",
+          "description": "Digest of `inputs`, carried into the invocation capability so a stale input contract cannot be replayed.",
+          "type": "string"
+        },
+        "inputs": {
+          "default": [],
+          "description": "What this action needs from the caller. Empty means it takes nothing, and supplying anything is then an error.\n\nThis is one contract serving two purposes: a frontend renders it, and `draftd` validates against it. The frontend's checks are a convenience; the server's are the decision.",
+          "items": {
+            "$ref": "#/definitions/ActionInputField"
+          },
+          "type": "array"
+        },
+        "invocation_capability": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "requires_confirmation": {
+          "type": "boolean"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ActionTarget"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What the action acts on, when it is something other than the subject."
+        }
+      },
+      "required": [
+        "action_id",
+        "enabled",
+        "label",
+        "requires_confirmation"
+      ],
+      "type": "object"
+    },
+    "ActionTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ActionTargetKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ActionTargetKind": {
+      "description": "What an action acts on, beyond the subject that produced it.\n\nGeneric on purpose: a target is a kind and an id, so a new kind of extension-contributed action needs no new frontend code and no new scope.",
+      "enum": [
+        "extension",
+        "extension_source",
+        "pending_authorization",
+        "grant"
+      ],
+      "type": "string"
+    },
+    "ApiErrorBodyDto": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "details": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ApiFailureDto": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ApiErrorBodyDto"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "error",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "AssigneeRefDto": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "CanonicalRevisions": {
+      "additionalProperties": false,
+      "properties": {
+        "change_pack": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registry": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "workspace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "registry"
+      ],
+      "type": "object"
+    },
+    "CapabilityGapDto": {
+      "description": "A capability nothing installed can supply.\n\nNever names a package: Draft reports what is missing, and does not advertise on any publisher's behalf.",
+      "properties": {
+        "capability": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resource_classes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "capability",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ChangeDerivationGapDto": {
+      "description": "Something Draft could not determine about a transition.\n\nRendered in its own section, never mixed in with the changes: a gap means \"unknown\", and showing it beside real changes would read as \"unchanged\".",
+      "properties": {
+        "kind": {
+          "description": "`presence_uncertain` or `absence_uncertain`.",
+          "type": "string"
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceLocatorDto"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "resource_id": {
+          "type": "string"
+        },
+        "uncovered_side": {
+          "description": "Which side of the comparison was not covered.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "resource_id",
+        "uncovered_side"
+      ],
+      "type": "object"
+    },
+    "ChangePackSummaryDto": {
+      "properties": {
+        "change_pack_id": {
+          "type": "string"
+        },
+        "intent": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "revision": true,
+        "submit_state": {
+          "type": "string"
+        },
+        "valid_actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "change_pack_id",
+        "intent",
+        "name",
+        "submit_state",
+        "valid_actions"
+      ],
+      "type": "object"
+    },
+    "ChangePackViewDto": {
+      "description": "A ChangePack's authoritative transition, plus any derived explanation of it.",
+      "properties": {
+        "base_snapshot_digest": {
+          "type": "string"
+        },
+        "capability_gaps": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CapabilityGapDto"
+          },
+          "type": "array"
+        },
+        "change_set_digest": {
+          "type": "string"
+        },
+        "derivation_gaps": {
+          "default": [],
+          "description": "What could not be determined. A separate field on purpose.",
+          "items": {
+            "$ref": "#/definitions/ChangeDerivationGapDto"
+          },
+          "type": "array"
+        },
+        "observation_context_digest": {
+          "type": "string"
+        },
+        "resources": {
+          "description": "What changed, proved.",
+          "items": {
+            "$ref": "#/definitions/ResourceChangeDto"
+          },
+          "type": "array"
+        },
+        "result_snapshot_digest": {
+          "type": "string"
+        },
+        "review_units": {
+          "default": [],
+          "description": "Contributed review units, when a comparison capability derived any. Absent means Draft knows *that* the resources changed without being able to say how — a real answer, not an empty rendering.",
+          "items": {
+            "$ref": "#/definitions/ReviewUnitDto"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "base_snapshot_digest",
+        "change_set_digest",
+        "observation_context_digest",
+        "resources",
+        "result_snapshot_digest"
+      ],
+      "type": "object"
+    },
+    "ClassificationBundleDto": {
+      "description": "What classes a project's resources carry.",
+      "properties": {
+        "assigned": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "classification_digest": {
+          "type": "string"
+        },
+        "collisions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gaps": {
+          "default": [],
+          "description": "Present when nothing is installed to classify anything. Distinguishes \"classified, and nothing matched\" from \"nothing can classify\".",
+          "items": {
+            "$ref": "#/definitions/CapabilityGapDto"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "assigned",
+        "classification_digest",
+        "collisions"
+      ],
+      "type": "object"
+    },
+    "ConsoleActionInvocation": {
+      "additionalProperties": false,
+      "properties": {
+        "application_session_id": {
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "default": {},
+          "type": "object"
+        },
+        "expected_revisions": {
+          "$ref": "#/definitions/CanonicalRevisions"
+        },
+        "invocation_capability": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "application_session_id",
+        "expected_revisions",
+        "invocation_capability",
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "ConsoleNavigationSection": {
+      "additionalProperties": false,
+      "description": "One entry in a scope's navigation, with the views nested under it.\n\nNested rather than flattened because §8.3 nests: `Work (Tasks | ChangePacks)` is one section with two views, and flattening it would make Tasks and ChangePacks look like peers of Resources and Baselines. A section with no children is a leaf and renders as one row.",
+      "properties": {
+        "children": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "type": "object"
+    },
+    "ConsoleReadModel": {
+      "additionalProperties": false,
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/definitions/ActionPresentation"
+          },
+          "type": "array"
+        },
+        "content": true,
+        "evidence_links": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "freshness": {
+          "$ref": "#/definitions/ModelFreshness"
+        },
+        "health": {
+          "type": "string"
+        },
+        "navigation": {
+          "items": {
+            "$ref": "#/definitions/ConsoleNavigationSection"
+          },
+          "type": "array"
+        },
+        "next_safe_actions": {
+          "items": {
+            "$ref": "#/definitions/NextSafeAction"
+          },
+          "type": "array"
+        },
+        "operation_links": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "permission_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read_only": {
+          "type": "boolean"
+        },
+        "revisions": {
+          "$ref": "#/definitions/CanonicalRevisions"
+        },
+        "subject": {
+          "$ref": "#/definitions/ConsoleSubject"
+        }
+      },
+      "required": [
+        "actions",
+        "content",
+        "evidence_links",
+        "freshness",
+        "health",
+        "navigation",
+        "next_safe_actions",
+        "operation_links",
+        "read_only",
+        "revisions",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "ConsoleSessionDto": {
+      "properties": {
+        "authenticated": {
+          "type": "boolean"
+        },
+        "csrf_token": {
+          "type": "string"
+        },
+        "preselected_workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "authenticated",
+        "csrf_token",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "ConsoleSubject": {
+      "description": "What a Console view is about.\n\nA tagged union, so an impossible combination — a ChangePack without a project, a Baseline id on a ChangePack subject — cannot be represented at all rather than being rejected after the fact.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Empty braces rather than a unit variant: serde lets an internally tagged unit variant ignore extra fields even under `deny_unknown_fields`.",
+          "properties": {
+            "scope": {
+              "enum": [
+                "GLOBAL"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scope": {
+              "enum": [
+                "PROJECT"
+              ],
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope",
+            "workspace_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "change_pack_id": {
+              "type": "string"
+            },
+            "scope": {
+              "enum": [
+                "CHANGE_PACK"
+              ],
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "change_pack_id",
+            "scope",
+            "workspace_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "baseline_id": {
+              "type": "string"
+            },
+            "scope": {
+              "enum": [
+                "BASELINE"
+              ],
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "baseline_id",
+            "scope",
+            "workspace_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DiscoveredExtensionDto": {
+      "properties": {
+        "catalog_id": {
+          "type": "string"
+        },
+        "freshness": {
+          "$ref": "#/definitions/ExtensionCatalogUsabilityDto"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/definitions/ExtensionCatalogTargetDto"
+        }
+      },
+      "required": [
+        "catalog_id",
+        "freshness",
+        "source_id",
+        "target"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogLocationDto": {
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "local_directory"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "https"
+              ],
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ExtensionCatalogSourceDto": {
+      "properties": {
+        "builtin": {
+          "description": "Built-in sources come from the build's official bootstrap. They can be disabled, but their trust anchor is not the user's to edit.",
+          "type": "boolean"
+        },
+        "catalog_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "configured_at": {
+          "type": "string"
+        },
+        "enabled": {
+          "description": "A disabled source is not searched, refreshed or installed from. Its configuration, trust and installed packages are all untouched.",
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_refreshed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location": {
+          "$ref": "#/definitions/ExtensionCatalogLocationDto"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "builtin",
+        "configured_at",
+        "enabled",
+        "id",
+        "location",
+        "schema_version"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogSourceStatusDto": {
+      "properties": {
+        "cached_package_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_version": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/ExtensionCatalogSourceDto"
+        },
+        "trusted": {
+          "type": "boolean"
+        },
+        "usability": {
+          "$ref": "#/definitions/ExtensionCatalogUsabilityDto"
+        }
+      },
+      "required": [
+        "cached_package_count",
+        "configured",
+        "source",
+        "trusted",
+        "usability"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogTargetDto": {
+      "properties": {
+        "artifact_path": {
+          "type": "string"
+        },
+        "draft_api": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "length": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact_path",
+        "draft_api",
+        "id",
+        "length",
+        "publisher",
+        "sha256",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ExtensionCatalogUsabilityDto": {
+      "enum": [
+        "untrusted",
+        "usable",
+        "expired",
+        "invalid",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "InboxItemDto": {
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "next_action": {
+          "type": "string"
+        },
+        "severity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "subject_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "next_action",
+        "status",
+        "subject_id"
+      ],
+      "type": "object"
+    },
+    "ModelFreshness": {
+      "enum": [
+        "loading",
+        "fresh",
+        "stale",
+        "partial",
+        "unavailable"
+      ],
+      "type": "string"
+    },
+    "NextSafeAction": {
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ProjectSummaryDto": {
+      "properties": {
+        "change_packs": {
+          "items": {
+            "$ref": "#/definitions/ChangePackSummaryDto"
+          },
+          "type": "array"
+        },
+        "inbox": {
+          "items": {
+            "$ref": "#/definitions/InboxItemDto"
+          },
+          "type": "array"
+        },
+        "project": {
+          "$ref": "#/definitions/RegistryProjectDto"
+        },
+        "revision": {
+          "$ref": "#/definitions/WorkspaceRevisionDto"
+        },
+        "status": true,
+        "tasks": {
+          "items": {
+            "$ref": "#/definitions/TaskDefinitionDto"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "change_packs",
+        "inbox",
+        "project",
+        "revision",
+        "status",
+        "tasks"
+      ],
+      "type": "object"
+    },
+    "RegistryProjectDto": {
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "draft_version": {
+          "type": "string"
+        },
+        "health": {
+          "type": "string"
+        },
+        "last_seen_at": {
+          "type": "string"
+        },
+        "last_workspace_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location_revision": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "project_path": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "storage_path": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "created_at",
+        "draft_version",
+        "health",
+        "last_seen_at",
+        "location_revision",
+        "name",
+        "project_path",
+        "schema_version",
+        "storage_path",
+        "workspace_id"
+      ],
+      "type": "object"
+    },
+    "ResourceChangeDto": {
+      "description": "One resource's transition, as the Console renders it.",
+      "properties": {
+        "after_state_digest": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aspects": {
+          "description": "Neutral aspect names: `added`, `removed`, `content_changed`, `metadata_changed`, `relocated`, `form_changed`, `attributes_changed`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "before_state_digest": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "locator": {
+          "$ref": "#/definitions/ResourceLocatorDto"
+        },
+        "resource_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "aspects",
+        "locator",
+        "resource_id"
+      ],
+      "type": "object"
+    },
+    "ResourceContentDto": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "locator": {
+          "$ref": "#/definitions/ResourceLocatorDto"
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "workspace_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "content",
+        "locator",
+        "protected"
+      ],
+      "type": "object"
+    },
+    "ResourceDto": {
+      "properties": {
+        "class_collisions": {
+          "default": [],
+          "description": "Classes installed extensions define incompatibly, scoped to those classes. Every other assignment on this resource still stands.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "classes": {
+          "default": [],
+          "description": "**Every** class an installed extension assigns, sorted.\n\nA list, not one value: a resource genuinely is several things at once — a text document *and* a language source — and rendering only the first would discard a correct classification. Empty means nothing is installed that recognizes it, which is not an error.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "content_size": {
+          "default": null,
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "form": {
+          "default": null,
+          "description": "The intrinsic shape of the resource, when its adapter states one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "locator": {
+          "$ref": "#/definitions/ResourceLocatorDto"
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "resource_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "locator",
+        "protected",
+        "resource_id"
+      ],
+      "type": "object"
+    },
+    "ResourceInterferenceDto": {
+      "description": "How two changes relate over one resource they both touch.\n\n`relation` is `independent`, `conflicting` or `indeterminate`. `indeterminate` is shown as itself — \"Draft cannot tell whether these are separable\" is a different statement from \"they collide\", even though both block composition.",
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "relation": {
+          "type": "string"
+        },
+        "resource_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "detail",
+        "relation",
+        "resource_id"
+      ],
+      "type": "object"
+    },
+    "ResourceLocatorDto": {
+      "description": "Where a resource lives, in terms only its owning adapter understands.\n\nThe Console never parses `body`. A `file`-scheme body looks like a path because that adapter chose paths; a catalog or timeline adapter's does not, and the same components must render both.",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "scheme": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "body",
+        "scheme"
+      ],
+      "type": "object"
+    },
+    "ReviewUnitDto": {
+      "description": "One independently decidable unit of a change.",
+      "properties": {
+        "label": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resource_id": {
+          "type": "string"
+        },
+        "summary": {
+          "additionalProperties": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "default": {},
+          "description": "Contributed metric totals for this unit. The Console displays the keys as given and attaches meaning to none of them.",
+          "type": "object"
+        },
+        "unit_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource_id",
+        "unit_id"
+      ],
+      "type": "object"
+    },
+    "RollbackOutcomeDto": {
+      "description": "How completely a past state could be restored, and what it cost.\n\nSeparate from observation completeness: a snapshot may be perfectly complete and entirely unrestorable, and a surface must never imply otherwise.",
+      "properties": {
+        "outcome": {
+          "description": "`complete`, `incomplete` or `refused`. Never rendered as \"restored\" unless it is `complete`.",
+          "type": "string"
+        },
+        "permanently_unverifiable_domains": {
+          "default": [],
+          "description": "Domains whose target state can never be verified for this target, however observable they become later.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resulting_snapshot_digest": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_snapshot_digest": {
+          "type": "string"
+        },
+        "uncertainties": {
+          "default": [],
+          "description": "Typed causes, so a surface can say precisely why rather than \"rollback incomplete\".",
+          "items": {
+            "$ref": "#/definitions/RollbackUncertaintyDto"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "outcome",
+        "target_snapshot_digest"
+      ],
+      "type": "object"
+    },
+    "RollbackUncertaintyDto": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "kind": {
+          "description": "`target_state_unknown`, `recovery_material_unavailable`, `current_observation_incomplete`, `restore_verification_failed`, `adapter_recovery_unavailable` or `context_incompatible`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "detail",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "SearchResultDto": {
+      "properties": {
+        "change_pack_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "subtitle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "title"
+      ],
+      "type": "object"
+    },
+    "SelectOption": {
+      "additionalProperties": false,
+      "description": "One choice offered by a [`ActionInputKind::Select`] input.\n\n`value` is what the client submits and what the server validates against; `label` is what a person reads. Relabelling an option must never change which invocations are valid, so nothing anywhere keys on `label`.",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ServiceJobDto": {
+      "properties": {
+        "attempt": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "cancellation_requested": {
+          "type": "boolean"
+        },
+        "correlation_id": {
+          "type": "string"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "type": "string"
+        },
+        "progress_completed": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "progress_total": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "recovered_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": true,
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "submitted_at": {
+          "type": "string"
+        },
+        "workspace_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt",
+        "cancellation_requested",
+        "correlation_id",
+        "id",
+        "kind",
+        "phase",
+        "progress_completed",
+        "schema_version",
+        "status",
+        "submitted_at",
+        "workspace_path"
+      ],
+      "type": "object"
+    },
+    "TaskDefinitionDto": {
+      "properties": {
+        "assignee_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AssigneeRefDto"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "goal": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "next_actions": {
+          "items": {
+            "$ref": "#/definitions/TaskNextActionDto"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "risk": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "goal",
+        "id",
+        "mode",
+        "name",
+        "next_actions",
+        "risk",
+        "schema_version",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "TaskNextActionDto": {
+      "properties": {
+        "completed": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "completed",
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "TaskViewDto": {
+      "properties": {
+        "evidence_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "execution_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "health": {
+          "type": "string"
+        },
+        "produced_changes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "recommended_action": {
+          "type": "string"
+        },
+        "review_status": {
+          "type": "string"
+        },
+        "task": {
+          "$ref": "#/definitions/TaskDefinitionDto"
+        }
+      },
+      "required": [
+        "evidence_count",
+        "execution_count",
+        "health",
+        "produced_changes",
+        "recommended_action",
+        "review_status",
+        "task"
+      ],
+      "type": "object"
+    },
+    "VerificationCheckResultDto": {
+      "description": "One check's result, in the five-state model.\n\n`state` is one of `passed`, `failed`, `unavailable`, `not_evaluated` or `not_applicable`. A surface that collapses these to a boolean would let a reader mistake \"nothing checked this\" for \"everything passed\".",
+      "properties": {
+        "authorization_decision": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "check_id": {
+          "type": "string"
+        },
+        "detail": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "producer_extension_id": {
+          "description": "The artifact that contributed this check, shown separately from the decision that permitted it: trust and authorization are different facts.",
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "requirement": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "check_id",
+        "display_name",
+        "producer_extension_id",
+        "reason",
+        "requirement",
+        "state"
+      ],
+      "type": "object"
+    },
+    "WorkspaceRevisionDto": {
+      "properties": {
+        "content_digest": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "type": "integer"
+        },
+        "workspace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "content_digest",
+        "schema_version",
+        "workspace_id"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "capability_gap": {
+      "$ref": "#/definitions/CapabilityGapDto"
+    },
+    "change_pack_view": {
+      "$ref": "#/definitions/ChangePackViewDto"
+    },
+    "classification_bundle": {
+      "$ref": "#/definitions/ClassificationBundleDto"
+    },
+    "console_action_invocation": {
+      "$ref": "#/definitions/ConsoleActionInvocation"
+    },
+    "console_model": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ConsoleReadModel"
+        }
+      ],
+      "description": "The authoritative Console read model the browser renders, and the invocation it sends back. These are the Console application protocol's own types rather than gateway-local DTOs: Web and TUI must consume the same contract, so there is deliberately no second copy to drift."
+    },
+    "discovered_extension": {
+      "$ref": "#/definitions/DiscoveredExtensionDto"
+    },
+    "extension_source": {
+      "$ref": "#/definitions/ExtensionCatalogSourceStatusDto"
+    },
+    "failure": {
+      "$ref": "#/definitions/ApiFailureDto"
+    },
+    "job": {
+      "$ref": "#/definitions/ServiceJobDto"
+    },
+    "project": {
+      "$ref": "#/definitions/ProjectSummaryDto"
+    },
+    "resource": {
+      "$ref": "#/definitions/ResourceDto"
+    },
+    "resource_content": {
+      "$ref": "#/definitions/ResourceContentDto"
+    },
+    "resource_interference": {
+      "$ref": "#/definitions/ResourceInterferenceDto"
+    },
+    "rollback_outcome": {
+      "$ref": "#/definitions/RollbackOutcomeDto"
+    },
+    "schema_version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "search_result": {
+      "$ref": "#/definitions/SearchResultDto"
+    },
+    "session": {
+      "$ref": "#/definitions/ConsoleSessionDto"
+    },
+    "task_view": {
+      "$ref": "#/definitions/TaskViewDto"
+    },
+    "verification_check_result": {
+      "$ref": "#/definitions/VerificationCheckResultDto"
+    }
+  },
+  "required": [
+    "capability_gap",
+    "change_pack_view",
+    "classification_bundle",
+    "console_action_invocation",
+    "console_model",
+    "discovered_extension",
+    "extension_source",
+    "failure",
+    "job",
+    "project",
+    "resource",
+    "resource_content",
+    "resource_interference",
+    "rollback_outcome",
+    "schema_version",
+    "search_result",
+    "session",
+    "task_view",
+    "verification_check_result"
+  ],
+  "title": "Draft Console HTTP",
+  "type": "object"
+}

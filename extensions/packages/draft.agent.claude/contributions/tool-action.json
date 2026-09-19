@@ -1,0 +1,40 @@
+{
+  "action_id": "draft.agent.claude/run",
+  "display_name": "Run Claude Code",
+  "description": "Ask Claude Code to propose changes for the current task.",
+  "applies_to": {
+    "predicate": "raw",
+    "of": {
+      "predicate": "locator_scheme",
+      "equals": "file"
+    }
+  },
+  "effect": {
+    "effect": "transform",
+    "output_scope": {
+      "max_output_bytes": 4194304,
+      "may_propose_mutations": true
+    }
+  },
+  "operation": {
+    "request_contract": {
+      "schema_id": "draft.core/tool-action-request",
+      "revision": 1
+    },
+    "response_contract": {
+      "schema_id": "draft.core/tool-action-result",
+      "revision": 1
+    },
+    "max_response_bytes": 1048576,
+    "executor": {
+      "kind": "command",
+      "command": {
+        "program": "claude",
+        "args": [
+          "-p",
+          "{{request}}"
+        ]
+      }
+    }
+  }
+}

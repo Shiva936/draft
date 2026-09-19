@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "sdk/dcg-contract",
+    "sdk/extension-contract",
     "core",
     "services/ipc",
     "services/store",
@@ -8,9 +10,14 @@ members = [
     "services/sync",
     "services/watcher",
     "services/draftd",
-    "services/agui",
-    "services/adapters",
-    "cli",
-    "tui"
+    "console",
+    "console/application",
+    "console/tui",
+    "services/extension-service",
+    "cli"
 ]
+# `/extensions/` is its own workspace so the platform never builds it and
+# deleting it is a genuine no-op. It is shaped like the standalone
+# `draft-extensions` repository it will one day become.
+exclude = ["extensions"]
 resolver = "2"

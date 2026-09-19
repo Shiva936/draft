@@ -1,0 +1,96 @@
+{
+  "checks": [
+    {
+      "check_id": "draft.language.go/suite",
+      "display_name": "Go test suite",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.go/source"
+      },
+      "requirement": "required",
+      "selection": "whole",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "go",
+            "args": [
+              "test",
+              "./..."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "check_id": "draft.language.go/vet",
+      "display_name": "Go vet",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.go/source"
+      },
+      "requirement": "optional",
+      "selection": "whole",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "go",
+            "args": [
+              "vet",
+              "./..."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "check_id": "draft.language.go/toolchain",
+      "display_name": "Toolchain probe",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.go/source"
+      },
+      "requirement": "optional",
+      "selection": "environment_probe",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "go",
+            "args": [
+              "version"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

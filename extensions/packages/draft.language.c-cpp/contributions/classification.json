@@ -1,0 +1,30 @@
+{
+  "class_id": "draft.language.c-cpp/source",
+  "display_name": "C and C++ source",
+  "applies_to": {
+    "predicate": "any",
+    "of": [
+      {
+        "predicate": "path_suffix",
+        "suffix": ".c"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".h"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".cc"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".cpp"
+      },
+      {
+        "predicate": "path_suffix",
+        "suffix": ".hpp"
+      }
+    ]
+  },
+  "attributes": []
+}

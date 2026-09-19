@@ -1,0 +1,16 @@
+{
+  "expect": "the material state root is the Merkle construction over resource and relation subjects, and nothing else",
+  "name": "project-state-root",
+  "payload": {
+    "project_state_root": "sha256:b6d7c4e70baa7a3df2506189afdd0664cf277314a410b8a7bf412739121e4afc",
+    "relations": [],
+    "resources": [
+      {
+        "resource_id": "res_000000000001",
+        "state": "sha256:00e7c99a03bf9b1d8866e6930a83327f12cae2129d87c359a69a0088bb1ae190"
+      }
+    ],
+    "schema_version": 1
+  },
+  "payload_schema": "project-state-root.schema.json"
+}

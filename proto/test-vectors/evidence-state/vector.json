@@ -1,0 +1,41 @@
+{
+  "name": "evidence-state",
+  "payload_schema": "evidence-state.schema.json",
+  "notes": "evidence names the exact revision it is about and the exact observations it read; `unavailable` is a real outcome and is not a pass",
+  "payload": {
+    "id": "evd_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
+    "inputs": [
+      {
+        "id": "obs_0a1b2c3d4e5f",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "producer": { "producer": "draft.core/verification", "version": "0.3.4" },
+    "configuration": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "outcome": "unavailable",
+    "context": {
+      "evaluated_at": 1752278400000000000,
+      "clock_source": "draft.core/system-clock",
+      "policy_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "security_context_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "core_evaluator_revision": "0.3.4"
+    }
+  },
+  "invalid_payload": {
+    "id": "evd_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
+    "inputs": [],
+    "producer": { "producer": "draft.core/verification", "version": "0.3.4" },
+    "configuration": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "outcome": "probably_fine",
+    "context": {
+      "evaluated_at": 1752278400000000000,
+      "clock_source": "draft.core/system-clock",
+      "policy_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "security_context_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "core_evaluator_revision": "0.3.4"
+    }
+  },
+  "expect": { "valid": true }
+}

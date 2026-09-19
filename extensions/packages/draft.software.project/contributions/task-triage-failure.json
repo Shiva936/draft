@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/triage-failure",
+  "display_name": "Triage a failure",
+  "description": "Establish what failed and why.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Triage a failure"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

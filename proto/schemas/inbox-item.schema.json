@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Inbox Item",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "kind",
+    "subject_id",
+    "status",
+    "summary",
+    "next_action"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "subject_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "next_action": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/inbox-item.schema.json"
+}

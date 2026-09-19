@@ -1,42 +1,32 @@
-//! `draft-core` — Draft-native v0.3.3 verified stable-base primitives.
+//! Draft's canonical domain model and orchestration APIs.
 //!
-//! v0.3.3 is local-first and branchless. Project stability is represented by
-//! verified stable base states and `stable_head`, while changepacks remain
-//! temporary until `draft save` finalizes and disposes them.
+//! Product version 0.3.4 ships independently registered contracts whose
+//! current/supported policies are all v1. Public APIs live under their owning
+//! domain namespace.
 
-pub mod adapters;
-mod app;
-pub mod common;
-pub mod composition;
-pub mod config;
-pub mod error;
-pub mod event;
-pub mod fsutil;
-pub mod gc;
-pub mod hashing;
-pub mod hidden;
-pub mod home;
-pub mod identity;
-pub mod importexport;
-pub mod index;
-pub mod layout;
-pub mod ledger;
-pub mod lock;
-pub mod lsif;
-pub mod pack;
-pub mod pathguard;
-pub mod policy;
+pub mod activity;
+pub mod app;
+pub mod authority;
+pub mod contracts;
+pub mod dcg;
+pub mod evidence;
+pub mod execution;
+pub mod extension;
+pub mod gate;
+pub mod installation;
+pub mod project;
+pub mod promotion;
+pub mod provenance;
+pub mod publication;
+pub mod read_model;
 pub mod receipt;
-pub mod risk;
-pub mod signing;
-pub mod stable;
-pub mod transparency;
-pub mod verification;
+pub mod recovery;
+pub mod support;
+pub mod task;
+pub mod trust;
 
-/// The Draft version string used in metadata, receipts, and `--version`.
-pub const DRAFT_VERSION: &str = "0.3.3";
-
-/// Schema version stamped into every persisted v0.3.3 format.
-pub const DRAFT_SCHEMA_VERSION: &str = "0.3.3";
-
-pub use app::*;
+/// Product/package version. Contract compatibility is declared independently
+/// by the typed metadata in [`contracts`].
+pub const DRAFT_VERSION: &str = "0.3.4";
+/// Product API SemVer used only for extension `draft_api` requirements.
+pub const DRAFT_API_VERSION: &str = DRAFT_VERSION;

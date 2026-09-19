@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft PublicationOutcome",
+  "type": "object",
+  "required": [
+    "attempt",
+    "receipt_id",
+    "receipt_signer",
+    "outcome",
+    "concluded_at",
+    "provenance"
+  ],
+  "properties": {
+    "attempt": {
+      "type": "object",
+      "required": [
+        "id",
+        "digest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^pat_[A-Za-z0-9_-]+$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^rcp_[A-Za-z0-9_-]+$"
+    },
+    "receipt_signer": {
+      "type": "object",
+      "required": [
+        "signer_identity",
+        "signing_key_id",
+        "signature_algorithm"
+      ],
+      "properties": {
+        "signer_identity": {
+          "type": "string",
+          "pattern": "^act_[A-Za-z0-9_-]+$"
+        },
+        "signing_key_id": {
+          "type": "string"
+        },
+        "signature_algorithm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "outcome": {
+      "type": "object",
+      "required": [
+        "outcome"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "no_effect",
+            "indeterminate"
+          ]
+        },
+        "external_reference": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "concluded_at": {
+      "type": "integer"
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "producer",
+        "version"
+      ],
+      "properties": {
+        "producer": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/publication-outcome.schema.json"
+}

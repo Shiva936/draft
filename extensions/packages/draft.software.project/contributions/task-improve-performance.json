@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/improve-performance",
+  "display_name": "Improve performance",
+  "description": "Make a measured improvement.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Improve performance"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "class_id": "draft.language.java/source",
+  "display_name": "Java source",
+  "applies_to": {
+    "predicate": "path_suffix",
+    "suffix": ".java"
+  },
+  "attributes": []
+}

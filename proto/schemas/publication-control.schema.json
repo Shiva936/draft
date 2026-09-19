@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft PublicationControl",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generation",
+    "publication",
+    "next_attempt_number",
+    "consumed_retry_authorizations"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "generation": {
+      "type": "integer"
+    },
+    "publication": {
+      "type": "string",
+      "pattern": "^pub_[A-Za-z0-9_-]+$"
+    },
+    "in_flight_attempt": {
+      "type": "string",
+      "pattern": "^pat_[A-Za-z0-9_-]+$"
+    },
+    "next_attempt_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "consumed_retry_authorizations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/publication-control.schema.json"
+}

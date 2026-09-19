@@ -1,0 +1,119 @@
+{
+  "expect": "the exact PublicationRef is verified by id *and* digest",
+  "name": "publication-attempt-publication-ref",
+  "payload": {
+    "attempt_authority": [
+      {
+        "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+        "kind": "draft.security/authority-grant.v1",
+        "logical_id": "auth_1"
+      }
+    ],
+    "attempt_number": 1,
+    "authority_decision": {
+      "considered": [
+        {
+          "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+          "kind": "draft.security/authority-grant.v1",
+          "logical_id": "auth_1"
+        }
+      ],
+      "decided_at": 1000,
+      "evaluator": {
+        "producer": "draft.core/publication",
+        "version": "0.3.4"
+      },
+      "outcome": {
+        "outcome": "permitted"
+      },
+      "scope": {
+        "capability": "draft.publish/v1",
+        "subject": "pub_a1"
+      }
+    },
+    "global_registry_revisions_at_dispatch": {
+      "draft.trust/publishers": 412
+    },
+    "id": "pat_000000000001",
+    "lease_fence": 42,
+    "lease_id": "lease-1",
+    "policy_digest_at_dispatch": "sha256:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "project_control_generation_at_dispatch": 7,
+    "project_security_state_at_dispatch": "sha256:5d2d3ceb7abe552344276d47d36a8175b7aeb250a9bf0bf00e850cd23ecf2e43",
+    "provenance": {
+      "producer": "draft.core/publication",
+      "version": "0.3.4"
+    },
+    "provider_binding_generation_at_dispatch": 3,
+    "publication": {
+      "digest": "sha256:fd1efc8e0ab570a1442e5c15bd15b8660e6360b3975ccf2e786023e1fdfbe3c7",
+      "id": "pub_000000000001"
+    },
+    "route": {
+      "operational_profile": "sha256:d2c37032f24630c704e0616299a411d6a89137b3137e7c1d40fae1de9290b0d4",
+      "provenance": {
+        "binding": "pbd_000000000001",
+        "semantic_definition": "sha256:6dcb7e507fb56d1223ddf52bdbef950781bb216759413d0d6bcef3b24521d522"
+      }
+    },
+    "started_at": 2000
+  },
+  "payload_schema": "publication-attempt.schema.json",
+  "self_consistency_violation": {
+    "attempt_authority": [
+      {
+        "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+        "kind": "draft.security/authority-grant.v1",
+        "logical_id": "auth_1"
+      }
+    ],
+    "attempt_number": 1,
+    "authority_decision": {
+      "considered": [
+        {
+          "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+          "kind": "draft.security/authority-grant.v1",
+          "logical_id": "auth_1"
+        }
+      ],
+      "decided_at": 1000,
+      "evaluator": {
+        "producer": "draft.core/publication",
+        "version": "0.3.4"
+      },
+      "outcome": {
+        "outcome": "permitted"
+      },
+      "scope": {
+        "capability": "draft.publish/v1",
+        "subject": "pub_a1"
+      }
+    },
+    "global_registry_revisions_at_dispatch": {
+      "draft.trust/publishers": 412
+    },
+    "id": "pat_000000000001",
+    "lease_fence": 42,
+    "lease_id": "lease-1",
+    "policy_digest_at_dispatch": "sha256:823412d1eacb67956220e532959f0104603057c88704863ca38e7cd188fda812",
+    "project_control_generation_at_dispatch": 7,
+    "project_security_state_at_dispatch": "sha256:5d2d3ceb7abe552344276d47d36a8175b7aeb250a9bf0bf00e850cd23ecf2e43",
+    "provenance": {
+      "producer": "draft.core/publication",
+      "version": "0.3.4"
+    },
+    "provider_binding_generation_at_dispatch": 3,
+    "publication": {
+      "digest": "sha256:25e4a8b4235b9eb87928e6bef70ea8d318e31ec5f0be0b8665c95c94cfefe8dd",
+      "id": "pub_000000000001"
+    },
+    "route": {
+      "operational_profile": "sha256:d2c37032f24630c704e0616299a411d6a89137b3137e7c1d40fae1de9290b0d4",
+      "provenance": {
+        "binding": "pbd_000000000001",
+        "semantic_definition": "sha256:6dcb7e507fb56d1223ddf52bdbef950781bb216759413d0d6bcef3b24521d522"
+      }
+    },
+    "started_at": 2000
+  }
+}

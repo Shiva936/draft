@@ -1,0 +1,21 @@
+{
+  "expect": "a Resource subject carries exactly one primary observation, structurally",
+  "name": "state-evidence-root-resource",
+  "payload": {
+    "entries": [
+      {
+        "corroborating": [],
+        "primary": {
+          "digest": "sha256:741b581af241d67c08b66e08c0da0649f18f6e556809be4bbcecde75def8df6a",
+          "id": "obs_000000000001"
+        },
+        "resource_id": "res_000000000001",
+        "state": "sha256:00e7c99a03bf9b1d8866e6930a83327f12cae2129d87c359a69a0088bb1ae190",
+        "subject": "resource"
+      }
+    ],
+    "schema_version": 1,
+    "state_evidence_root": "sha256:9abf033da94e13a113eb9d833f6e2096985a95746b791267080bada610caacfb"
+  },
+  "payload_schema": "state-evidence-entry.schema.json"
+}

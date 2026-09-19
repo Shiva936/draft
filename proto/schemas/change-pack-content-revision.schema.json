@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/change-pack-content-revision.schema.json",
+  "title": "Draft ChangePack Content Revision",
+  "description": "A content-store revision of a ChangePack's manifest and content. Not a RevisionPack: content_revision_id is a label, never an rpk_ identity.",
+  "type": "object",
+  "required": [
+    "schema_version", "change_pack_id", "manifest_digest", "content_revision_id",
+    "content_revision_number", "content_revision_digest", "base_digest", "content_digest",
+    "change_set_digest", "target_digest", "resolved_dependency_digests", "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "change_pack_id": { "type": "string", "pattern": "^cpk_[A-Za-z0-9_-]+$" },
+    "manifest_digest": { "$ref": "#/$defs/digest" },
+    "content_revision_id": { "type": "string", "pattern": "^content_[A-Za-z0-9_-]+$" },
+    "content_revision_number": { "type": "integer", "minimum": 1 },
+    "content_revision_digest": { "$ref": "#/$defs/digest" },
+    "base_digest": { "$ref": "#/$defs/digest" },
+    "content_digest": { "$ref": "#/$defs/digest" },
+    "change_set_digest": { "$ref": "#/$defs/digest" },
+    "target_digest": { "$ref": "#/$defs/digest" },
+    "resolved_dependency_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" } },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

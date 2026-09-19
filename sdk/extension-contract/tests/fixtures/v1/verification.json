@@ -1,0 +1,34 @@
+{
+  "checks": [
+    {
+      "check_id": "example.vector/all",
+      "display_name": "Vector check",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "example.vector/document"
+      },
+      "requirement": "required",
+      "selection": "whole",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/check-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "example.vector/result",
+          "revision": 1
+        },
+        "max_response_bytes": 65536,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "vector-check",
+            "args": [
+              "--all"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

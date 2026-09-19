@@ -1,0 +1,65 @@
+{
+  "checks": [
+    {
+      "check_id": "draft.language.javascript-typescript/suite",
+      "display_name": "Package test script",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.javascript-typescript/source"
+      },
+      "requirement": "required",
+      "selection": "whole",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "npm",
+            "args": [
+              "test",
+              "--silent"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "check_id": "draft.language.javascript-typescript/toolchain",
+      "display_name": "Toolchain probe",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.javascript-typescript/source"
+      },
+      "requirement": "optional",
+      "selection": "environment_probe",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "node",
+            "args": [
+              "--version"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

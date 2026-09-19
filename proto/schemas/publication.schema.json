@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Publication",
+  "type": "object",
+  "required": [
+    "id",
+    "request_key",
+    "promotion",
+    "baseline",
+    "route",
+    "purpose",
+    "requested_by",
+    "authority_inputs",
+    "delivery_semantics",
+    "idempotency_key",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^pub_[A-Za-z0-9_-]+$"
+    },
+    "request_key": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "promotion": {
+      "type": "string",
+      "pattern": "^pro_[A-Za-z0-9_-]+$"
+    },
+    "baseline": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "route": {
+      "type": "object",
+      "required": [
+        "provenance",
+        "operational_profile"
+      ],
+      "properties": {
+        "provenance": {
+          "type": "object",
+          "required": [
+            "binding",
+            "semantic_definition"
+          ],
+          "properties": {
+            "binding": {
+              "type": "string",
+              "pattern": "^pbd_[A-Za-z0-9_-]+$"
+            },
+            "semantic_definition": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "operational_profile": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "purpose": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "republish_intent": {
+      "type": "string"
+    },
+    "requested_by": {
+      "type": "string",
+      "pattern": "^act_[A-Za-z0-9_-]+$"
+    },
+    "authority_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "kind",
+          "digest"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "logical_id": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "credential_authority_class": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "delivery_semantics": {
+      "enum": [
+        "idempotent_by_key",
+        "reconcile_by_client_key",
+        "query_by_client_key",
+        "non_idempotent"
+      ]
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "created_at": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/publication.schema.json"
+}

@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft PublicationResolution",
+  "type": "object",
+  "required": [
+    "outcome",
+    "receipt_id",
+    "receipt_signer",
+    "resolution",
+    "actor",
+    "authority",
+    "authority_decision",
+    "project_security_state_at_resolution",
+    "policy_digest_at_resolution",
+    "global_registry_revisions_at_resolution",
+    "rationale",
+    "resolved_at"
+  ],
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "receipt_id": {
+      "type": "string",
+      "pattern": "^rcp_[A-Za-z0-9_-]+$"
+    },
+    "receipt_signer": {
+      "type": "object",
+      "required": [
+        "signer_identity",
+        "signing_key_id",
+        "signature_algorithm"
+      ],
+      "properties": {
+        "signer_identity": {
+          "type": "string",
+          "pattern": "^act_[A-Za-z0-9_-]+$"
+        },
+        "signing_key_id": {
+          "type": "string"
+        },
+        "signature_algorithm": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resolution": {
+      "type": "object",
+      "required": [
+        "resolution"
+      ],
+      "properties": {
+        "resolution": {
+          "enum": [
+            "resolved_succeeded",
+            "resolved_failed"
+          ]
+        },
+        "external_reference": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "supersedes": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "actor": {
+      "type": "string",
+      "pattern": "^act_[A-Za-z0-9_-]+$"
+    },
+    "authority": {
+      "type": "object",
+      "required": [
+        "kind",
+        "digest"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "logical_id": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "authority_decision": {
+      "type": "object",
+      "required": [
+        "scope",
+        "outcome",
+        "considered",
+        "evaluator",
+        "decided_at"
+      ],
+      "properties": {
+        "scope": {
+          "type": "object",
+          "required": [
+            "capability",
+            "subject"
+          ],
+          "properties": {
+            "capability": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "subject": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "outcome": {
+          "type": "object",
+          "required": [
+            "outcome"
+          ],
+          "properties": {
+            "outcome": {
+              "enum": [
+                "permitted",
+                "refused"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "considered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "digest"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "logical_id": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "evaluator": {
+          "type": "object",
+          "required": [
+            "producer",
+            "version"
+          ],
+          "properties": {
+            "producer": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "decided_at": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "project_security_state_at_resolution": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "policy_digest_at_resolution": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "global_registry_revisions_at_resolution": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "resolved_at": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/publication-resolution.schema.json"
+}

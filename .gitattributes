@@ -1,0 +1,2 @@
+# Console assets are reproducible build output, not hand-edited source.
+console/dist/** linguist-generated=true -whitespace

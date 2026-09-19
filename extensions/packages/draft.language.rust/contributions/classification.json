@@ -1,0 +1,9 @@
+{
+  "class_id": "draft.language.rust/source",
+  "display_name": "Rust source",
+  "applies_to": {
+    "predicate": "path_suffix",
+    "suffix": ".rs"
+  },
+  "attributes": []
+}

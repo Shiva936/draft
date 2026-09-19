@@ -1,0 +1,12 @@
+{
+  "presentation_id": "draft.language.rust/source-view",
+  "surface": "resource_view",
+  "binding": {
+    "binding": "resource_class",
+    "class_id": "draft.language.rust/source"
+  },
+  "engine": "text_editor",
+  "config": {
+    "grammar": "rust"
+  }
+}

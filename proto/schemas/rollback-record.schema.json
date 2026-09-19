@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/rollback-record.schema.json",
+  "title": "Draft Rollback Record",
+  "type": "object",
+  "required": [
+    "schema_version", "id", "rollback_plan_id", "actor_id", "status",
+    "started_at", "ended_at", "record_digest"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^rcp_[A-Za-z0-9_-]+$" },
+    "rollback_plan_id": { "type": "string", "pattern": "^rbp_[A-Za-z0-9_-]+$" },
+    "actor_id": { "type": "string", "pattern": "^act_[A-Za-z0-9_-]+$" },
+    "status": { "const": "completed" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "ended_at": { "type": "string", "format": "date-time" },
+    "record_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,11 @@
+{
+  "preset_id": "draft.agent.codex/default",
+  "display_name": "Codex",
+  "execution": {
+    "execution": "tool_action",
+    "action_id": "draft.agent.codex/run"
+  },
+  "limits": {
+    "max_resources_changed": 200
+  }
+}

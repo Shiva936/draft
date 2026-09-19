@@ -1,0 +1,38 @@
+{
+  "strategy_id": "draft.text.document/line-alignment",
+  "applies_to": {
+    "predicate": "has_class",
+    "class_id": "draft.text.document/document"
+  },
+  "result_contract": {
+    "schema_id": "draft.text.document/line-changes",
+    "revision": 1
+  },
+  "operation": {
+    "request_contract": {
+      "schema_id": "draft.core/comparison-request",
+      "revision": 1
+    },
+    "response_contract": {
+      "schema_id": "draft.text.document/line-changes",
+      "revision": 1
+    },
+    "max_response_bytes": 4194304,
+    "executor": {
+      "kind": "engine",
+      "engine": "sequence_alignment",
+      "engine_revision": 1,
+      "config": {
+        "tokenizer": {
+          "kind": "delimited",
+          "delimiter_bytes": [
+            10
+          ],
+          "include_delimiter": false
+        },
+        "coordinate_space": "draft.text.document/line",
+        "byte_budget": 4194304
+      }
+    }
+  }
+}

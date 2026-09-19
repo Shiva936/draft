@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/review-progress-state.schema.json",
+  "title": "Draft ChangePack Review Progress",
+  "description": "A descriptive pointer to how far a ChangePack's current content revision has travelled through review. Derived from authoritative ChangePack and governance state; never an authority over ChangePack lifecycle, Baselines or Promotion.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "change_pack_id",
+    "content_revision_id",
+    "content_revision_digest",
+    "progress",
+    "updated_at",
+    "last_operation_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "change_pack_id": {
+      "type": "string",
+      "pattern": "^cpk_[A-Za-z0-9_-]+$"
+    },
+    "content_revision_id": {
+      "type": "string"
+    },
+    "content_revision_digest": {
+      "type": "string"
+    },
+    "progress": {
+      "enum": [
+        "draft",
+        "verified",
+        "reviewing",
+        "approved",
+        "rejected",
+        "submitted"
+      ]
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_operation_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

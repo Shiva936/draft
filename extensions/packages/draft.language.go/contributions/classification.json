@@ -1,0 +1,9 @@
+{
+  "class_id": "draft.language.go/source",
+  "display_name": "Go source",
+  "applies_to": {
+    "predicate": "path_suffix",
+    "suffix": ".go"
+  },
+  "attributes": []
+}

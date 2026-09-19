@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "draft.software.project",
+  "name": "Software project",
+  "version": "1.0.0",
+  "publisher": "draft",
+  "draft_api": "^0.3.4",
+  "contributions": [
+    {
+      "id": "policy",
+      "kind": "policy_preset",
+      "path": "contributions/policy.json"
+    },
+    {
+      "id": "risk-rules",
+      "kind": "risk_rule",
+      "path": "contributions/risk-rules.json"
+    },
+    {
+      "id": "intents",
+      "kind": "intent_vocabulary",
+      "path": "contributions/intents.json"
+    },
+    {
+      "id": "task-add-tests",
+      "kind": "task_template",
+      "path": "contributions/task-add-tests.json"
+    },
+    {
+      "id": "task-fix-defect",
+      "kind": "task_template",
+      "path": "contributions/task-fix-defect.json"
+    },
+    {
+      "id": "task-refactor",
+      "kind": "task_template",
+      "path": "contributions/task-refactor.json"
+    },
+    {
+      "id": "task-update-dependency",
+      "kind": "task_template",
+      "path": "contributions/task-update-dependency.json"
+    },
+    {
+      "id": "task-document",
+      "kind": "task_template",
+      "path": "contributions/task-document.json"
+    },
+    {
+      "id": "task-harden-security",
+      "kind": "task_template",
+      "path": "contributions/task-harden-security.json"
+    },
+    {
+      "id": "task-improve-performance",
+      "kind": "task_template",
+      "path": "contributions/task-improve-performance.json"
+    },
+    {
+      "id": "task-migrate-data",
+      "kind": "task_template",
+      "path": "contributions/task-migrate-data.json"
+    },
+    {
+      "id": "task-remove-dead-code",
+      "kind": "task_template",
+      "path": "contributions/task-remove-dead-code.json"
+    },
+    {
+      "id": "task-triage-failure",
+      "kind": "task_template",
+      "path": "contributions/task-triage-failure.json"
+    }
+  ],
+  "documentation": [
+    "docs/readme.md"
+  ],
+  "licenses": [
+    "LICENSE.txt"
+  ],
+  "assets": [],
+  "schemas": [],
+  "permissions": [],
+  "description": "View rules, risk rules, intents and task templates for software projects.",
+  "keywords": [
+    "software",
+    "project",
+    "policy"
+  ]
+}

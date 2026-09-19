@@ -1,0 +1,34 @@
+{
+  "format_revision": 1,
+  "manifest_canonical": "{\"assets\":[],\"contributions\":[{\"id\":\"classification\",\"kind\":\"resource_classification\",\"path\":\"contributions/classification.json\"},{\"id\":\"verification\",\"kind\":\"verification\",\"path\":\"contributions/verification.json\"}],\"description\":\"Frozen contract vector\",\"documentation\":[\"docs/readme.md\"],\"draft_api\":\"^0.3.4\",\"id\":\"example.vector\",\"keywords\":[\"vector\"],\"licenses\":[\"LICENSE.txt\"],\"name\":\"Vector\",\"permissions\":[\"process.execute\"],\"publisher\":\"example\",\"schema_version\":1,\"schemas\":[{\"path\":\"schemas/result.schema.json\",\"revision\":1,\"schema_id\":\"example.vector/result\"}],\"version\":\"1.2.3\"}",
+  "canonical_json": "{\"a\":{\"control\":\"\\u0001\",\"unicode\":\"snowman \u2603\"},\"number\":12.5,\"z\":[3,{\"a\":true,\"b\":\"line\\nfeed\"}]}",
+  "package_stream_length": 2099,
+  "package_digest": "sha256:5b63564e9390ddb7376e4dbf7ea401890d74aa3beb3599d6153a7b617a53ec23",
+  "catalog_signable": "{\"catalog_id\":\"vector-catalog\",\"delegations\":[],\"expires_at\":\"2030-01-01T00:00:00Z\",\"packages\":[{\"artifact_path\":\"packages/example.vector-1.2.3.tar\",\"capabilities\":[\"file_association\"],\"description\":\"Frozen contract vector\",\"draft_api\":\"^0.3.4\",\"id\":\"example.vector\",\"keywords\":[\"vector\",\"v1\"],\"length\":716,\"name\":\"V1 Vector\",\"publisher\":\"example\",\"sha256\":\"sha256:75573270d12bba030aafca09419d33f72ece1a09315a63d6e9b67a9050c64ddf\",\"version\":\"1.2.3\"}],\"role\":\"targets\",\"schema_version\":1,\"version\":7}",
+  "public_key": "6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=",
+  "signature": "k7oeHP8n996519LaEYa5ygKuvNnzh19x3+w27JxWT9nmMlvrLOsHRJQrgkVxKiXBKkZQBWQrVmPGcaHWnUB3CQ==",
+  "compatibility": [
+    {
+      "requirement": "^0.3.4",
+      "api_version": "0.3.4",
+      "supported": true
+    },
+    {
+      "requirement": "^0.3.4",
+      "api_version": "0.3.3",
+      "supported": false
+    },
+    {
+      "requirement": "^0.3.4",
+      "api_version": "0.4.0",
+      "supported": false
+    },
+    {
+      "requirement": "not a requirement",
+      "api_version": "0.3.4",
+      "supported": false
+    }
+  ],
+  "classification_canonical": "{\"applies_to\":{\"equals\":\"application/vector\",\"predicate\":\"media_type\"},\"class_id\":\"example.vector/document\",\"display_name\":\"Vector document\"}",
+  "verification_canonical": "{\"checks\":[{\"applies_to\":{\"class_id\":\"example.vector/document\",\"predicate\":\"has_class\"},\"check_id\":\"example.vector/all\",\"display_name\":\"Vector check\",\"operation\":{\"executor\":{\"command\":{\"args\":[\"--all\"],\"program\":\"vector-check\"},\"kind\":\"command\"},\"max_response_bytes\":65536,\"request_contract\":{\"revision\":1,\"schema_id\":\"draft.core/check-request\"},\"response_contract\":{\"revision\":1,\"schema_id\":\"example.vector/result\"}},\"requirement\":\"required\",\"selection\":\"whole\"}]}"
+}

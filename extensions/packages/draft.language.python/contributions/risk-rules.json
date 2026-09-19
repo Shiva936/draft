@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "code": "draft.language.python/dependency-lockfile",
+      "weight": 4,
+      "when": {
+        "condition": "resources_matching",
+        "predicate": {
+          "predicate": "raw",
+          "of": {
+            "predicate": "path_glob",
+            "glob": "**/uv.lock"
+          }
+        },
+        "at_least": 1
+      },
+      "explanation": "a dependency lockfile changed"
+    }
+  ]
+}

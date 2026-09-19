@@ -1,0 +1,39 @@
+{
+  "intents": [
+    {
+      "intent_id": "draft.software.project/feature",
+      "display_name": "Feature",
+      "description": "New behaviour."
+    },
+    {
+      "intent_id": "draft.software.project/fix",
+      "display_name": "Fix",
+      "description": "Corrects a defect."
+    },
+    {
+      "intent_id": "draft.software.project/refactor",
+      "display_name": "Refactor",
+      "description": "Restructures without changing behaviour."
+    },
+    {
+      "intent_id": "draft.software.project/security",
+      "display_name": "Security",
+      "description": "Addresses a security concern."
+    },
+    {
+      "intent_id": "draft.software.project/docs",
+      "display_name": "Documentation",
+      "description": "Changes documentation only."
+    },
+    {
+      "intent_id": "draft.software.project/chore",
+      "display_name": "Chore",
+      "description": "Maintenance with no behavioural intent."
+    },
+    {
+      "intent_id": "draft.software.project/migration",
+      "display_name": "Migration",
+      "description": "Moves or reshapes persisted data."
+    }
+  ]
+}

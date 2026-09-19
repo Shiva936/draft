@@ -11,7 +11,7 @@ fn ignores_draft_writeback_paths() {
         "repo/.draft/operations/0001.operation.json"
     )));
     assert!(!should_ignore(Path::new("repo/src/main.rs")));
-    assert!(!should_ignore(Path::new("repo/.draft/config.toml")));
+    assert!(should_ignore(Path::new("repo/.draft/config.toml")));
 }
 
 #[test]

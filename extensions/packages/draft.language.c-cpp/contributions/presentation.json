@@ -1,0 +1,12 @@
+{
+  "presentation_id": "draft.language.c-cpp/source-view",
+  "surface": "resource_view",
+  "binding": {
+    "binding": "resource_class",
+    "class_id": "draft.language.c-cpp/source"
+  },
+  "engine": "text_editor",
+  "config": {
+    "grammar": "cpp"
+  }
+}

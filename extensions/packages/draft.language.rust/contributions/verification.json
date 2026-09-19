@@ -1,0 +1,97 @@
+{
+  "checks": [
+    {
+      "check_id": "draft.language.rust/suite",
+      "display_name": "Cargo test suite",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.rust/source"
+      },
+      "requirement": "required",
+      "selection": "whole",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "cargo",
+            "args": [
+              "test",
+              "--workspace"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "check_id": "draft.language.rust/lint",
+      "display_name": "Clippy",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.rust/source"
+      },
+      "requirement": "optional",
+      "selection": "whole",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "cargo",
+            "args": [
+              "clippy",
+              "--workspace",
+              "--all-targets"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "check_id": "draft.language.rust/toolchain",
+      "display_name": "Toolchain probe",
+      "applies_to": {
+        "predicate": "has_class",
+        "class_id": "draft.language.rust/source"
+      },
+      "requirement": "optional",
+      "selection": "environment_probe",
+      "operation": {
+        "request_contract": {
+          "schema_id": "draft.core/verification-request",
+          "revision": 1
+        },
+        "response_contract": {
+          "schema_id": "draft.core/verification-result",
+          "revision": 1
+        },
+        "max_response_bytes": 1048576,
+        "executor": {
+          "kind": "command",
+          "command": {
+            "program": "cargo",
+            "args": [
+              "--version"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

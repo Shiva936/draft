@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "code": "draft.language.hcl/infrastructure-change",
+      "weight": 5,
+      "when": {
+        "condition": "resources_matching",
+        "predicate": {
+          "predicate": "raw",
+          "of": {
+            "predicate": "path_glob",
+            "glob": "**/*.tf"
+          }
+        },
+        "at_least": 1
+      },
+      "explanation": "infrastructure definitions changed"
+    }
+  ]
+}

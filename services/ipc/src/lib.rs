@@ -1,15 +1,34 @@
-//! Local-only IPC for `draftd` (TDD §8.3). Newline-delimited JSON over a Unix
+//! Local-only IPC for `draftd`. Newline-delimited JSON over a Unix
 //! domain socket (Linux/macOS); a localhost-loopback fallback is used on other
 //! platforms. Blocking std sockets + a thread per connection — no async runtime.
 
+pub mod console_application;
+pub mod console_contracts;
 pub mod protocol;
 
-pub use protocol::{ErrorObject, Request, Response};
+/// Contract-specific versions consumed by transport adapters that should not
+/// depend on Draft domain crates directly.
+pub mod contract_versions {
+    use draft_core::contracts::{current_version, ContractId};
+
+    pub const IPC_HANDSHAKE_REQUEST: u32 = current_version(ContractId::IpcHandshakeRequest);
+    pub const CONSOLE_API_ENVELOPE: u32 = current_version(ContractId::ConsoleApiEnvelope);
+    pub const CONSOLE_API_FAILURE: u32 = current_version(ContractId::ConsoleApiFailure);
+    pub const CONSOLE_SESSION: u32 = current_version(ContractId::ConsoleSession);
+    pub const CONSOLE_MUTATION_REQUEST: u32 = current_version(ContractId::ConsoleMutationRequest);
+    pub const CONSOLE_JOBS_EVENT: u32 = current_version(ContractId::ConsoleJobsEvent);
+    pub const CONSOLE_DAEMON_EVENT: u32 = current_version(ContractId::ConsoleDaemonEvent);
+}
+
+pub use protocol::{
+    ErrorObject, HandshakeRequest, HandshakeResponse, ProgressEvent, Request, Response,
+    IPC_CAPABILITIES, IPC_PROTOCOL,
+};
 
 use std::io;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 #[cfg(unix)]
 use std::sync::atomic::Ordering;
@@ -19,15 +38,41 @@ use std::sync::Arc;
 pub type Handler = Arc<dyn Fn(Request) -> Response + Send + Sync>;
 
 /// The conventional socket path (`$XDG_RUNTIME_DIR/draft/draftd.sock`, falling
-/// back to `~/.local/state/draft/draftd.sock`).
+/// back to `~/.local/state/draft/draftd.sock`). On Unix, the XDG runtime
+/// directory is used only when it satisfies the ownership and permissions
+/// required by the XDG Base Directory specification.
 pub fn socket_path() -> PathBuf {
-    if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
-        if !rt.is_empty() {
-            return PathBuf::from(rt).join("draft").join("draftd.sock");
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        if runtime_dir_is_usable(&runtime_dir) {
+            return runtime_dir.join("draft").join("draftd.sock");
         }
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".local/state/draft/draftd.sock")
+    fallback_socket_path()
+}
+
+fn fallback_socket_path() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".local/state/draft/draftd.sock")
+}
+
+#[cfg(unix)]
+fn runtime_dir_is_usable(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    let mode = metadata.mode() & 0o777;
+    // SAFETY: `geteuid` has no arguments or caller-side safety requirements.
+    let effective_uid = unsafe { libc::geteuid() };
+    metadata.is_dir() && metadata.uid() == effective_uid && mode == 0o700
+}
+
+#[cfg(not(unix))]
+fn runtime_dir_is_usable(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
 }
 
 #[cfg(unix)]
@@ -95,10 +140,12 @@ mod imp {
                 }
                 Err(e) => Response::err(
                     "",
-                    ErrorObject::new("IPC_ERROR", format!("invalid request: {e}")),
+                    ErrorObject::new("VALIDATION_ERROR", format!("invalid request: {e}")),
                 ),
             };
-            let mut buf = serde_json::to_string(&response).unwrap_or_default();
+            let Ok(mut buf) = serde_json::to_string(&response) else {
+                break;
+            };
             buf.push('\n');
             if writer.write_all(buf.as_bytes()).is_err() {
                 break;
@@ -119,6 +166,8 @@ mod imp {
         reader.read_line(&mut resp_line)?;
         let resp: Response = serde_json::from_str(resp_line.trim())
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        resp.validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.message))?;
         Ok(resp)
     }
 }
@@ -183,10 +232,12 @@ mod imp {
                 }
                 Err(e) => Response::err(
                     "",
-                    ErrorObject::new("IPC_ERROR", format!("invalid request: {e}")),
+                    ErrorObject::new("VALIDATION_ERROR", format!("invalid request: {e}")),
                 ),
             };
-            let mut buf = serde_json::to_string(&response).unwrap_or_default();
+            let Ok(mut buf) = serde_json::to_string(&response) else {
+                break;
+            };
             buf.push('\n');
             if writer.write_all(buf.as_bytes()).is_err() {
                 break;
@@ -207,6 +258,8 @@ mod imp {
         reader.read_line(&mut resp_line)?;
         let resp: Response = serde_json::from_str(resp_line.trim())
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        resp.validate()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.message))?;
         Ok(resp)
     }
 }
@@ -227,4 +280,77 @@ pub fn is_running(path: &std::path::Path) -> bool {
         call(path, &Request::new("ping", "service.ping", serde_json::Value::Null)),
         Ok(r) if r.ok
     )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::ffi::{OsStr, OsString};
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            EnvVarGuard { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            EnvVarGuard { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[test]
+    fn socket_path_uses_only_valid_xdg_runtime_directories() {
+        let _env_lock = env_lock().lock().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let _home = EnvVarGuard::set("HOME", &home);
+        let fallback = home.join(".local/state/draft/draftd.sock");
+
+        let _runtime = EnvVarGuard::unset("XDG_RUNTIME_DIR");
+        assert_eq!(socket_path(), fallback);
+
+        std::env::set_var("XDG_RUNTIME_DIR", "");
+        assert_eq!(socket_path(), fallback);
+
+        std::env::set_var("XDG_RUNTIME_DIR", root.path().join("missing"));
+        assert_eq!(socket_path(), fallback);
+
+        let insecure = root.path().join("insecure");
+        std::fs::create_dir(&insecure).unwrap();
+        std::fs::set_permissions(&insecure, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("XDG_RUNTIME_DIR", &insecure);
+        assert_eq!(socket_path(), fallback);
+
+        let valid = root.path().join("runtime");
+        std::fs::create_dir(&valid).unwrap();
+        std::fs::set_permissions(&valid, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::env::set_var("XDG_RUNTIME_DIR", &valid);
+        assert_eq!(socket_path(), valid.join("draft/draftd.sock"));
+    }
 }

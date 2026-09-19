@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft PublicationRetryAuthorization",
+  "type": "object",
+  "required": [
+    "publication",
+    "prior_outcome",
+    "actor",
+    "authority",
+    "authority_decision",
+    "project_security_state_at_authorization",
+    "policy_digest_at_authorization",
+    "global_registry_revisions_at_authorization",
+    "rationale",
+    "duplicate_risk_acknowledged",
+    "authorizes_one_attempt",
+    "authorized_at"
+  ],
+  "properties": {
+    "publication": {
+      "type": "object",
+      "required": [
+        "id",
+        "digest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^pub_[A-Za-z0-9_-]+$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "prior_outcome": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "actor": {
+      "type": "string",
+      "pattern": "^act_[A-Za-z0-9_-]+$"
+    },
+    "authority": {
+      "type": "object",
+      "required": [
+        "kind",
+        "digest"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "logical_id": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "authority_decision": {
+      "type": "object",
+      "required": [
+        "scope",
+        "outcome",
+        "considered",
+        "evaluator",
+        "decided_at"
+      ],
+      "properties": {
+        "scope": {
+          "type": "object",
+          "required": [
+            "capability",
+            "subject"
+          ],
+          "properties": {
+            "capability": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "subject": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "outcome": {
+          "type": "object",
+          "required": [
+            "outcome"
+          ],
+          "properties": {
+            "outcome": {
+              "enum": [
+                "permitted",
+                "refused"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "considered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "kind",
+              "digest"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "logical_id": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "evaluator": {
+          "type": "object",
+          "required": [
+            "producer",
+            "version"
+          ],
+          "properties": {
+            "producer": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9.-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "decided_at": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "project_security_state_at_authorization": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "policy_digest_at_authorization": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "global_registry_revisions_at_authorization": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer"
+      }
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "duplicate_risk_acknowledged": {
+      "const": true
+    },
+    "authorizes_one_attempt": {
+      "const": true
+    },
+    "authorized_at": {
+      "type": "integer"
+    },
+    "expires_at": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false,
+  "$id": "https://draft.dev/schemas/publication-retry-authorization.schema.json"
+}

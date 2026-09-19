@@ -1,0 +1,118 @@
+//! Crash-safe filesystem helpers shared by all storage layers.
+//!
+//! All structured writes go through atomic write-then-rename (DR-002, NFR-005)
+//! so a partial write is never observed as a valid record.
+
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
+use crate::support::error::{DraftError, DraftResult};
+
+/// Ensure a directory (and parents) exists.
+pub fn ensure_dir(dir: &Path) -> DraftResult<()> {
+    fs::create_dir_all(dir).map_err(|e| {
+        DraftError::storage(format!("failed to create directory {}: {e}", dir.display()))
+    })
+}
+
+/// Atomically write bytes to `path` (temp file + fsync + rename).
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> DraftResult<()> {
+    if let Some(parent) = path.parent() {
+        ensure_dir(parent)?;
+    }
+    // Unique temp name to avoid concurrent writers clobbering each other.
+    let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
+    {
+        let mut f = fs::File::create(&tmp).map_err(|e| {
+            DraftError::storage(format!("failed to create temp file {}: {e}", tmp.display()))
+        })?;
+        f.write_all(bytes)
+            .map_err(|e| DraftError::storage(format!("failed to write {}: {e}", tmp.display())))?;
+        f.flush()
+            .map_err(|e| DraftError::storage(format!("failed to flush {}: {e}", tmp.display())))?;
+        f.sync_all()
+            .map_err(|e| DraftError::storage(format!("failed to sync {}: {e}", tmp.display())))?;
+    }
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        DraftError::storage(format!("failed to rename into {}: {e}", path.display()))
+    })?;
+    // Syncing the file is not enough: after `rename` the *directory entry* is
+    // still only in the page cache, so a crash here can leave the old contents
+    // behind with the new file's bytes safely on disk and unreachable. Journal
+    // recovery depends on the order of these writes actually surviving a crash,
+    // so the directory is synced too.
+    if let Some(parent) = path.parent() {
+        sync_directory(parent)?;
+    }
+    Ok(())
+}
+
+/// Flush a directory entry to disk.
+///
+/// Unix only. Windows offers no portable equivalent — a directory cannot be
+/// opened as a file — and its rename is already ordered against the metadata
+/// log, so there is nothing to add there.
+pub fn sync_directory(path: &Path) -> DraftResult<()> {
+    #[cfg(unix)]
+    {
+        let directory = fs::File::open(path).map_err(|e| {
+            DraftError::storage(format!("failed to open {} to sync: {e}", path.display()))
+        })?;
+        directory
+            .sync_all()
+            .map_err(|e| DraftError::storage(format!("failed to sync {}: {e}", path.display())))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
+pub fn write_json<T: Serialize>(path: &Path, value: &T) -> DraftResult<()> {
+    let s = serde_json::to_string_pretty(value)
+        .map_err(|e| DraftError::storage(format!("JSON serialize failed: {e}")))?;
+    write_atomic(path, s.as_bytes())
+}
+
+pub fn write_toml<T: Serialize>(path: &Path, value: &T) -> DraftResult<()> {
+    let s = toml::to_string_pretty(value)
+        .map_err(|e| DraftError::storage(format!("TOML serialize failed: {e}")))?;
+    write_atomic(path, s.as_bytes())
+}
+
+pub fn read_toml<T: DeserializeOwned>(path: &Path) -> DraftResult<T> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| DraftError::not_found(format!("cannot read {}: {e}", path.display())))?;
+    toml::from_str(&content).map_err(|e| {
+        DraftError::new(
+            crate::support::error::DraftErrorKind::CorruptData,
+            format!("TOML parse failed for {}: {e}", path.display()),
+        )
+    })
+}
+
+/// Read a directory's immediate entries with the given extension (no dot),
+/// returning full paths. Returns empty if the directory does not exist.
+pub fn list_with_extension(dir: &Path, ext: &str) -> DraftResult<Vec<std::path::PathBuf>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir)
+        .map_err(|e| DraftError::storage(format!("cannot read dir {}: {e}", dir.display())))?
+    {
+        let entry = entry.map_err(|e| DraftError::storage(e.to_string()))?;
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some(ext) {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}

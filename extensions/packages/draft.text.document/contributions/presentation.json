@@ -1,0 +1,12 @@
+{
+  "presentation_id": "draft.text.document/document-view",
+  "surface": "resource_view",
+  "binding": {
+    "binding": "resource_class",
+    "class_id": "draft.text.document/document"
+  },
+  "engine": "text_editor",
+  "config": {
+    "grammar": "plain"
+  }
+}

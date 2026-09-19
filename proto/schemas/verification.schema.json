@@ -1,13 +1,254 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Draft Verification",
+  "$id": "https://draft.dev/schemas/verification.schema.json",
+  "title": "Draft Verification Evidence",
   "type": "object",
-  "required": ["verification_key", "status", "workspace_hash"],
+  "required": [
+    "schema_version",
+    "change_pack_id",
+    "content_revision_id",
+    "content_revision_digest",
+    "dependency_digests",
+    "selection_reason",
+    "duration_ms",
+    "stdout_digest",
+    "stderr_digest",
+    "result_hash",
+    "verification_key",
+    "state",
+    "check_results",
+    "aggregator_revision"
+  ],
   "properties": {
-    "verification_key": { "type": "string" },
-    "status": { "enum": ["verified", "failed"] },
-    "workspace_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
-    "checks": { "type": "array" }
+    "schema_version": {
+      "const": 1
+    },
+    "change_pack_id": {
+      "type": "string",
+      "pattern": "^cpk_[A-Za-z0-9_-]+$"
+    },
+    "content_revision_id": {
+      "type": "string",
+      "pattern": "^content_[A-Za-z0-9_-]+$"
+    },
+    "content_revision_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "dependency_digests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/digest"
+      }
+    },
+    "selection_reason": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stdout_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "stderr_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "result_hash": {
+      "$ref": "#/$defs/digest"
+    },
+    "verification_key": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "snapshot_digest",
+            "config_digest",
+            "environment_probe_digest",
+            "check_selection_digest",
+            "producer_digest",
+            "platform_digest",
+            "key"
+          ],
+          "properties": {
+            "config_hash": {
+              "$ref": "#/$defs/digest"
+            },
+            "key": {
+              "$ref": "#/$defs/digest"
+            },
+            "snapshot_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "config_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "environment_probe_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "check_selection_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "producer_digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "platform_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          },
+          "additionalProperties": false
+        }
+      ],
+      "snapshot_digest": {
+        "$ref": "#/$defs/digest"
+      },
+      "environment_probe_digest": {
+        "$ref": "#/$defs/digest"
+      },
+      "check_selection_digest": {
+        "$ref": "#/$defs/digest"
+      },
+      "producer_digest": {
+        "$ref": "#/$defs/digest"
+      },
+      "platform_digest": {
+        "$ref": "#/$defs/digest"
+      }
+    },
+    "aggregator_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The Core semantics that aggregated the individual outcomes."
+    },
+    "state": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "passed",
+            "failed",
+            "unavailable",
+            "not_evaluated",
+            "not_applicable"
+          ],
+          "description": "The aggregate. Only `passed` satisfies a gate on its own: no checks can never mean passed, and an optional pass never masks a required gap."
+        }
+      }
+    },
+    "check_results": {
+      "type": "array",
+      "description": "Every check that was selected, whether or not it could run.",
+      "items": {
+        "type": "object",
+        "required": [
+          "check_id",
+          "display_name",
+          "requirement",
+          "selection",
+          "reason",
+          "outcome",
+          "producer"
+        ],
+        "properties": {
+          "check_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "requirement": {
+            "enum": [
+              "required",
+              "optional"
+            ]
+          },
+          "selection": {
+            "enum": [
+              "per_resource",
+              "whole",
+              "exploratory",
+              "environment_probe"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "object",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "passed",
+                  "failed",
+                  "unavailable",
+                  "not_evaluated"
+                ]
+              },
+              "detail": {
+                "type": "string"
+              }
+            }
+          },
+          "producer": {
+            "$ref": "#/$defs/producer"
+          },
+          "authorization_decision": {
+            "type": "string",
+            "description": "The decision that permitted a command-backed run. Separate from trust."
+          },
+          "executable_identity": {
+            "type": "string"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      }
+    }
   },
-  "additionalProperties": true
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "producer": {
+      "type": "object",
+      "required": [
+        "extension_id",
+        "extension_version",
+        "package_digest",
+        "attestation_digest"
+      ],
+      "description": "The exact artifact that contributed a check, so old evidence stays verifiable.",
+      "properties": {
+        "extension_id": {
+          "type": "string"
+        },
+        "extension_version": {
+          "type": "string"
+        },
+        "package_digest": {
+          "type": "string"
+        },
+        "attestation_digest": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
 }

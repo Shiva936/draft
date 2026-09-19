@@ -1,0 +1,5 @@
+{
+  "z": [3, {"b": "line\nfeed", "a": true}],
+  "a": {"unicode": "snowman ☃", "control": "\u0001"},
+  "number": 12.5
+}

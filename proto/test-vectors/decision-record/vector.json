@@ -1,0 +1,27 @@
+{
+  "name": "decision-record",
+  "payload_schema": "decision-record.schema.json",
+  "notes": "an approval cites the exact grant that permitted it; a rejection needs none",
+  "payload": {
+    "id": "dec_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
+    "outcome": { "outcome": "approved" },
+    "decided_by": "act_demo",
+    "decided_at": 1752278400000000000,
+    "authority": [
+      {
+        "kind": "draft.security/authority-grant.v1",
+        "logical_id": "auth_demo",
+        "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "invalid_payload": {
+    "id": "dec_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
+    "outcome": { "outcome": "maybe" },
+    "decided_by": "act_demo",
+    "decided_at": 1752278400000000000
+  },
+  "expect": { "valid": true }
+}

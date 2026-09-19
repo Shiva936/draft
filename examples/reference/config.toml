@@ -1,0 +1,30 @@
+# Example .draft/config.toml for Draft.
+
+schema_version = 1
+
+[user]
+name = "Ada"
+email = "ada@example.com"
+
+# A hook is an opaque local command. Draft renders its placeholders, runs it
+# directly with a cleared environment and an enforced time limit, and records
+# what it did. It is never a promotion: what the project accepts changes only
+# through `draft promote`, on an approving Decision citing a satisfied Gate.
+[hooks.verify]
+kind = "entry"
+
+[hooks.verify.entry]
+command = "cargo test"
+enabled = true
+cwd = "workspace"
+timeout_ms = 300000
+continue_on_error = false
+
+[verification]
+default_profile = "standard"
+
+[policy]
+require_verification = true
+require_approval = true
+require_human_approval_for_high_risk = true
+block_on_failed_verification = true

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "id": "draft.text.document",
+  "name": "Text documents",
+  "version": "1.0.0",
+  "publisher": "draft",
+  "draft_api": "^0.3.4",
+  "contributions": [
+    {
+      "id": "classification",
+      "kind": "resource_classification",
+      "path": "contributions/classification.json"
+    },
+    {
+      "id": "comparison",
+      "kind": "comparison",
+      "path": "contributions/comparison.json"
+    },
+    {
+      "id": "presentation",
+      "kind": "presentation",
+      "path": "contributions/presentation.json"
+    },
+    {
+      "id": "change-presentation",
+      "kind": "presentation",
+      "path": "contributions/change-presentation.json"
+    }
+  ],
+  "documentation": [
+    "docs/readme.md"
+  ],
+  "licenses": [
+    "LICENSE.txt"
+  ],
+  "assets": [],
+  "schemas": [],
+  "permissions": [],
+  "description": "Line-level comparison and review units for text resources.",
+  "keywords": [
+    "text",
+    "diff",
+    "review"
+  ]
+}

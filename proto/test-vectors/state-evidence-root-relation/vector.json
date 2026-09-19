@@ -1,0 +1,21 @@
+{
+  "expect": "a Relation subject carries relation evidence and can never carry an observation",
+  "name": "state-evidence-root-relation",
+  "payload": {
+    "entries": [
+      {
+        "evidence": [
+          {
+            "evidence": "relation_record",
+            "record": "sha256:3a5fb2c4a7849a6e33cd0216113c8f93cc0a5696a40fb5e978ca38d8d5c72e14"
+          }
+        ],
+        "state": "sha256:f3bf3ed978d90b3496e41116b8a8e2442d795fd880bef140e02931239cdff97d",
+        "subject": "relation"
+      }
+    ],
+    "schema_version": 1,
+    "state_evidence_root": "sha256:ca1b8921d0993e930d18ac05557da8f530dbabbbe27ce61d1fcc26df494fba1a"
+  },
+  "payload_schema": "state-evidence-entry.schema.json"
+}

@@ -1,0 +1,12 @@
+{
+  "presentation_id": "draft.text.document/line-change-view",
+  "surface": "change_view",
+  "binding": {
+    "binding": "resource_class",
+    "class_id": "draft.text.document/document"
+  },
+  "engine": "unit_change_view",
+  "config": {
+    "coordinate_space": "draft.text.document/line"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/registry.schema.json",
+  "title": "Draft Workspace Registry",
+  "type": "object",
+  "required": ["schema_version", "revision", "updated_at", "entries"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/entry" } }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "schema_version", "workspace_id", "name", "project_path",
+        "storage_path", "created_at", "last_seen_at", "draft_version",
+        "health", "location_revision", "path_history", "last_workspace_revision"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "workspace_id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string" },
+        "project_path": { "type": "string" },
+        "storage_path": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "last_seen_at": { "type": "string", "format": "date-time" },
+        "last_accepted_baseline": { "type": ["string", "null"] },
+        "draft_version": { "type": "string", "minLength": 1 },
+        "health": { "type": "string" },
+        "location_revision": { "type": "integer", "minimum": 1 },
+        "path_history": { "type": "array" },
+        "last_workspace_revision": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

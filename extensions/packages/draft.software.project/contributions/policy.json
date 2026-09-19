@@ -1,0 +1,78 @@
+{
+  "view_rules": {
+    "exclusions": [
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": ".git/**"
+        },
+        "reason": "an external history tool's control directory"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": ".hg/**"
+        },
+        "reason": "an external history tool's control directory"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": ".svn/**"
+        },
+        "reason": "an external history tool's control directory"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/.DS_Store"
+        },
+        "reason": "editor and platform metadata"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/node_modules/**"
+        },
+        "reason": "installed dependencies, not authored state"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/target/**"
+        },
+        "reason": "build output, not authored state"
+      }
+    ]
+  },
+  "control_policy": {
+    "protections": [
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/.npmrc"
+        },
+        "reason": "registry credentials"
+      },
+      {
+        "predicate": {
+          "predicate": "path_glob",
+          "glob": "**/.pypirc"
+        },
+        "reason": "registry credentials"
+      }
+    ],
+    "verification_escalations": [
+      {
+        "intent": "draft.software.project/security",
+        "require_full": true,
+        "require_exploratory": true
+      },
+      {
+        "intent": "draft.software.project/migration",
+        "require_full": true,
+        "require_exploratory": false
+      }
+    ]
+  }
+}

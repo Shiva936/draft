@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/waiver.schema.json",
+  "title": "Draft Gate Waiver",
+  "x-draft-format-revision": 1,
+  "description": "An authorized exception to one gate condition, on one exact revision. Bound to the revision rather than the ChangePack: an exception accepted for the work as it stood is not an exception for whatever it becomes.",
+  "type": "object",
+  "required": ["id", "revision_pack", "condition", "reason", "waived_by", "waived_at", "expires_at", "authority"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "revision_pack": { "type": "string", "pattern": "^rpk_[A-Za-z0-9_-]+$" },
+    "condition": { "type": "string", "minLength": 1 },
+    "reason": {
+      "description": "Required: an unexplained waiver cannot be reviewed, renewed or revoked on its merits.",
+      "type": "string",
+      "minLength": 1
+    },
+    "waived_by": { "type": "string", "pattern": "^act_[A-Za-z0-9_-]+$" },
+    "waived_at": { "type": "integer" },
+    "expires_at": {
+      "description": "Strictly later than waived_at: a waiver that expires no later than it was granted waives nothing.",
+      "type": "integer"
+    },
+    "authority": {
+      "type": "object",
+      "required": ["kind", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "logical_id": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

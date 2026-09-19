@@ -1,0 +1,9 @@
+{
+  "class_id": "draft.language.python/source",
+  "display_name": "Python source",
+  "applies_to": {
+    "predicate": "path_suffix",
+    "suffix": ".py"
+  },
+  "attributes": []
+}

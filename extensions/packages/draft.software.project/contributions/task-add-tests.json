@@ -1,0 +1,22 @@
+{
+  "template_id": "draft.software.project/add-tests",
+  "display_name": "Add tests",
+  "description": "Cover the changed behaviour with tests.",
+  "steps": [
+    {
+      "id": "establish",
+      "label": "Establish the current behaviour"
+    },
+    {
+      "id": "change",
+      "label": "Add tests"
+    },
+    {
+      "id": "prove",
+      "label": "Record evidence a reviewer can check"
+    }
+  ],
+  "success_criteria": [
+    "The stated goal is met and the evidence records it."
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "expect": "`request_key` is recomputed from the Publication's own canonical inputs, never trusted",
+  "name": "publication-request-key",
+  "payload": {
+    "authority_inputs": [
+      {
+        "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+        "kind": "draft.security/authority-grant.v1",
+        "logical_id": "auth_1"
+      }
+    ],
+    "baseline": "sha256:8ba8496a2525ae171ffd104d632dede6ef418d9b95962a9d88e2fcdbc8d48d24",
+    "created_at": 1000,
+    "credential_authority_class": "acme.cloud/tenant-prod",
+    "delivery_semantics": "idempotent_by_key",
+    "id": "pub_000000000001",
+    "idempotency_key": "sha256:4a6fed5ade85ee8adab12d6b0d611f3875896a3907e180f18eab57efed1dfce4",
+    "promotion": "pro_000000000001",
+    "purpose": "draft.publish/deploy",
+    "request_key": "sha256:53389ab67f87956941b97dfe056f5703b76d0e34f7c284b7218417e5b22f4ab4",
+    "requested_by": "act_a1",
+    "route": {
+      "operational_profile": "sha256:d2c37032f24630c704e0616299a411d6a89137b3137e7c1d40fae1de9290b0d4",
+      "provenance": {
+        "binding": "pbd_000000000001",
+        "semantic_definition": "sha256:6dcb7e507fb56d1223ddf52bdbef950781bb216759413d0d6bcef3b24521d522"
+      }
+    }
+  },
+  "payload_schema": "publication.schema.json",
+  "self_consistency_violation": {
+    "authority_inputs": [
+      {
+        "digest": "sha256:3492ad65d05a973fef8c825521eeb41ae64625a672a8aeeeabc696e16d62a020",
+        "kind": "draft.security/authority-grant.v1",
+        "logical_id": "auth_1"
+      }
+    ],
+    "baseline": "sha256:8ba8496a2525ae171ffd104d632dede6ef418d9b95962a9d88e2fcdbc8d48d24",
+    "created_at": 1000,
+    "credential_authority_class": "acme.cloud/tenant-prod",
+    "delivery_semantics": "idempotent_by_key",
+    "id": "pub_000000000001",
+    "idempotency_key": "sha256:4a6fed5ade85ee8adab12d6b0d611f3875896a3907e180f18eab57efed1dfce4",
+    "promotion": "pro_000000000001",
+    "purpose": "draft.publish/deploy",
+    "request_key": "sha256:879de5fe5b21d9dee570567ebdbb8b11aeb3055d3126308d954a7bbdd704e4ef",
+    "requested_by": "act_a1",
+    "route": {
+      "operational_profile": "sha256:d2c37032f24630c704e0616299a411d6a89137b3137e7c1d40fae1de9290b0d4",
+      "provenance": {
+        "binding": "pbd_000000000001",
+        "semantic_definition": "sha256:6dcb7e507fb56d1223ddf52bdbef950781bb216759413d0d6bcef3b24521d522"
+      }
+    }
+  }
+}

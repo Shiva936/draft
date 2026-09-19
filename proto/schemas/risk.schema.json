@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://draft.dev/schemas/risk.schema.json",
+  "title": "Draft Risk Evidence",
+  "type": "object",
+  "required": [
+    "schema_version", "change_pack_id", "content_revision_id", "content_revision_digest",
+    "dependency_digests", "risk_level", "risk_score", "explanations",
+    "required_actions", "feature_vector"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "change_pack_id": { "type": "string", "pattern": "^cpk_[A-Za-z0-9_-]+$" },
+    "content_revision_id": { "type": "string" },
+    "content_revision_digest": { "$ref": "#/$defs/digest" },
+    "dependency_digests": { "type": "array", "items": { "$ref": "#/$defs/digest" } },
+    "risk_level": { "enum": ["low", "medium", "high", "critical"] },
+    "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "explanations": { "type": "array", "items": { "type": "string" } },
+    "required_actions": { "type": "array", "items": { "type": "string" } },
+    "feature_vector": { "type": "array", "items": { "type": "number" } }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

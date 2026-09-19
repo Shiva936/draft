@@ -6,8 +6,78 @@ on:
   pull_request:
 
 jobs:
+  console:
+    name: Console (Linux)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console/web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Component tests
+        run: npm test
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify committed bundle is reproducible
+        working-directory: .
+        shell: bash
+        run: |
+          git diff --exit-code -- console/dist
+          test -z "$(git status --porcelain --untracked-files=all -- console/dist)"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build real Console processes
+        working-directory: .
+        run: cargo build --locked -p draft-cli -p draftd
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Real Console browser and screenshot tests
+        run: npm run test:e2e
+
+  security:
+    name: RustSec audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit Rust dependencies
+        run: cargo audit --deny warnings
+
   rust:
     name: ${{ matrix.os }}
+    needs: [console, security]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -36,6 +106,64 @@ jobs:
         shell: bash
         run: scripts/validate-version.sh
 
+      - name: Console architecture contracts
+        shell: bash
+        run: scripts/check-console-architecture.sh
+
+      - name: Core architecture contracts
+        shell: bash
+        run: scripts/check-core-architecture.sh
+
+      - name: Lock discipline
+        shell: bash
+        run: scripts/check-lock-discipline.sh
+
+      - name: Lock order
+        shell: bash
+        run: scripts/check-lock-order.sh
+
+      - name: Activity event ownership
+        shell: bash
+        run: scripts/check-activity-event-ownership.sh
+
+      - name: Extension boundary contracts
+        shell: bash
+        run: scripts/check-extension-architecture.sh
+
+      - name: Retired architecture stays retired
+        shell: bash
+        run: python3 scripts/check-retired-architecture.py
+
+      - name: Telemetry completeness
+        shell: bash
+        run: scripts/check-telemetry-completeness.sh
+
+      - name: Portable DCG contract closure
+        if: runner.os == 'Linux'
+        shell: bash
+        run: scripts/check-portable-contract-closure.sh
+
+      - name: Packaged SDK contracts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: scripts/check-sdk-contract-packages.sh
+
+      - name: Canonical contract names
+        shell: bash
+        run: scripts/check-draft-contract-names.sh
+
+      - name: Closed per-contract schema registry
+        shell: bash
+        run: scripts/check-contract-registry.sh
+
+      - name: Documentation consistency
+        shell: bash
+        run: scripts/check-docs-consistency.sh
+
+      - name: Generated Console contract drift
+        shell: bash
+        run: scripts/check-generated-console-contracts.sh
+
       - name: Installer syntax
         shell: bash
         run: bash -n scripts/validate-version.sh scripts/package-release.sh install.sh && sh -n install.sh
@@ -52,8 +180,26 @@ jobs:
             exit 1
           }
 
+      - name: Release manifest tooling self-test
+        shell: bash
+        run: python3 scripts/release-manifest.py self-test
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # `fuzz/` is excluded from the root workspace, so nothing else notices
+      # when it stops compiling.
+      - name: Fuzz workspace check
+        if: runner.os == 'Linux'
+        run: cd fuzz && cargo check --all-targets
+
+      # Hermetic: every test runs against a temporary installation root and
+      # never touches this runner's own Draft. On Windows this includes the
+      # PowerShell `-ieq` comparator conformance test.
+      - name: Installation lifecycle
+        run: |
+          cargo test -p draft-core --lib installation::
+          cargo test -p draft-cli --test installation_lifecycle
 
       - name: Tests
         run: cargo test --workspace --all-targets
@@ -63,3 +209,13 @@ jobs:
 
       - name: Release build
         run: cargo build --workspace --release
+
+      - name: Platform builds and tests without /extensions/
+        if: runner.os == 'Linux'
+        shell: bash
+        run: scripts/check-platform-without-extensions.sh
+
+      - name: Extensions validate, package and sign standalone
+        if: runner.os == 'Linux'
+        shell: bash
+        run: extensions/scripts/check-standalone.sh

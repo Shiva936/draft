@@ -1,6 +1,9 @@
 [package]
 name = "draft-sessions"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 
 [dependencies]
+# The protocol crate defines what a capability binds to; the session store
+# holds it. No cycle: draft-ipc depends only on draft-core.
+draft-ipc = { path = "../ipc" }

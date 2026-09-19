@@ -18,6 +18,14 @@ pub const IGNORED_SEGMENTS: &[&str] = &[
 
 /// Returns true if `path` should be ignored by the watcher.
 pub fn should_ignore(path: &Path) -> bool {
+    if path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(".draft"))
+    }) {
+        return true;
+    }
     let s = format!("/{}/", path.to_string_lossy().replace('\\', "/"));
     IGNORED_SEGMENTS.iter().any(|seg| s.contains(seg))
 }

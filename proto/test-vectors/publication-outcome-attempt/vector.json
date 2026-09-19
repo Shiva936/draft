@@ -1,0 +1,47 @@
+{
+  "expect": "an outcome for one attempt can never be filed beneath another's head",
+  "name": "publication-outcome-attempt",
+  "payload": {
+    "attempt": {
+      "digest": "sha256:993ebb1fd4c133f3b0c9710edca112535dd063942cf432609624e330a78a59f2",
+      "id": "pat_000000000001"
+    },
+    "concluded_at": 3000,
+    "outcome": {
+      "outcome": "indeterminate",
+      "reason": "provider unreachable after dispatch"
+    },
+    "provenance": {
+      "producer": "draft.core/publication",
+      "version": "0.3.4"
+    },
+    "receipt_id": "rcp_000000000001",
+    "receipt_signer": {
+      "signature_algorithm": "ed25519",
+      "signer_identity": "act_signer",
+      "signing_key_id": "key-1"
+    }
+  },
+  "payload_schema": "publication-outcome.schema.json",
+  "self_consistency_violation": {
+    "attempt": {
+      "digest": "sha256:993ebb1fd4c133f3b0c9710edca112535dd063942cf432609624e330a78a59f2",
+      "id": "pat_000000000002"
+    },
+    "concluded_at": 3000,
+    "outcome": {
+      "outcome": "indeterminate",
+      "reason": "provider unreachable after dispatch"
+    },
+    "provenance": {
+      "producer": "draft.core/publication",
+      "version": "0.3.4"
+    },
+    "receipt_id": "rcp_000000000001",
+    "receipt_signer": {
+      "signature_algorithm": "ed25519",
+      "signer_identity": "act_signer",
+      "signing_key_id": "key-1"
+    }
+  }
+}

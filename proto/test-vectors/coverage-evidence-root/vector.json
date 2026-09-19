@@ -1,0 +1,43 @@
+{
+  "expect": "coverage cross-field validity is checked, so an unattempted domain cannot carry an observation run",
+  "name": "coverage-evidence-root",
+  "payload": {
+    "claims": [
+      {
+        "attempted": true,
+        "committed": true,
+        "domain": "root",
+        "known_gaps": [],
+        "observation_run": {
+          "digest": "sha256:bec0cf50221d785a61f4bfead1a24224365ea687871a74f0e5083c763bf182d2",
+          "id": "run_000000000001"
+        },
+        "provider_binding": "pbd_000000000001",
+        "provider_semantic_definition": "sha256:6dcb7e507fb56d1223ddf52bdbef950781bb216759413d0d6bcef3b24521d522",
+        "status": "complete"
+      }
+    ],
+    "coverage_evidence_root": "sha256:a5b1c59bdb700abe13be48a2b7fe843f8ad6c07292577128bb0f887e107e91ac",
+    "schema_version": 1
+  },
+  "payload_schema": "coverage-evidence.schema.json",
+  "self_consistency_violation": {
+    "claims": [
+      {
+        "attempted": false,
+        "committed": false,
+        "domain": "root",
+        "known_gaps": [],
+        "observation_run": {
+          "digest": "sha256:bec0cf50221d785a61f4bfead1a24224365ea687871a74f0e5083c763bf182d2",
+          "id": "run_000000000001"
+        },
+        "provider_binding": "pbd_000000000001",
+        "provider_semantic_definition": "sha256:6dcb7e507fb56d1223ddf52bdbef950781bb216759413d0d6bcef3b24521d522",
+        "status": "not_observed"
+      }
+    ],
+    "coverage_evidence_root": "sha256:a5b1c59bdb700abe13be48a2b7fe843f8ad6c07292577128bb0f887e107e91ac",
+    "schema_version": 1
+  }
+}

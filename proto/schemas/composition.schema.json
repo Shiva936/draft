@@ -2,16 +2,131 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Draft Composition",
   "type": "object",
-  "required": ["id", "base_stable_head", "pack_ids", "composition_hash", "dependency_order", "status", "affected_paths"],
+  "required": [
+    "schema_version",
+    "id",
+    "base_baseline",
+    "members",
+    "status",
+    "relations",
+    "affected_resources",
+    "composition_digest"
+  ],
   "properties": {
-    "id": { "type": "string", "pattern": "^cmp_[A-Za-z0-9_-]+$" },
-    "base_stable_head": { "type": "string" },
-    "pack_ids": { "type": "array", "items": { "type": "string", "pattern": "^pck_[A-Za-z0-9_-]+$" } },
-    "composition_hash": { "type": "string" },
-    "dependency_order": { "type": "array", "items": { "type": "string" } },
-    "status": { "enum": ["created", "verified", "failed"] },
-    "affected_paths": { "type": "array", "items": { "type": "string" } },
-    "conflicts": { "type": "array", "items": { "type": "string" } }
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^cmp_[A-Za-z0-9_-]+$"
+    },
+    "base_baseline": {
+      "$ref": "#/$defs/baseline_id"
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/member"
+      }
+    },
+    "status": {
+      "enum": [
+        "verified",
+        "failed"
+      ]
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "affected_resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/resource_id"
+      }
+    },
+    "composition_digest": {
+      "type": "string"
+    }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "resource_id": {
+      "type": "string",
+      "pattern": "^res_[A-Za-z0-9_-]+$"
+    },
+    "revision_pack_id": {
+      "type": "string",
+      "pattern": "^rpk_[A-Za-z0-9_-]+$"
+    },
+    "member": {
+      "type": "object",
+      "required": [
+        "change_pack",
+        "revision_pack",
+        "base_baseline",
+        "touched"
+      ],
+      "properties": {
+        "change_pack": {
+          "type": "string",
+          "pattern": "^cpk_[A-Za-z0-9_-]+$"
+        },
+        "revision_pack": {
+          "$ref": "#/$defs/revision_pack_id"
+        },
+        "base_baseline": {
+          "$ref": "#/$defs/baseline_id"
+        },
+        "touched": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource_id"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "relation": {
+      "type": "object",
+      "required": [
+        "left",
+        "right",
+        "relation"
+      ],
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/revision_pack_id"
+        },
+        "right": {
+          "$ref": "#/$defs/revision_pack_id"
+        },
+        "relation": {
+          "enum": [
+            "independent",
+            "conflicting",
+            "indeterminate"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "shared_resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource_id"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "baseline_id": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "$id": "https://draft.dev/schemas/composition.schema.json"
 }
