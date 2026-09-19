@@ -6,9 +6,9 @@
   "payload_schema": "verification.schema.json",
   "payload": {
     "schema_version": 1,
-    "change_id": "chg_composed",
-    "revision_id": "rev_composed",
-    "revision_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "change_pack_id": "cpk_composed",
+    "content_revision_id": "content_composed",
+    "content_revision_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "dependency_digests": [],
     "aggregator_revision": 1,
     "check_results": [
@@ -54,9 +54,9 @@
   },
   "invalid_payload": {
     "schema_version": 1,
-    "change_id": "chg_composed",
-    "revision_id": "invalid",
-    "revision_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "change_pack_id": "cpk_composed",
+    "content_revision_id": "invalid",
+    "content_revision_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "dependency_digests": [],
     "aggregator_revision": 1,
     "check_results": [],

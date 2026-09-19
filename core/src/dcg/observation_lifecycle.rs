@@ -145,14 +145,14 @@ pub struct SupersededWork {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SupersededKind {
-    Change,
+    ChangePack,
     ResourceSession,
 }
 
 impl SupersededKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Change => "change",
+            Self::ChangePack => "change",
             Self::ResourceSession => "resource_session",
         }
     }
@@ -225,7 +225,7 @@ impl ContextSuperseded {
                 short(&self.active_context_digest)
             ),
         )
-        .with_suggestion("re-create the Change from the current baseline")
+        .with_suggestion("re-create the ChangePack from the current baseline")
     }
 }
 

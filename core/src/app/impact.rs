@@ -33,7 +33,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use draft_dcg_contract::ids::{ChangeRevisionId, ResourceId};
+use draft_dcg_contract::ids::{ResourceId, RevisionPackId};
 use draft_extension_contract::{EngineId, Executor, NamespacedId};
 use serde_json::Value;
 
@@ -48,7 +48,7 @@ use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 /// What extraction established for one revision, and what it could not ask.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ImpactReport {
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The Resources the revision touched.
     pub touched: BTreeSet<ResourceId>,
     /// Every element an authorized extractor found inside them.
@@ -86,13 +86,14 @@ struct AuthorizedExtractor<'a> {
 /// and nothing at all.
 pub fn coverage_of(
     workspace: &Workspace,
-    revision: &ChangeRevisionId,
+    revision: &RevisionPackId,
 ) -> DraftResult<CoverageReport> {
-    let revisions = crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir());
+    let revisions =
+        crate::dcg::revision_pack::RevisionPackStore::new(workspace.layout.revision_packs_dir());
     let sealed = revisions.get(revision)?.ok_or_else(|| {
         DraftError::new(
             DraftErrorKind::NotFound,
-            format!("revision '{revision}' has not been sealed"),
+            format!("RevisionPack '{revision}' has not been sealed"),
         )
     })?;
 
@@ -121,7 +122,7 @@ pub fn coverage_of(
     let resolved = coverage::resolve(&inputs, &sealed.touched);
     let unproven = coverage::unproven(&inputs, &sealed.touched);
     Ok(CoverageReport {
-        revision: revision.clone(),
+        revision_pack: revision.clone(),
         coverage: resolved,
         unproven,
         indirect_sources: IndirectSources::default(),
@@ -131,7 +132,7 @@ pub fn coverage_of(
 /// What is proved about the Resources a revision touched.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CoverageReport {
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     pub coverage: BTreeMap<ResourceId, ResourceCoverage>,
     /// Everything no evidence names. Indirect coverage does not remove a
     /// Resource from this list: a reader asking "what is unproven?" must see
@@ -352,13 +353,14 @@ fn parse_extraction(
 pub fn index_revision(
     app: &crate::app::App,
     workspace: &Workspace,
-    revision: &ChangeRevisionId,
+    revision: &RevisionPackId,
 ) -> DraftResult<ImpactReport> {
-    let revisions = crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir());
+    let revisions =
+        crate::dcg::revision_pack::RevisionPackStore::new(workspace.layout.revision_packs_dir());
     let sealed = revisions.get(revision)?.ok_or_else(|| {
         DraftError::new(
             DraftErrorKind::NotFound,
-            format!("revision '{revision}' has not been sealed"),
+            format!("RevisionPack '{revision}' has not been sealed"),
         )
     })?;
 
@@ -417,7 +419,7 @@ pub fn index_revision(
     extractor_ids.dedup();
 
     Ok(ImpactReport {
-        revision: revision.clone(),
+        revision_pack: revision.clone(),
         touched: sealed.touched.clone(),
         elements: merged.elements,
         related_resources,

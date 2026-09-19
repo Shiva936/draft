@@ -4,7 +4,6 @@
 The SDK is a layered stack, not a flat set of independent crates:
 
     draft-extension-contract  --depends on-->  draft-dcg-contract
-    draft-draftpack-contract  --depends on-->  draft-dcg-contract
     draft-dcg-contract        --depends on-->  (no Draft crate)
 
 So "reaches no workspace package" is the wrong rule: it would forbid the one
@@ -33,7 +32,6 @@ DEPENDENCY_TABLES = ("dependencies", "build-dependencies", "dev-dependencies")
 ALLOWED_WORKSPACE_REACHABILITY: dict[str, set[str]] = {
     "draft-dcg-contract": set(),
     "draft-extension-contract": {"draft-dcg-contract"},
-    "draft-draftpack-contract": {"draft-dcg-contract"},
 }
 
 

@@ -1,6 +1,6 @@
 //! The prepared promotion journal, and the immutable record it becomes.
 
-use draft_dcg_contract::ids::{ChangeId, ChangeRevisionId, PromotionId, ReceiptId};
+use draft_dcg_contract::ids::{ChangePackId, PromotionId, ReceiptId, RevisionPackId};
 use draft_dcg_contract::receipt::ReceiptSignerBinding;
 use draft_dcg_contract::BaselineId;
 use serde::{Deserialize, Serialize};
@@ -25,19 +25,19 @@ use draft_dcg_contract::Digest;
 /// receipt under the same id and appends the same event, so "did this already
 /// happen?" has an answer that does not depend on when you ask.
 ///
-/// # Why the planned Change completion is in here
+/// # Why the planned ChangePack completion is in here
 ///
 /// Recovery needs to know what `Completed` was *going to* look like, not just
 /// that completion was intended. Without the planned value it could not tell
-/// a Change this promotion completed from one completed by something else.
+/// a ChangePack this promotion completed from one completed by something else.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PromotionJournal {
     pub promotion: PromotionId,
     /// The revision being promoted.
-    pub revision: ChangeRevisionId,
-    /// The Change that revision belongs to.
-    pub change: ChangeId,
+    pub revision_pack: RevisionPackId,
+    /// The ChangePack that revision belongs to.
+    pub change_pack: ChangePackId,
     /// The Baseline this promotion accepts.
     pub baseline: BaselineId,
     /// The receipt this promotion will issue, chosen in advance.
@@ -56,7 +56,7 @@ pub struct PromotionJournal {
     pub expected_control: Digest,
     /// The control state digest the commit will produce.
     pub planned_control: Digest,
-    /// The Change value the completion will produce.
+    /// The ChangePack value the completion will produce.
     pub planned_change: Digest,
     pub state: PromotionJournalState,
 }
@@ -86,8 +86,8 @@ impl PromotionJournal {
 #[serde(deny_unknown_fields)]
 pub struct PromotionRecord {
     pub promotion: PromotionId,
-    pub revision: ChangeRevisionId,
-    pub change: ChangeId,
+    pub revision_pack: RevisionPackId,
+    pub change_pack: ChangePackId,
     pub baseline: BaselineId,
     pub receipt: ReceiptId,
 }

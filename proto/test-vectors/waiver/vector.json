@@ -4,7 +4,7 @@
   "notes": "a waiver excuses one condition on one exact revision and always names the authority that granted it",
   "payload": {
     "id": "wvr_0a1b2c3d4e5f",
-    "revision": "rev_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
     "condition": "draft.gate/verified",
     "reason": "the check has no authorized capability yet; accepted for one week",
     "waived_by": "act_demo",
@@ -18,7 +18,7 @@
   },
   "invalid_payload": {
     "id": "wvr_0a1b2c3d4e5f",
-    "revision": "rev_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
     "condition": "draft.gate/verified",
     "reason": "",
     "waived_by": "act_demo",

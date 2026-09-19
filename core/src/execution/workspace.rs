@@ -828,7 +828,7 @@ mod tests {
             WorkspaceStore::for_workspace(temp.path(), crate::project::protected::core_rules());
         let workspace = store
             .open(
-                EditAttribution::Change { id: "chg-a".into() },
+                EditAttribution::ChangePack { id: "chg-a".into() },
                 OperationId::new("op_open"),
             )
             .unwrap();
@@ -864,13 +864,14 @@ mod tests {
     }
 }
 
-// ---- Change workspace staging ----
+// ---- ChangePack workspace staging ----
 
-use crate::support::common::{ChangeId, EvidenceId, ExecutionId, SnapshotId, TaskId};
+use crate::support::common::{EvidenceId, ExecutionId, SnapshotId, TaskId};
+use draft_dcg_contract::ids::ChangePackId;
 
-// Mutable staging state used while deriving immutable Change revisions.
+// Mutable staging state used while deriving immutable ChangePack revisions.
 //
-// Lifecycle, verification, review, quarantine, and rollback state are not
+// Lifecycle, verification, review, and rollback state are not
 // stored here; each is owned by its canonical domain record.
 
 use crate::dcg::resource::ResourceId;
@@ -880,9 +881,9 @@ use draft_dcg_contract::ids::ProjectId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChangeWorkspace {
+pub struct ChangePackWorkspace {
     pub schema_version: u32,
-    pub id: ChangeId,
+    pub id: ChangePackId,
     pub name: Option<String>,
     pub task_id: Option<TaskId>,
     pub execution_id: Option<ExecutionId>,
@@ -895,30 +896,33 @@ pub struct ChangeWorkspace {
     pub review_refs: Vec<String>,
     pub decision_refs: Vec<String>,
     pub receipt_refs: Vec<String>,
-    pub source_change_ids: Vec<String>,
-    /// The canonical revision this staging state currently corresponds to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision_id: Option<String>,
+    pub source_change_pack_ids: Vec<String>,
     /// The declared purpose of the change, from the contributed intent
     /// vocabulary. `None` when no vocabulary is installed to name one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<draft_extension_contract::NamespacedId>,
-    /// The candidate that produced this Change, when an agent did.
+    /// The candidate that produced this ChangePack, when an agent did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_id: Option<String>,
-    /// Whether this Change arrived from elsewhere rather than being made here.
-    #[serde(default)]
-    pub imported: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub manifest_hash: String,
 }
 
-impl crate::contracts::VersionedContract for ChangeWorkspace {
-    const CONTRACT: crate::contracts::ContractId = crate::contracts::ContractId::ChangeWorkspace;
+/// A fresh ChangePack id for a workspace that is not yet bound to a derived
+/// DCG ChangePack. Same family and grammar as every other `cpk_` id.
+fn mint_workspace_change_pack_id() -> ChangePackId {
+    let raw = uuid::Uuid::new_v4().simple().to_string();
+    ChangePackId::parse(format!("{}{}", ChangePackId::PREFIX, &raw[..12]))
+        .expect("a cpk_ prefix and twelve hex digits is a valid ChangePack id")
 }
 
-impl ChangeWorkspace {
+impl crate::contracts::VersionedContract for ChangePackWorkspace {
+    const CONTRACT: crate::contracts::ContractId =
+        crate::contracts::ContractId::ChangePackWorkspace;
+}
+
+impl ChangePackWorkspace {
     pub(crate) fn new(
         workspace_id: ProjectId,
         task_id: Option<TaskId>,
@@ -929,9 +933,9 @@ impl ChangeWorkspace {
     ) -> Self {
         Self {
             schema_version: crate::contracts::current_version(
-                crate::contracts::ContractId::ChangeWorkspace,
+                crate::contracts::ContractId::ChangePackWorkspace,
             ),
-            id: ChangeId::generate(),
+            id: mint_workspace_change_pack_id(),
             name,
             task_id,
             execution_id,
@@ -944,11 +948,9 @@ impl ChangeWorkspace {
             review_refs: vec![],
             decision_refs: vec![],
             receipt_refs: vec![],
-            source_change_ids: vec![],
-            revision_id: None,
+            source_change_pack_ids: vec![],
             intent: None,
             candidate_id: None,
-            imported: false,
             created_at: now(),
             updated_at: now(),
             manifest_hash: String::new(),
@@ -961,14 +963,14 @@ impl ChangeWorkspace {
         if self.manifest_hash != crate::support::hashing::try_canonical_hash(&canonical)? {
             return Err(DraftError::new(
                 DraftErrorKind::CorruptData,
-                format!("Change workspace {} staging digest mismatch", self.id),
+                format!("ChangePack workspace {} staging digest mismatch", self.id),
             ));
         }
         Ok(())
     }
 }
 
-/// The evidence gathered while producing a Change.
+/// The evidence gathered while producing a ChangePack.
 ///
 /// Nothing here names a tool category. A check result carries a contributed
 /// `category` — a software extension may use "test" or "lint", an audio
@@ -978,7 +980,7 @@ impl ChangeWorkspace {
 pub struct Evidence {
     pub schema_version: u32,
     pub id: EvidenceId,
-    pub change_id: ChangeId,
+    pub change_pack_id: ChangePackId,
     pub command_logs: Vec<String>,
     pub resources_touched: Vec<ResourceId>,
     /// The derived explanation of the change, when a comparison capability
@@ -1019,5 +1021,6 @@ pub struct CheckResultSummary {
 }
 
 impl crate::contracts::VersionedContract for Evidence {
-    const CONTRACT: crate::contracts::ContractId = crate::contracts::ContractId::ChangeEvidence;
+    const CONTRACT: crate::contracts::ContractId =
+        crate::contracts::ContractId::RevisionPackEvidence;
 }

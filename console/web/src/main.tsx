@@ -15,8 +15,8 @@ import { Settings } from "./screens/settings/Settings";
 import { ProjectLayout } from "./screens/project/ProjectLayout";
 import { ProjectOverview } from "./screens/project/overview/ProjectOverview";
 import { Tasks } from "./screens/project/tasks/Tasks";
-import { Changes } from "./screens/project/work/Changes";
-import { ChangeScope } from "./screens/project/work/ChangeScope";
+import { Packs } from "./screens/project/work/Packs";
+import { ChangePackScope } from "./screens/project/work/ChangePackScope";
 import { ResourceBrowser } from "./screens/project/resources/ResourceBrowser";
 import { Events } from "./screens/project/events/Events";
 import { Observation } from "./screens/project/observation/Observation";
@@ -55,16 +55,16 @@ function App({ session }: { session: Session }) {
           <Route path="extensions" element={<Extensions />} />
           <Route path="settings" element={<Settings />} />
           {/* §8.3's project information architecture. Work owns Tasks and
-              Changes; Observation is a view of Resources; Tools is a view of
+              Packs; Observation is a view of Resources; Tools is a view of
               Extensions. The section list itself comes from the generated
               authoritative IA — see ProjectLayout. */}
           <Route path="projects/:workspaceId" element={<ProjectLayout />}>
             <Route index element={<ProjectOverview />} />
             <Route path="work" element={<Tasks />} />
-            <Route path="work/changes" element={<Changes />} />
-            {/* §8.3 gives a Change and a Baseline their own scopes. Each is
+            <Route path="work/packs" element={<Packs />} />
+            {/* §8.3 gives a ChangePack and a Baseline their own scopes. Each is
                 rendered from the authoritative model for that subject. */}
-            <Route path="work/changes/:changeId" element={<ChangeScope />} />
+            <Route path="work/packs/:packId" element={<ChangePackScope />} />
             <Route path="resources" element={<ResourceBrowser />} />
             <Route path="resources/observation" element={<Observation />} />
             <Route path="baselines" element={<Baselines />} />

@@ -186,7 +186,7 @@ pub fn ensure_allowed(rules: &[ProtectionRule], path: &WorkspacePath) -> DraftRe
             "matched '{}' from {} ({})",
             v.pattern, v.source, v.reason
         ))
-        .with_suggestion("change the Change or editor scope, or update protection policy"));
+        .with_suggestion("change the ChangePack or editor scope, or update protection policy"));
     }
     Ok(())
 }

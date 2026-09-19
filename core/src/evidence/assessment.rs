@@ -8,9 +8,9 @@
 //! and "this change is low risk" the same claim — and the second is a judgement
 //! somebody made, which a reviewer may disagree with, while the first is not.
 //!
-//! Like Evidence it binds an exact `ChangeRevisionId` and never carries.
+//! Like Evidence it binds an exact `RevisionPackId` and never carries.
 
-use draft_dcg_contract::ids::{AssessmentId, ChangeRevisionId, EvidenceId};
+use draft_dcg_contract::ids::{AssessmentId, EvidenceId, RevisionPackId};
 use draft_dcg_contract::producer::ProducerIdentity;
 use draft_dcg_contract::Digest;
 use serde::{Deserialize, Serialize};
@@ -50,7 +50,7 @@ impl AssessedRisk {
 pub struct Assessment {
     pub id: AssessmentId,
     /// The exact revision judged.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The exact evidence this judgement rests on.
     pub inputs: BTreeSet<EvidenceId>,
     pub risk: AssessedRisk,
@@ -83,8 +83,8 @@ impl Assessment {
         Ok(())
     }
 
-    pub fn covers(&self, revision: &ChangeRevisionId) -> bool {
-        &self.revision == revision
+    pub fn covers(&self, revision: &RevisionPackId) -> bool {
+        &self.revision_pack == revision
     }
 }
 

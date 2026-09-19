@@ -12,11 +12,11 @@ core="$root_dir/core/src"
 # check passes — makes a violated layering indistinguishable from a satisfied
 # one, and the debt invisible. Here a known edge is tolerated by name, a new one
 # fails, and removing a debt entry is how a stage proves it finished.
-domains=(support contracts project dcg activity trust extension execution recovery \
-         receipt task provenance draftpack authority evidence gate promotion publication \
+domains=(support contracts project installation dcg activity trust extension execution recovery \
+         receipt task provenance authority evidence gate promotion publication \
          read_model app)
 
-module_pattern='app|activity|authority|contracts|dcg|draftpack|evidence|execution|extension|gate|project|promotion|provenance|publication|read_model|recovery|receipt|support|task|trust'
+module_pattern='app|activity|authority|contracts|dcg|evidence|execution|extension|gate|installation|project|promotion|provenance|publication|read_model|recovery|receipt|support|task|trust'
 
 allowed_for() {
   case "$1" in
@@ -26,6 +26,10 @@ allowed_for() {
     # `extension` nor `trust`: the platform's base cannot depend on what
     # happens to be installed, or on trust evaluation that sits above it.
     project) echo "project contracts support" ;;
+    # The installation lifecycle manages the program, never a project: it
+    # reaches `project` only for the global store's ownership marker (purge),
+    # and nothing from dcg, promotion, publication, receipt or activity.
+    installation) echo "installation project contracts support" ;;
     dcg) echo "dcg project contracts support" ;;
     activity) echo "activity dcg project contracts support" ;;
     trust) echo "trust dcg project contracts support" ;;
@@ -37,8 +41,6 @@ allowed_for() {
     # Derivation provenance names the producer of a derived artifact, so it
     # reaches extension identity; it does not reach the graph itself.
     provenance) echo "provenance extension contracts support" ;;
-    # The portable artifact format reads the graph it serialises.
-    draftpack) echo "draftpack receipt promotion publication gate evidence provenance trust dcg project contracts support" ;;
     # Authority evaluates grants against project security state. It reaches
     # `project` for that state and nothing above it: an authority decision
     # must not depend on what happens to be installed.
@@ -127,7 +129,7 @@ if rg -n '(^|/)(design|theme)\.rs$|pub (struct|enum) [A-Za-z]*(Theme|Color|Spaci
   exit 1
 fi
 if rg -n 'use (draft_agui|draft_tui)|crate::(console|tui)' \
-  "$core"/{support,contracts,extension,project,dcg,activity,task,draftpack,provenance,authority,evidence,gate,promotion,trust,execution,read_model}; then
+  "$core"/{support,contracts,extension,project,installation,dcg,activity,task,provenance,authority,evidence,gate,promotion,trust,execution,read_model}; then
   echo "Core domains must not import UI or service implementations." >&2
   exit 1
 fi

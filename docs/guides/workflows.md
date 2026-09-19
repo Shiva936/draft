@@ -5,43 +5,43 @@ Draft is designed to make agent-scale changes reviewable before a person accepts
 ## Recommended Flow
 
 ```bash
-draft change checkpoint "before agent run"
+draft pack checkpoint "before agent run"
 draft task spawn "agent edit" -- <agent command>
 draft status
-draft change new "agent change" --scope <res-id>
-draft change revision seal <chg-id>
-draft change evidence run <rev-id>
-draft change assess <rev-id> --risk low
-draft change gates evaluate <rev-id>
-draft change decide <rev-id> --approve
-draft promote <chg-id> <rev-id>
+draft pack new "agent change" --scope <res-id>
+draft pack revision seal <cpk-id>
+draft pack evidence run <rpk-id>
+draft pack assess <rpk-id> --risk low
+draft pack gates evaluate <rpk-id>
+draft pack decide <rpk-id> --approve
+draft promote <cpk-id> <rpk-id>
 ```
 
 ## Why Spawn Through Draft
 
-`draft task spawn` records task intent, candidate links, optional Change links, and instruction text. Command candidates run in an isolated workspace copy and can produce reviewable Changes; manual candidates remain queued for human edits. This gives reviewers context for what the agent was asked to do and evidence about its execution before changes are reviewed.
+`draft task spawn` records task intent, candidate links, optional ChangePack links, and instruction text. Command candidates run in an isolated workspace copy and can produce reviewable ChangePacks; manual candidates remain queued for human edits. This gives reviewers context for what the agent was asked to do and evidence about its execution before changes are reviewed.
 
-## Reading What A Change Did
+## Reading What A ChangePack Did
 
 Three commands answer three different questions about a sealed revision, and none of them guesses:
 
 ```bash
-draft change representation show <rev-id>   # how the work is explained
-draft change impact <rev-id>                # what it reaches
-draft change coverage <rev-id>              # what has actually been proved
+draft pack representation show <rpk-id>   # how the work is explained
+draft pack impact <rpk-id>                # what it reaches
+draft pack coverage <rpk-id>              # what has actually been proved
 ```
 
 `representation` is recorded when the revision is sealed, from the same observations it was sealed over. `impact` reports only what an authorized extractor found — layout, dependency edges and name similarity produce nothing. `coverage` reports a Resource as covered only where evidence read an observation of that exact Resource; everything that merely _looks_ like coverage is rejected, because a confident "covered" for something nothing has verified is worse than no answer.
 
-Before promoting more than one Change:
+Before promoting more than one ChangePack:
 
 ```bash
-draft change conflicts <chg-id>
-draft change compose <chg-id> <chg-id>
-draft change disperse <chg-id> <chg-id>
+draft pack conflicts <cpk-id>
+draft pack compose <cpk-id> <cpk-id>
+draft pack disperse <cpk-id> <cpk-id>
 ```
 
-## Review Checklist For Agent Changes
+## Review Checklist For Agent ChangePacks
 
 - Inspect every changed file.
 - Read captured stdout and stderr when available.
@@ -52,7 +52,7 @@ draft change disperse <chg-id> <chg-id>
 
 ## Failed Runs
 
-A failed agent command can still produce useful evidence. Keep the run record, inspect the project, and decide whether to open a Change or recover to a checkpoint.
+A failed agent command can still produce useful evidence. Keep the run record, inspect the project, and decide whether to open a ChangePack or recover to a checkpoint.
 
 ## Software domain: integrating with an external history tool
 
@@ -73,8 +73,8 @@ command = "git add -A && git commit -m \"{{message}}\""
 Flow:
 
 ```text
-draft change new -> draft change revision seal -> draft change evidence run ->
-draft change gates evaluate -> draft change decide --approve ->
+draft pack new -> draft pack revision seal -> draft pack evidence run ->
+draft pack gates evaluate -> draft pack decide --approve ->
 draft promote -> the Baseline advances -> your hook mirrors the change into Git
 ```
 
@@ -86,8 +86,8 @@ Draft accepts its own Baseline after the gate is satisfied, while a hook mirrors
 
 ### Notes
 
-- `.draft/` must never be committed; add it to `.gitignore`. Draft itself hard-excludes `.draft/` from Changes, digests, and change candidates.
-- Hook template variables such as `{{message}}`, `{{title}}`, `{{change_id}}`, and `{{receipt_id}}` are documented in [Configuration](../reference/configuration.md#placeholders).
+- `.draft/` must never be committed; add it to `.gitignore`. Draft itself hard-excludes `.draft/` from ChangePacks, digests, and change candidates.
+- Hook template variables such as `{{message}}`, `{{title}}`, `{{change_pack_id}}`, and `{{receipt_id}}` are documented in [Configuration](../reference/configuration.md#placeholders).
 - `draft recover run evt_<id>` touches project files only; Git history is unaffected.
 
 ## Draft-only workflows
@@ -98,15 +98,15 @@ Draft works with no external history tool at all. Accepted Baselines are then th
 
 ```text
 draft init                            # create .draft/ and the initial Baseline
-draft change checkpoint <name>        # capture a state you can come back to
+draft pack checkpoint <name>        # capture a state you can come back to
 # ... edit files ...
-draft change new <intent> --scope …  # declare what the work is and may touch
-draft change revision seal <chg-id>            # observe and seal it as a revision
-draft change evidence run <rev-id> # run the project's checks
-draft change assess <rev-id> --risk … # judge what the evidence means
-draft change gates evaluate <rev-id>  # check every required condition
-draft change decide <rev-id> --approve
-draft promote <chg-id> <rev-id>       # the only command that advances the Baseline
+draft pack new <intent> --scope …  # declare what the work is and may touch
+draft pack revision seal <cpk-id>            # observe and seal it as a revision
+draft pack evidence run <rpk-id> # run the project's checks
+draft pack assess <rpk-id> --risk … # judge what the evidence means
+draft pack gates evaluate <rpk-id>  # check every required condition
+draft pack decide <rpk-id> --approve
+draft promote <cpk-id> <rpk-id>       # the only command that advances the Baseline
 ```
 
 Each promotion accepts a new Baseline. `draft activity list` and `draft baseline receipts` show the tamper-evident history, while canonical manifests, revisions and evidence are retained.
@@ -115,7 +115,7 @@ Each promotion accepts a new Baseline. `draft activity list` and `draft baseline
 
 - `draft recover run chk_<id>` restores a checkpoint.
 - `draft recover run evt_<id>` restores the state the named Activity event recorded a checkpoint of.
-- `draft recover run chg_<id>` works while mutable staging retains a recovery snapshot; afterward, recover to a checkpoint instead.
+- `draft recover run cpk_<id>` works while mutable staging retains a recovery snapshot; afterward, recover to a checkpoint instead.
 
 ### Maintenance And Exit
 

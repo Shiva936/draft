@@ -41,7 +41,7 @@
         "kind": {
           "enum": [
             "task",
-            "change",
+            "change_pack",
             "candidate_execution",
             "review"
           ]

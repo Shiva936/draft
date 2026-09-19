@@ -20,7 +20,7 @@ Untrusted or sensitive:
 
 ## Hard `.draft/` Exclusion
 
-`.draft/` is private metadata. Draft excludes it from status, scans, snapshots, Changes, change candidates, recovery plans, watcher paths, and hook candidate checks.
+`.draft/` is private metadata. Draft excludes it from status, scans, snapshots, ChangePacks, change candidates, recovery plans, watcher paths, and hook candidate checks.
 
 If `.draft/` appears in a change candidate, Draft warns, refuses the operation, and records the refusal. It never partially applies work that reached into its own metadata.
 
@@ -55,7 +55,7 @@ Handles are opened close-on-exec (and non-inheritable on Windows), so a spawned 
  5. ProviderBindingStore              provider-bindings/<pbd_>.lock
  6. PublicationJournalStore           publication/journal/<pat_>.lock
  7. PublicationControlStore           publication/control/<pub_>.lock
- 8. Per-record domain stores          changes/<chg_>.lock, tasks/<tsk_>.lock
+ 8. Per-record domain stores          changes/<cpk_>.lock, tasks/<tsk_>.lock
  9. Publication registry / outcome-head / resolution-head / retry-authorization
 10. Activity Ledger                   events/events.lock
 ```
@@ -102,19 +102,21 @@ An audited mutation runs as: take the record lock → resolve any unresolved jou
 
 The stable actor ID, Ed25519 signing/private key, published public-key records, trust state, authorization, ownership, candidate attribution, receipt identity, and canonical hashes are security/provenance state. They cannot be edited through profile configuration.
 
-`user.name` and `user.email` are strictly non-security display/contact metadata. Changing them may alter selected config-layer bytes, the effective resolved profile, newly rendered non-authoritative display snapshots, and newly appended redacted config/profile audit events only. All pre-existing actor/key/ trust state, historical events and hashes, historical receipts and signatures, candidate attribution, workspace/source/Change digests, and authorization or ownership results remain byte-for-byte or semantically identical and continue to verify.
+`user.name` and `user.email` are strictly non-security display/contact metadata. Changing them may alter selected config-layer bytes, the effective resolved profile, newly rendered non-authoritative display snapshots, and newly appended redacted config/profile audit events only. All pre-existing actor/key/ trust state, historical events and hashes, historical receipts and signatures, candidate attribution, workspace/source/ChangePack digests, and authorization or ownership results remain byte-for-byte or semantically identical and continue to verify.
 
 Retired pre-release profile state is rejected without consuming its values. This includes `.draft/identity.json`, retired XDG profile files, `[identity]`, `identity.*`, retired profile environment variables, and former combined actor/profile fields. Diagnostics and `draft maintenance remove-project` may identify the condition, guide recovery, or remove an unsupported workspace, but cannot treat the data as valid configuration.
 
-## Import Boundary
+## Installation Boundary
 
-`.draftpack` import is the untrusted-input boundary. Every archive is validated fail-closed before a byte reaches the quarantine: path traversal, absolute/UNC paths, `.draft/` writes, symlinks, hardlinks, device/fifo entries, invalid UTF-8 names, oversized artifacts, zip-bomb archives, corrupt or wrong-schema manifests and receipts, changes-hash mismatches, and embedded content objects whose bytes do not match their content address are all rejected. Imported Changes enter `imports/quarantine/`, lose all origin trust marks, and must be locally re-verified and decided on before anything can be promoted from them. Accepting an imported artifact re-checks integrity, applies the embedded content only if every touched resource matches the state the change was derived from (nothing is written on any conflict), and checkpoints first so the apply is recoverable.
+`draft update` trusts only what the binary already trusts: `release-manifest.json` must carry a valid Ed25519 signature, over its exact published bytes, from a key embedded in this build, before it is parsed; every artifact must then match the manifest's digest and size before it is opened, and archive extraction refuses traversal, absolute paths, links, devices, duplicates, unexpected entries and anything past its size caps. The first-run installers are a different, weaker trust stage — HTTPS plus the published `SHA256SUMS` — and never claim to verify the signed manifest.
+
+The installation's private lifecycle directory (`<install_root>/.draft-install/`, `0700` on Unix, inherited user ACLs on Windows) holds the receipt, the permanent lock and the operation journal. The identity digest in `bootstrap.recovery` is an integrity/consistency check inside that directory, not a signature: a same-user process able to rewrite both it and the helper is not defeated by it. Uninstall deletes only receipt-typed, identity-validated slots and never a project; `--purge` deletes the global store only after proving its `home.json` ownership marker.
 
 ## The promotion boundary
 
 Promotion is the single point at which a project changes what it accepts, and it happens only on an approving Decision that cites a satisfied Gate over the **exact** revision being promoted. A decision about a different revision, a gate over a different revision, or a decision made against a Baseline the project has since moved past are each refused rather than reinterpreted — Draft does not rebase an authorization onto state nobody judged it against.
 
-The commit itself is the locked compare-exchange of the project's control state, performed under a non-stealable trust fence with the Change's lock held, so `Active → Completed` is deterministic finalization rather than a second, separately-failable step. Gates are governed by the resolved policy (see [Review, Verification, And Policy](../reference/review-and-policy.md#policy)); the defaults fail closed. Policy resolves field by field from project policy, through global defaults, to Draft's built-in safe defaults.
+The commit itself is the locked compare-exchange of the project's control state, performed under a non-stealable trust fence with the ChangePack's lock held, so `Active → Completed` is deterministic finalization rather than a second, separately-failable step. Gates are governed by the resolved policy (see [Review, Verification, And Policy](../reference/review-and-policy.md#policy)); the defaults fail closed. Policy resolves field by field from project policy, through global defaults, to Draft's built-in safe defaults.
 
 ## Extension Capabilities
 

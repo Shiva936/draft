@@ -7,7 +7,7 @@
 //!
 //! The prefix is part of the identifier, not decoration: parsing requires it,
 //! so a bare opaque string is refused rather than adopted into the wrong
-//! family. The families are frozen for v1; `pck_`, `vplan_`, `vres_`, `rbp_`,
+//! family. The families are frozen for v1; `pck_`, `chg_`, `rev_`, `vplan_`, `vres_`, `rbp_`,
 //! `eap_`, the old `chk_` collision and the old `ws_` project identity are
 //! retired and are not parsed here.
 //!
@@ -90,7 +90,7 @@ dcg_id!(
     /// This is the identity the retired `ws_` workspace id used to carry.
     ProjectId, "prj_", "project id");
 dcg_id!(
-    /// Identifies a unit of intended work, independent of any Change.
+    /// Identifies a unit of intended work, independent of any ChangePack.
     TaskId, "tsk_", "task id");
 dcg_id!(
     /// Identifies a Resource. Opaque and stable across move and rename: a
@@ -105,21 +105,21 @@ dcg_id!(
     /// provenance of a batch of Observations and their coverage.
     ObservationRunId, "run_", "observation run id");
 dcg_id!(
-    /// Identifies a Change: a unit of proposed work with its own lifecycle.
-    ChangeId, "chg_", "change id");
+    /// Identifies a ChangePack: a project-local governable work lineage.
+    ChangePackId, "cpk_", "change pack id");
 dcg_id!(
-    /// Identifies one sealed revision of a Change.
+    /// Identifies a RevisionPack: one immutable, exact revision of a ChangePack.
     ///
     /// Evidence, Assessments, Reviews, Decisions and Gates bind an *exact*
     /// revision, and that word is mechanical: the id is backed by a
     /// create-once id-to-digest binding verified on every load, so it can
     /// never degrade into equality of an opaque string.
-    ChangeRevisionId, "rev_", "change revision id");
+    RevisionPackId, "rpk_", "revision pack id");
 dcg_id!(
     /// Identifies a planned or executed Operation.
     OperationId, "op_", "operation id");
 dcg_id!(
-    /// Identifies a Change workspace — the mutable surface work happens on.
+    /// Identifies a ChangePack workspace — the mutable surface work happens on.
     ///
     /// Distinct from [`ProjectId`]: the retired `ws_` family meant *project*,
     /// which is the single most likely place to misread this rename.
@@ -128,10 +128,10 @@ dcg_id!(
     /// Identifies a checkpoint of a workspace.
     CheckpointId, "ckp_", "checkpoint id");
 dcg_id!(
-    /// Identifies a piece of Evidence bound to an exact ChangeRevision.
+    /// Identifies a piece of Evidence bound to an exact RevisionPack.
     EvidenceId, "evd_", "evidence id");
 dcg_id!(
-    /// Identifies an Assessment bound to an exact ChangeRevision.
+    /// Identifies an Assessment bound to an exact RevisionPack.
     AssessmentId, "asm_", "assessment id");
 dcg_id!(
     /// Identifies a Review.
@@ -206,14 +206,21 @@ mod tests {
 
     #[test]
     fn the_retired_families_are_not_parsed_by_anything() {
-        // `pck_`, `chk_`, `ws_` and friends belong to the retired ontology.
+        // `pck_`, `chk_`, `ws_` and friends belong to the retired ontology,
+        // and `chg_` / `rev_` to the DCG's pre-Pack vocabulary (a clean
+        // pre-release break: no alias, no fallback parser).
         // Naming them here is how this test proves nothing parses them.
         // retired-architecture-ok: naming them is how the test proves it.
-        for retired in ["pck_a1", "chk_a1", "ws_a1", "vplan_a1", "rbp_a1", "eap_a1"] {
-            assert!(ChangeId::parse(retired).is_err());
+        for retired in [
+            "pck_a1", "chk_a1", "ws_a1", "vplan_a1", "rbp_a1", "eap_a1", "chg_a1", "rev_a1",
+        ] {
+            assert!(ChangePackId::parse(retired).is_err());
+            assert!(RevisionPackId::parse(retired).is_err());
             assert!(CheckpointId::parse(retired).is_err());
             assert!(ProjectId::parse(retired).is_err());
         }
+        assert!(ChangePackId::parse("cpk_a1").is_ok());
+        assert!(RevisionPackId::parse("rpk_a1").is_ok());
     }
 
     #[test]

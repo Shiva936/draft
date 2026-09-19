@@ -3,7 +3,7 @@
 //! This sits deliberately *above* the `extension` port. That port describes
 //! what a contribution is and holds no ability to act; this domain turns a
 //! declaration into an execution, which is why it may reach the workspace, the
-//! Change layer and the process runner while the port may not.
+//! ChangePack layer and the process runner while the port may not.
 //!
 //! Every mechanism — comparison, extraction, verification, a tool action, an
 //! adapter's enumeration or its recovery capture and restore — is declared as

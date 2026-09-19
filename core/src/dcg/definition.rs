@@ -1,4 +1,4 @@
-//! `ChangeDefinition` and `ScopeResolution` — what a Change intends, and what
+//! `ChangePackDefinition` and `ScopeResolution` — what a ChangePack intends, and what
 //! that intent actually reached.
 //!
 //! Both are immutable facts under the create-once discipline, so "the exact
@@ -8,7 +8,7 @@
 //!
 //! # Why scope is resolved once
 //!
-//! A declaration says what a Change is *allowed* to touch. Resolution turns
+//! A declaration says what a ChangePack is *allowed* to touch. Resolution turns
 //! that into the exact set it *does* touch, against an exact base Baseline.
 //!
 //! Re-resolving later would silently widen it. A declaration naming a
@@ -23,7 +23,7 @@
 
 use std::collections::BTreeSet;
 
-use draft_dcg_contract::ids::{ActorId, ChangeId, ResourceId};
+use draft_dcg_contract::ids::{ActorId, ChangePackId, ResourceId};
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::{BaselineId, Digest};
 use serde::{Deserialize, Serialize};
@@ -32,12 +32,12 @@ use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 use crate::support::hashing::try_canonical_hash;
 use crate::support::immutable_store::ImmutableFactStore;
 
-/// What a Change intends, and what it is permitted to touch.
+/// What a ChangePack intends, and what it is permitted to touch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChangeDefinition {
-    pub change: ChangeId,
-    /// What the Change is for, in the author's words. Opaque to Core.
+pub struct ChangePackDefinition {
+    pub change_pack: ChangePackId,
+    /// What the ChangePack is for, in the author's words. Opaque to Core.
     pub intent: String,
     /// What it may touch. Resolved into an exact set by [`ScopeResolution`].
     pub scope_declaration: BTreeSet<ResourceId>,
@@ -45,7 +45,7 @@ pub struct ChangeDefinition {
     pub created_at: Timestamp,
 }
 
-impl ChangeDefinition {
+impl ChangePackDefinition {
     /// This definition's canonical digest.
     pub fn digest(&self) -> DraftResult<Digest> {
         self.validate()?;
@@ -71,11 +71,11 @@ impl ChangeDefinition {
     }
 }
 
-/// The exact set a Change reached, against an exact base.
+/// The exact set a ChangePack reached, against an exact base.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScopeResolution {
-    pub change: ChangeId,
+    pub change_pack: ChangePackId,
     /// The exact definition this resolves.
     pub definition: Digest,
     /// The Baseline it was resolved against.
@@ -100,14 +100,14 @@ impl ScopeResolution {
     /// does not exist in the base is simply not in scope — but it may never
     /// exceed it. Widening here would let resolution grant reach that the
     /// definition never asked for.
-    /// `resolvable` is every Resource the Change could legitimately land on:
+    /// `resolvable` is every Resource the ChangePack could legitimately land on:
     /// what the Baseline accepts, and what the project holds now. Both, because
-    /// a Change that introduces a Resource is as ordinary as one that edits an
+    /// a ChangePack that introduces a Resource is as ordinary as one that edits an
     /// accepted one — narrowing to the Baseline alone would make "add a file"
     /// unrepresentable, and silently drop it from the scope a reviewer reads.
     /// What is excluded is a declaration that names nothing at all.
     pub fn resolve(
-        definition: &ChangeDefinition,
+        definition: &ChangePackDefinition,
         base: BaselineId,
         resolvable: &BTreeSet<ResourceId>,
         resolved_at: Timestamp,
@@ -118,7 +118,7 @@ impl ScopeResolution {
             .cloned()
             .collect();
         Ok(Self {
-            change: definition.change.clone(),
+            change_pack: definition.change_pack.clone(),
             definition: definition.digest()?,
             base_baseline: base,
             resources,
@@ -127,7 +127,7 @@ impl ScopeResolution {
     }
 
     /// Check this resolution against the definition it claims to resolve.
-    pub fn validate_against(&self, definition: &ChangeDefinition) -> DraftResult<()> {
+    pub fn validate_against(&self, definition: &ChangePackDefinition) -> DraftResult<()> {
         let expected = definition.digest()?;
         if self.definition != expected {
             return Err(DraftError::new(
@@ -139,7 +139,7 @@ impl ScopeResolution {
                 ),
             ));
         }
-        if self.change != definition.change {
+        if self.change_pack != definition.change_pack {
             return Err(DraftError::new(
                 DraftErrorKind::CorruptData,
                 "scope resolution and definition name different changes".to_string(),
@@ -168,7 +168,7 @@ impl ScopeResolution {
     }
 }
 
-/// Create-once storage for [`ChangeDefinition`] and [`ScopeResolution`].
+/// Create-once storage for [`ChangePackDefinition`] and [`ScopeResolution`].
 ///
 /// Both are immutable facts under §2.45: the bytes beneath a logical id cannot
 /// be replaced, and every load re-derives the canonical digest and compares it
@@ -179,7 +179,7 @@ impl ScopeResolution {
 /// written at different moments — the declaration when the work is defined,
 /// the resolution when it is bounded against a named Baseline.
 pub struct DefinitionStore {
-    definitions: ImmutableFactStore<ChangeDefinition>,
+    definitions: ImmutableFactStore<ChangePackDefinition>,
     resolutions: ImmutableFactStore<ScopeResolution>,
 }
 
@@ -201,13 +201,13 @@ impl DefinitionStore {
     /// still written and still verified on load, so the family satisfies the
     /// same rule as every other immutable fact rather than a weaker one that
     /// happens to hold.
-    pub fn put_definition(&self, definition: &ChangeDefinition) -> DraftResult<Digest> {
+    pub fn put_definition(&self, definition: &ChangePackDefinition) -> DraftResult<Digest> {
         let digest = definition.digest()?;
         self.definitions.put(digest.as_str(), definition)?;
         Ok(digest)
     }
 
-    pub fn definition(&self, digest: &Digest) -> DraftResult<Option<ChangeDefinition>> {
+    pub fn definition(&self, digest: &Digest) -> DraftResult<Option<ChangePackDefinition>> {
         self.definitions.get(digest.as_str())
     }
 
@@ -230,9 +230,9 @@ mod tests {
         ResourceId::parse(format!("res_{name}")).unwrap()
     }
 
-    fn definition(scope: &[&str]) -> ChangeDefinition {
-        ChangeDefinition {
-            change: ChangeId::parse("chg_000000000001").unwrap(),
+    fn definition(scope: &[&str]) -> ChangePackDefinition {
+        ChangePackDefinition {
+            change_pack: ChangePackId::parse("cpk_000000000001").unwrap(),
             intent: "update the catalogue".into(),
             scope_declaration: scope.iter().map(|name| resource(name)).collect(),
             created_by: ActorId::parse("act_000000000001").unwrap(),
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn an_amended_definition_invalidates_its_resolution() {
-        // Scenario J. Amending what a Change may touch must not leave a
+        // Scenario J. Amending what a ChangePack may touch must not leave a
         // resolution silently claiming to resolve the new definition.
         let original = definition(&["a"]);
         let resolution = ScopeResolution::resolve(
@@ -371,7 +371,7 @@ mod tests {
             Timestamp::from_unix_nanos(2_000),
         )
         .unwrap();
-        foreign.change = ChangeId::parse("chg_999999999999").unwrap();
+        foreign.change_pack = ChangePackId::parse("cpk_999999999999").unwrap();
         assert!(foreign.validate_against(&definition(&["a"])).is_err());
     }
 

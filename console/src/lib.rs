@@ -332,7 +332,7 @@ fn router(state: Arc<AppState>) -> Router {
             get(graph_baseline),
         )
         .route(
-            "/api/v1/projects/:workspace_id/graph/authorization/:change_id/:revision_id",
+            "/api/v1/projects/:workspace_id/graph/authorization/:change_pack_id/:revision_pack_id",
             get(graph_authorization),
         )
         .route(
@@ -1093,14 +1093,14 @@ async fn graph_baseline(
 async fn graph_authorization(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    AxPath((workspace_id, change_id, revision_id)): AxPath<(String, String, String)>,
+    AxPath((workspace_id, change_pack_id, revision_id)): AxPath<(String, String, String)>,
 ) -> ApiResult {
     project_call(
         &state,
         &headers,
         &workspace_id,
         "dcg.authorization",
-        json!({ "change": change_id, "revision": revision_id }),
+        json!({ "change_pack_id": change_pack_id, "revision_pack_id": revision_id }),
     )
 }
 
@@ -1250,14 +1250,14 @@ async fn project_action(
         // action. Each is a distinct act on the record — establishing evidence
         // is not judging risk, and judging risk is not deciding — so the
         // Console offers them separately rather than as one "approve" button.
-        "graph-change-open" => "dcg.change.open",
+        "graph-change-pack-open" => "dcg.change_pack.open",
         // Abandon and Reopen, never Delete. Stopping work is a statement about
         // the future; deleting would be a statement about the past, and the
         // record of work that was done and then decided against is frequently
         // the part worth keeping.
-        "graph-change-abandon" => "dcg.change.abandon",
-        "graph-change-reopen" => "dcg.change.reopen",
-        "graph-revision-seal" => "dcg.revision.seal",
+        "graph-change-pack-abandon" => "dcg.change_pack.abandon",
+        "graph-change-pack-reopen" => "dcg.change_pack.reopen",
+        "graph-revision-seal" => "dcg.revision_pack.seal",
         // Recording that somebody looked. Offered separately from deciding,
         // because reading a revision and concluding something about it are
         // different acts and only one of them authorizes anything.
@@ -1413,7 +1413,7 @@ struct ConsoleModelQuery {
     #[serde(default)]
     workspace_id: Option<String>,
     #[serde(default)]
-    change_id: Option<String>,
+    change_pack_id: Option<String>,
     /// Required by the `BASELINE` scope and meaningless elsewhere.
     #[serde(default)]
     baseline_id: Option<String>,
@@ -1432,12 +1432,23 @@ async fn console_model(
     Query(query): Query<ConsoleModelQuery>,
 ) -> ApiResult {
     let session = authenticate(&headers, &state)?;
-    let subject = json!({
-        "scope": query.scope.as_deref().unwrap_or("GLOBAL"),
-        "workspace_id": query.workspace_id,
-        "change_id": query.change_id,
-        "baseline_id": query.baseline_id,
-    });
+    // Only the ids the query actually carries: the subject is a tagged union,
+    // and `draftd` refuses any id its scope does not own.
+    let mut subject = serde_json::Map::new();
+    subject.insert(
+        "scope".into(),
+        json!(query.scope.as_deref().unwrap_or("GLOBAL")),
+    );
+    for (key, value) in [
+        ("workspace_id", query.workspace_id),
+        ("change_pack_id", query.change_pack_id),
+        ("baseline_id", query.baseline_id),
+    ] {
+        if let Some(value) = value {
+            subject.insert(key.into(), json!(value));
+        }
+    }
+    let subject = Value::Object(subject);
 
     let mut handle = console_session(&state, &session.console)?;
     for attempt in 0..2 {
@@ -2266,7 +2277,7 @@ mod tests {
                 Query(ConsoleModelQuery {
                     scope: None,
                     workspace_id: None,
-                    change_id: None,
+                    change_pack_id: None,
                     baseline_id: None,
                 }),
             ));
@@ -2302,7 +2313,7 @@ mod tests {
                 Query(ConsoleModelQuery {
                     scope: None,
                     workspace_id: None,
-                    change_id: None,
+                    change_pack_id: None,
                     baseline_id: None,
                 }),
             ));
@@ -2335,7 +2346,7 @@ mod tests {
         // under those names is simply not read.
         let body = br#"{
             "invocation_capability": "cap-1",
-            "expected_revisions": {"registry": 1, "workspace": null, "change": null, "policy": null},
+            "expected_revisions": {"registry": 1, "workspace": null, "change_pack": null, "policy": null},
             "arguments": {},
             "application_session_id": "attacker_session",
             "client_instance_id": "attacker_instance",

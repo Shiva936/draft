@@ -21,7 +21,7 @@
 //! Refusal is recoverable: re-plan against the current route, re-authorize, and
 //! run. What is not available is proceeding as though nothing changed.
 
-use draft_dcg_contract::ids::{ChangeRevisionId, OperationId};
+use draft_dcg_contract::ids::{OperationId, RevisionPackId};
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::{OperationKindId, ProviderRouteRef};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ use crate::support::error::DraftResult;
 pub struct PlannedOperation {
     pub id: OperationId,
     /// The revision this Operation belongs to.
-    pub change_revision: ChangeRevisionId,
+    pub change_revision: RevisionPackId,
     pub kind: OperationKindId,
     /// The exact route this was planned and authorized against.
     ///
@@ -53,7 +53,7 @@ pub struct PlannedOperation {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionAuthorization {
     pub operation: OperationId,
-    pub change_revision: ChangeRevisionId,
+    pub change_revision: RevisionPackId,
     pub route: ProviderRouteRef,
     pub binding_generation: u64,
 }
@@ -145,7 +145,7 @@ mod tests {
     fn planned() -> PlannedOperation {
         PlannedOperation {
             id: OperationId::parse("op_000000000001").unwrap(),
-            change_revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+            change_revision: RevisionPackId::parse("rpk_000000000001").unwrap(),
             kind: OperationKindId::parse("draft.change/edit").unwrap(),
             route: ProviderRouteRef {
                 provenance: ProviderProvenanceRef {

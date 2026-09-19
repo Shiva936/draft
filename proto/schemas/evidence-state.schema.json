@@ -3,13 +3,13 @@
   "$id": "https://draft.dev/schemas/evidence-state.schema.json",
   "title": "Draft Evidence",
   "x-draft-format-revision": 1,
-  "description": "What was established about one exact ChangeRevision, from exactly which observations. Evidence never carries to another revision: an approval resting on evidence gathered before an edit is an approval of work that was never examined.",
+  "description": "What was established about one exact RevisionPack, from exactly which observations. Evidence never carries to another revision: an approval resting on evidence gathered before an edit is an approval of work that was never examined.",
   "type": "object",
-  "required": ["id", "revision", "inputs", "producer", "configuration", "outcome", "context"],
+  "required": ["id", "revision_pack", "inputs", "producer", "configuration", "outcome", "context"],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^evd_[A-Za-z0-9_-]+$" },
-    "revision": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]+$" },
+    "revision_pack": { "type": "string", "pattern": "^rpk_[A-Za-z0-9_-]+$" },
     "inputs": {
       "description": "The exact observations this read. Id and digest together, so substituting the observed bytes behind a stable id cannot silently change what the evidence rests on.",
       "type": "array",

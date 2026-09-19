@@ -194,15 +194,15 @@ mod tests {
         append(
             &log,
             "evt_000000000001",
-            crate::activity::EventKind::ChangeCreated,
-            "chg_1",
+            crate::activity::EventKind::ChangePackCreated,
+            "cpk_1",
         );
 
         let entry = entry(&log, "evt_000000000001").unwrap();
-        assert_eq!(entry.kind, "ChangeCreated");
-        assert_eq!(entry.subject.as_deref(), Some("chg_1"));
+        assert_eq!(entry.kind, "ChangePackCreated");
+        assert_eq!(entry.subject.as_deref(), Some("cpk_1"));
         assert_eq!(entry.actor, "act_000000000001");
-        assert_eq!(entry.metadata, json!({ "note": "chg_1" }));
+        assert_eq!(entry.metadata, json!({ "note": "cpk_1" }));
     }
 
     #[test]
@@ -212,14 +212,14 @@ mod tests {
         append(
             &log,
             "evt_000000000001",
-            crate::activity::EventKind::ChangeCreated,
-            "chg_1",
+            crate::activity::EventKind::ChangePackCreated,
+            "cpk_1",
         );
         append(
             &log,
             "evt_000000000002",
-            crate::activity::EventKind::RevisionSealed,
-            "chg_2",
+            crate::activity::EventKind::RevisionPackSealed,
+            "cpk_2",
         );
 
         let newest = page(&log, true, None, Some(1), None).unwrap();
@@ -235,14 +235,14 @@ mod tests {
         append(
             &log,
             "evt_000000000001",
-            crate::activity::EventKind::ChangeCreated,
-            "chg_1",
+            crate::activity::EventKind::ChangePackCreated,
+            "cpk_1",
         );
         append(
             &log,
             "evt_000000000002",
-            crate::activity::EventKind::RevisionSealed,
-            "chg_2",
+            crate::activity::EventKind::RevisionPackSealed,
+            "cpk_2",
         );
 
         assert_eq!(
@@ -250,7 +250,7 @@ mod tests {
             1
         );
         assert_eq!(
-            page(&log, false, None, None, Some("chg_1")).unwrap().len(),
+            page(&log, false, None, None, Some("cpk_1")).unwrap().len(),
             1
         );
         assert_eq!(
@@ -268,19 +268,19 @@ mod tests {
         append(
             &log,
             "evt_000000000001",
-            crate::activity::EventKind::ChangeCreated,
-            "chg_1",
+            crate::activity::EventKind::ChangePackCreated,
+            "cpk_1",
         );
         append(
             &log,
             "evt_000000000002",
-            crate::activity::EventKind::ChangeCreated,
-            "chg_2",
+            crate::activity::EventKind::ChangePackCreated,
+            "cpk_2",
         );
 
         let report = replay(&log, "prj_000000000001", log.verify_chain()).unwrap();
         assert_eq!(report.events, 2);
-        assert_eq!(report.by_kind.get("ChangeCreated"), Some(&2));
+        assert_eq!(report.by_kind.get("ChangePackCreated"), Some(&2));
         assert!(report.chain_ok);
     }
 }

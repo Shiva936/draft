@@ -55,7 +55,7 @@ pub trait RevisionedRecord: Serialize + DeserializeOwned + Clone {
 /// What a caller believes the record's state to be.
 ///
 /// `Absent` is a first-class expectation, not a missing case: it is what makes
-/// audited *creation* use the same protocol as update, so `ChangeCreated` and
+/// audited *creation* use the same protocol as update, so `ChangePackCreated` and
 /// `TaskCreated` need no separate creation path with its own failure modes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedRecordState {

@@ -116,13 +116,12 @@ pub struct TaskViewDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(rename = "ChangeSummary")]
-pub struct ChangeSummaryDto {
-    pub change_id: String,
+#[ts(rename = "ChangePackSummary")]
+pub struct ChangePackSummaryDto {
+    pub change_pack_id: String,
     pub name: String,
     pub intent: String,
     pub submit_state: String,
-    pub import_state: Option<String>,
     #[ts(type = "number | string | null")]
     pub revision: Option<serde_json::Value>,
     pub valid_actions: Vec<String>,
@@ -147,7 +146,7 @@ pub struct ProjectSummaryDto {
     #[ts(type = "Record<string, unknown>")]
     pub status: serde_json::Value,
     pub tasks: Vec<TaskDefinitionDto>,
-    pub changes: Vec<ChangeSummaryDto>,
+    pub change_packs: Vec<ChangePackSummaryDto>,
     pub inbox: Vec<InboxItemDto>,
 }
 
@@ -291,10 +290,10 @@ pub struct ChangeDerivationGapDto {
     pub uncovered_side: String,
 }
 
-/// A Change's authoritative transition, plus any derived explanation of it.
+/// A ChangePack's authoritative transition, plus any derived explanation of it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[ts(rename = "ChangeView")]
-pub struct ChangeViewDto {
+#[ts(rename = "ChangePackView")]
+pub struct ChangePackViewDto {
     pub change_set_digest: String,
     pub base_snapshot_digest: String,
     pub result_snapshot_digest: String,
@@ -367,7 +366,7 @@ pub struct SearchResultDto {
     pub kind: String,
     pub workspace_id: Option<String>,
     pub id: Option<String>,
-    pub change_id: Option<String>,
+    pub change_pack_id: Option<String>,
     pub title: String,
     pub subtitle: Option<String>,
 }
@@ -512,7 +511,7 @@ pub struct ConsoleContractsSchema {
     pub capability_gap: CapabilityGapDto,
     pub verification_check_result: VerificationCheckResultDto,
     pub resource_interference: ResourceInterferenceDto,
-    pub change_view: ChangeViewDto,
+    pub change_pack_view: ChangePackViewDto,
     pub rollback_outcome: RollbackOutcomeDto,
     pub search_result: SearchResultDto,
     pub extension_source: ExtensionCatalogSourceStatusDto,
@@ -541,7 +540,7 @@ pub fn typescript_declarations() -> String {
         TaskNextActionDto::decl(),
         TaskDefinitionDto::decl(),
         TaskViewDto::decl(),
-        ChangeSummaryDto::decl(),
+        ChangePackSummaryDto::decl(),
         InboxItemDto::decl(),
         ProjectSummaryDto::decl(),
         // Resources and what installed extensions say about them. Declared
@@ -556,7 +555,7 @@ pub fn typescript_declarations() -> String {
         ResourceChangeDto::decl(),
         ChangeDerivationGapDto::decl(),
         ReviewUnitDto::decl(),
-        ChangeViewDto::decl(),
+        ChangePackViewDto::decl(),
         RollbackUncertaintyDto::decl(),
         RollbackOutcomeDto::decl(),
         SearchResultDto::decl(),
@@ -642,7 +641,7 @@ fn navigation_declaration() -> String {
         "/** §8.3's information architecture. Generated; the daemon serves the same list. */\nexport const CONSOLE_NAVIGATION = {{\n GLOBAL: [\n{}\n ],\n PROJECT: [\n{}\n ],\n CHANGE: [\n{}\n ],\n BASELINE: [\n{}\n ],\n}} as const;\n",
         render(ConsoleScope::Global),
         render(ConsoleScope::Project),
-        render(ConsoleScope::Change),
+        render(ConsoleScope::ChangePack),
         render(ConsoleScope::Baseline),
     )
 }

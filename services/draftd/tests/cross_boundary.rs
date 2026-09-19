@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 mod catalog_fixture;
 use catalog_fixture::{build_official_catalog, env_lock, trust_catalog, GlobalHome};
 
-/// A workspace with one Rust artifact and a Change containing a change to it.
+/// A workspace with one Rust artifact and a ChangePack containing a change to it.
 /// A workspace with one Rust artifact and a sealed revision of an edit to it.
 fn rust_workspace() -> (tempfile::TempDir, App, String) {
     let directory = tempfile::tempdir().unwrap();
@@ -54,9 +54,11 @@ fn rust_workspace() -> (tempfile::TempDir, App, String) {
     //
     // The files arrived after `init`, so the accepted Baseline has never held
     // them and they have no Resource id to look up. Declaring them by path is
-    // how a Change names work on something the project did not start with.
+    // how a ChangePack names work on something the project did not start with.
     let scope = ["Cargo.toml".to_string(), "src/auth.rs".to_string()];
-    let change = app.dcg_open_change(root, "rust change", &scope).unwrap();
+    let change = app
+        .dcg_open_change_pack(root, "rust change", &scope)
+        .unwrap();
     let revision = app.dcg_seal(root, change.id.as_str()).unwrap();
     (directory, app, revision.id.to_string())
 }
@@ -194,7 +196,7 @@ fn the_rust_extension_restores_and_relinquishes_its_capability_through_public_co
     // existed to ask", which installing something fixes — while the list of
     // which resources it was does not travel in the fact.
     assert!(
-        after.revision.as_str() == revision_id,
+        after.revision_pack.as_str() == revision_id,
         "the evidence is about the revision that was verified"
     );
 

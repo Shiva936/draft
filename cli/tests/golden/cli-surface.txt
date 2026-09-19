@@ -5,6 +5,25 @@ draft
   flag: -V
   flag: -h
 
+draft update
+  usage: draft update [OPTIONS]
+  flag: --allow-downgrade
+  flag: --channel
+  flag: --check
+  flag: --help
+  flag: --json
+  flag: --version
+  flag: -h
+
+draft uninstall
+  usage: draft uninstall [OPTIONS]
+  flag: --dry-run
+  flag: --help
+  flag: --json
+  flag: --purge
+  flag: --yes
+  flag: -h
+
 draft daemon
   usage: draft daemon <COMMAND>
   flag: --help
@@ -149,211 +168,202 @@ draft project provider rebind
   flag: --json
   flag: -h
 
-draft change
-  usage: draft change <COMMAND>
+draft pack
+  usage: draft pack <COMMAND>
   flag: --help
   flag: -h
 
-draft change new
-  usage: draft change new [OPTIONS] <INTENT>
+draft pack new
+  usage: draft pack new [OPTIONS] <INTENT>
   arg: <INTENT>
   flag: --help
   flag: --json
   flag: --scope
   flag: -h
 
-draft change list
-  usage: draft change list [OPTIONS]
+draft pack list
+  usage: draft pack list [OPTIONS]
   flag: --help
   flag: --json
   flag: -h
 
-draft change show
-  usage: draft change show [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack show
+  usage: draft pack show [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change intent
-  usage: draft change intent <COMMAND>
+draft pack intent
+  usage: draft pack intent <COMMAND>
   flag: --help
   flag: -h
 
-draft change intent show
-  usage: draft change intent show [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack intent show
+  usage: draft pack intent show [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change intent set
-  usage: draft change intent set [OPTIONS] <CHANGE> <INTENT>
-  arg: <CHANGE>
+draft pack intent set
+  usage: draft pack intent set [OPTIONS] <CHANGE_PACK_ID> <INTENT>
+  arg: <CHANGE_PACK_ID>
   arg: <INTENT>
   flag: --help
   flag: --json
   flag: -h
 
-draft change intent amend
-  usage: draft change intent amend [OPTIONS] <CHANGE> <INTENT>
-  arg: <CHANGE>
+draft pack intent amend
+  usage: draft pack intent amend [OPTIONS] <CHANGE_PACK_ID> <INTENT>
+  arg: <CHANGE_PACK_ID>
   arg: <INTENT>
   flag: --help
   flag: --json
   flag: -h
 
-draft change select
-  usage: draft change select [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack select
+  usage: draft pack select [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change inspect
-  usage: draft change inspect [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack inspect
+  usage: draft pack inspect [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change depends
-  usage: draft change depends [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack depends
+  usage: draft pack depends [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change conflicts
-  usage: draft change conflicts [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack conflicts
+  usage: draft pack conflicts [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change compose
-  usage: draft change compose [OPTIONS] [CHANGES] [CHANGES]...
-  arg: [CHANGES] [CHANGES]...
+draft pack compose
+  usage: draft pack compose [OPTIONS] [CHANGE_PACK_IDS] [CHANGE_PACK_IDS]...
+  arg: [CHANGE_PACK_IDS] [CHANGE_PACK_IDS]...
   flag: --help
   flag: --json
   flag: -h
 
-draft change disperse
-  usage: draft change disperse [OPTIONS] [CHANGES] [CHANGES]...
-  arg: [CHANGES] [CHANGES]...
+draft pack disperse
+  usage: draft pack disperse [OPTIONS] [CHANGE_PACK_IDS] [CHANGE_PACK_IDS]...
+  arg: [CHANGE_PACK_IDS] [CHANGE_PACK_IDS]...
   flag: --help
   flag: --json
   flag: -h
 
-draft change impact
-  usage: draft change impact [OPTIONS] <REVISION>
-  arg: <REVISION>
+draft pack impact
+  usage: draft pack impact [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change coverage
-  usage: draft change coverage [OPTIONS] <REVISION>
-  arg: <REVISION>
+draft pack coverage
+  usage: draft pack coverage [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change representation
-  usage: draft change representation <COMMAND>
+draft pack representation
+  usage: draft pack representation <COMMAND>
   flag: --help
   flag: -h
 
-draft change representation list
-  usage: draft change representation list [OPTIONS]
-  flag: --help
-  flag: --json
-  flag: -h
-
-draft change representation show
-  usage: draft change representation show [OPTIONS] <REVISION>
-  arg: <REVISION>
+draft pack representation list
+  usage: draft pack representation list [OPTIONS]
   flag: --help
   flag: --json
   flag: -h
 
-draft change receipts
-  usage: draft change receipts [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack representation show
+  usage: draft pack representation show [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change scope
-  usage: draft change scope [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack receipts
+  usage: draft pack receipts [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change revision
-  usage: draft change revision <COMMAND>
-  flag: --help
-  flag: -h
-
-draft change revision seal
-  usage: draft change revision seal [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack scope
+  usage: draft pack scope [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change revision list
-  usage: draft change revision list [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack revision
+  usage: draft pack revision <COMMAND>
+  flag: --help
+  flag: -h
+
+draft pack revision seal
+  usage: draft pack revision seal [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change revision show
-  usage: draft change revision show [OPTIONS] <CHANGE> <REVISION>
-  arg: <CHANGE>
-  arg: <REVISION>
+draft pack revision list
+  usage: draft pack revision list [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change checkpoint
-  usage: draft change checkpoint [OPTIONS] <MESSAGE>
+draft pack revision show
+  usage: draft pack revision show [OPTIONS] <CHANGE_PACK_ID> <REVISION_PACK_ID>
+  arg: <CHANGE_PACK_ID>
+  arg: <REVISION_PACK_ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft pack checkpoint
+  usage: draft pack checkpoint [OPTIONS] <MESSAGE>
   arg: <MESSAGE>
   flag: --help
   flag: --json
   flag: -h
 
-draft change candidate
-  usage: draft change candidate <COMMAND>
+draft pack candidate
+  usage: draft pack candidate <COMMAND>
   flag: --help
   flag: -h
 
-draft change candidate list
-  usage: draft change candidate list [OPTIONS]
+draft pack candidate list
+  usage: draft pack candidate list [OPTIONS]
   flag: --help
   flag: --json
   flag: -h
 
-draft change candidate show
-  usage: draft change candidate show [OPTIONS] <CANDIDATE_NAME>
+draft pack candidate show
+  usage: draft pack candidate show [OPTIONS] <CANDIDATE_NAME>
   arg: <CANDIDATE_NAME>
   flag: --help
   flag: --json
   flag: -h
 
-draft change candidate add
-  usage: draft change candidate add [OPTIONS] <CANDIDATE_NAME> -- <TEMPLATE>...
-  arg: <CANDIDATE_NAME>
-  arg: <TEMPLATE>...
-  flag: --help
-  flag: --json
-  flag: --kind
-  flag: -h
-
-draft change candidate update
-  usage: draft change candidate update [OPTIONS] <CANDIDATE_NAME> -- <TEMPLATE>...
+draft pack candidate add
+  usage: draft pack candidate add [OPTIONS] <CANDIDATE_NAME> -- <TEMPLATE>...
   arg: <CANDIDATE_NAME>
   arg: <TEMPLATE>...
   flag: --help
@@ -361,81 +371,90 @@ draft change candidate update
   flag: --kind
   flag: -h
 
-draft change candidate remove
-  usage: draft change candidate remove [OPTIONS] <CANDIDATE_NAME>
+draft pack candidate update
+  usage: draft pack candidate update [OPTIONS] <CANDIDATE_NAME> -- <TEMPLATE>...
+  arg: <CANDIDATE_NAME>
+  arg: <TEMPLATE>...
+  flag: --help
+  flag: --json
+  flag: --kind
+  flag: -h
+
+draft pack candidate remove
+  usage: draft pack candidate remove [OPTIONS] <CANDIDATE_NAME>
   arg: <CANDIDATE_NAME>
   flag: --help
   flag: --json
   flag: -h
 
-draft change abandon
-  usage: draft change abandon [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack abandon
+  usage: draft pack abandon [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change reopen
-  usage: draft change reopen [OPTIONS] <CHANGE>
-  arg: <CHANGE>
+draft pack reopen
+  usage: draft pack reopen [OPTIONS] <CHANGE_PACK_ID>
+  arg: <CHANGE_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change compare
-  usage: draft change compare [OPTIONS] <LEFT> <RIGHT>
+draft pack compare
+  usage: draft pack compare [OPTIONS] <LEFT> <RIGHT>
   arg: <LEFT>
   arg: <RIGHT>
   flag: --help
   flag: --json
   flag: -h
 
-draft change evidence
-  usage: draft change evidence <COMMAND>
+draft pack evidence
+  usage: draft pack evidence <COMMAND>
   flag: --help
   flag: -h
 
-draft change evidence run
-  usage: draft change evidence run [OPTIONS] <REVISION>
-  arg: <REVISION>
-  flag: --help
-  flag: --json
-  flag: -h
-
-draft change evidence list
-  usage: draft change evidence list [OPTIONS] <REVISION>
-  arg: <REVISION>
+draft pack evidence run
+  usage: draft pack evidence run [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change evidence show
-  usage: draft change evidence show [OPTIONS] <EVIDENCE>
+draft pack evidence list
+  usage: draft pack evidence list [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
+  flag: --help
+  flag: --json
+  flag: -h
+
+draft pack evidence show
+  usage: draft pack evidence show [OPTIONS] <EVIDENCE>
   arg: <EVIDENCE>
   flag: --help
   flag: --json
   flag: -h
 
-draft change assess
-  usage: draft change assess [OPTIONS] --risk <RISK> <REVISION>
-  arg: <REVISION>
+draft pack assess
+  usage: draft pack assess [OPTIONS] --risk <RISK> <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --help
   flag: --json
   flag: --rationale
   flag: --risk
   flag: -h
 
-draft change review
-  usage: draft change review [OPTIONS] <REVISION>
-  arg: <REVISION>
+draft pack review
+  usage: draft pack review [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --comment
   flag: --help
   flag: --json
   flag: -h
 
-draft change decide
-  usage: draft change decide [OPTIONS] <REVISION>
-  arg: <REVISION>
+draft pack decide
+  usage: draft pack decide [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --approve
   flag: --gate
   flag: --help
@@ -444,30 +463,30 @@ draft change decide
   flag: --reject
   flag: -h
 
-draft change gates
-  usage: draft change gates <COMMAND>
+draft pack gates
+  usage: draft pack gates <COMMAND>
   flag: --help
   flag: -h
 
-draft change gates evaluate
-  usage: draft change gates evaluate [OPTIONS] <REVISION>
-  arg: <REVISION>
+draft pack gates evaluate
+  usage: draft pack gates evaluate [OPTIONS] <REVISION_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --help
   flag: --json
   flag: --waiver
   flag: -h
 
-draft change gates list
-  usage: draft change gates list [OPTIONS] <CHANGE> <REVISION>
-  arg: <CHANGE>
-  arg: <REVISION>
+draft pack gates list
+  usage: draft pack gates list [OPTIONS] <CHANGE_PACK_ID> <REVISION_PACK_ID>
+  arg: <CHANGE_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --help
   flag: --json
   flag: -h
 
-draft change gates waive
-  usage: draft change gates waive [OPTIONS] --reason <REASON> <REVISION> <CONDITION>
-  arg: <REVISION>
+draft pack gates waive
+  usage: draft pack gates waive [OPTIONS] --reason <REASON> <REVISION_PACK_ID> <CONDITION>
+  arg: <REVISION_PACK_ID>
   arg: <CONDITION>
   flag: --days
   flag: --help
@@ -1247,9 +1266,9 @@ draft baseline publish withdraw
   flag: -h
 
 draft promote
-  usage: draft promote [OPTIONS] <CHANGE> <REVISION>
-  arg: <CHANGE>
-  arg: <REVISION>
+  usage: draft promote [OPTIONS] <CHANGE_PACK_ID> <REVISION_PACK_ID>
+  arg: <CHANGE_PACK_ID>
+  arg: <REVISION_PACK_ID>
   flag: --decision
   flag: --expected-baseline
   flag: --gate
@@ -1322,22 +1341,6 @@ draft authority executor revoke
   flag: --help
   flag: --json
   flag: --reason
-  flag: -h
-
-draft export
-  usage: draft export [OPTIONS] [BASELINE]
-  arg: [BASELINE]
-  flag: --help
-  flag: --json
-  flag: --output
-  flag: -h
-
-draft import
-  usage: draft import [OPTIONS] <PATH>
-  arg: <PATH>
-  flag: --dry-run
-  flag: --help
-  flag: --json
   flag: -h
 
 exit codes

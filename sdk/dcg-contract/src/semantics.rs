@@ -21,8 +21,8 @@
 //! id that historical baselines already committed to, and every `BaselineId`
 //! that used it would silently change meaning while its bytes stayed valid.
 //!
-//! The contract object is **retained**: it is a GC root and travels in
-//! DraftPack exports, so verifying historical state semantics never requires
+//! The contract object is **retained**: it is a GC root, so verifying
+//! historical state semantics never requires
 //! the extension that contributed it to still be installed.
 
 use serde::{Deserialize, Serialize};

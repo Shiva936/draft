@@ -64,9 +64,9 @@ pub struct AppModel {
     pub palette_open: bool,
     /// An id being typed to open its own scope, if the prompt is open.
     ///
-    /// §8.3 gives a Change and a Baseline their own scopes, and this is how a
-    /// terminal reaches them. The id's own prefix decides which — `chg_` is a
-    /// Change and a Baseline digest is a Baseline — so there is nothing for a
+    /// §8.3 gives a ChangePack and a Baseline their own scopes, and this is how a
+    /// terminal reaches them. The id's own prefix decides which — `cpk_` is a
+    /// ChangePack and a Baseline digest is a Baseline — so there is nothing for a
     /// user to get wrong and nothing for this file to guess.
     pub open_subject: Option<String>,
     pub help_open: bool,
@@ -359,19 +359,17 @@ pub fn reduce(mut model: AppModel, event: AppEvent) -> (AppModel, Vec<Effect>) {
                             // The prefix is the scope. Draft ids are prefixed
                             // exactly so a reader — and this — never has to
                             // infer what an id refers to.
-                            let subject = if id.starts_with("chg_") {
-                                ConsoleSubject {
-                                    scope: ConsoleScope::Change,
-                                    workspace_id: model.subject.workspace_id.clone(),
-                                    change_id: Some(id),
-                                    baseline_id: None,
+                            let workspace_id =
+                                model.subject.workspace_id().unwrap_or_default().to_owned();
+                            let subject = if id.starts_with("cpk_") {
+                                ConsoleSubject::ChangePack {
+                                    workspace_id,
+                                    change_pack_id: id,
                                 }
                             } else {
-                                ConsoleSubject {
-                                    scope: ConsoleScope::Baseline,
-                                    workspace_id: model.subject.workspace_id.clone(),
-                                    change_id: None,
-                                    baseline_id: Some(id),
+                                ConsoleSubject::Baseline {
+                                    workspace_id,
+                                    baseline_id: id,
                                 }
                             };
                             model.subject = subject.clone();
@@ -411,9 +409,9 @@ pub fn reduce(mut model: AppModel, event: AppEvent) -> (AppModel, Vec<Effect>) {
                 KeyCode::Char('?') => model.help_open = true,
                 KeyCode::Char(':') => model.palette_open = true,
                 KeyCode::Char('/') => model.search = Some(String::new()),
-                // Open one Change or one Baseline in its own §8.3 scope.
+                // Open one ChangePack or one Baseline in its own §8.3 scope.
                 // Only from a project: both are things a project contains.
-                KeyCode::Char('o') if model.subject.workspace_id.is_some() => {
+                KeyCode::Char('o') if model.subject.workspace_id().is_some() => {
                     model.open_subject = Some(String::new());
                 }
                 KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -472,15 +470,15 @@ pub fn reduce(mut model: AppModel, event: AppEvent) -> (AppModel, Vec<Effect>) {
                 }
                 KeyCode::Char('r') => effects.push(Effect::Refresh),
                 KeyCode::Esc => {
-                    // Escape walks one level out. A Change and a Baseline are
+                    // Escape walks one level out. A ChangePack and a Baseline are
                     // both views *of* a project, so both land there.
-                    let target = match model.subject.scope {
-                        ConsoleScope::Change | ConsoleScope::Baseline => Some(ConsoleSubject {
-                            scope: ConsoleScope::Project,
-                            workspace_id: model.subject.workspace_id.clone(),
-                            change_id: None,
-                            baseline_id: None,
-                        }),
+                    let target = match model.subject.scope() {
+                        ConsoleScope::ChangePack | ConsoleScope::Baseline => model
+                            .subject
+                            .workspace_id()
+                            .map(|workspace_id| ConsoleSubject::Project {
+                                workspace_id: workspace_id.to_owned(),
+                            }),
                         ConsoleScope::Project => Some(ConsoleSubject::global()),
                         ConsoleScope::Global => None,
                     };
@@ -500,15 +498,11 @@ pub fn run_console(options: LaunchOptions) -> Result<(), String> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err("Draft Console TUI requires an interactive terminal (PTY); terminal state was not changed".into());
     }
-    let subject =
-        options
-            .preselected_workspace_id
-            .map_or_else(ConsoleSubject::global, |workspace_id| ConsoleSubject {
-                scope: ConsoleScope::Project,
-                workspace_id: Some(workspace_id),
-                change_id: None,
-                baseline_id: None,
-            });
+    let subject = options
+        .preselected_workspace_id
+        .map_or_else(ConsoleSubject::global, |workspace_id| {
+            ConsoleSubject::Project { workspace_id }
+        });
     let client = ConsoleClient::connect().map_err(|error| error.to_string())?;
     let (command_tx, command_rx) = mpsc::channel();
     let (backend_tx, backend_rx) = mpsc::channel();
@@ -810,19 +804,19 @@ fn render(frame: &mut ratatui::Frame<'_>, model: &AppModel) {
 }
 
 fn render_header(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, model: &AppModel) {
-    let context = match model.subject.scope {
+    let context = match model.subject.scope() {
         ConsoleScope::Global => "GLOBAL".to_string(),
         ConsoleScope::Project => format!(
             "PROJECT · {}",
-            model.subject.workspace_id.as_deref().unwrap_or("unknown")
+            model.subject.workspace_id().unwrap_or("unknown")
         ),
-        ConsoleScope::Change => format!(
+        ConsoleScope::ChangePack => format!(
             "CHANGE · {}",
-            model.subject.change_id.as_deref().unwrap_or("unknown")
+            model.subject.change_pack_id().unwrap_or("unknown")
         ),
         ConsoleScope::Baseline => format!(
             "BASELINE · {}",
-            model.subject.baseline_id.as_deref().unwrap_or("unknown")
+            model.subject.baseline_id().unwrap_or("unknown")
         ),
     };
     let state = match &model.connection {
@@ -854,7 +848,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, mo
 /// The authority sends nested sections; the TUI has one list, so a section's
 /// views are flattened into rows that still name their parent. Flattening the
 /// parent away instead would lose exactly the structure §8.3 specifies — a
-/// reader could no longer tell that Tasks and Changes are two views of Work
+/// reader could no longer tell that Tasks and ChangePacks are two views of Work
 /// rather than peers of Baselines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationRow {
@@ -959,7 +953,7 @@ fn active_navigation_label(model: &AppModel) -> Option<String> {
 
 fn active_content<'a>(model: &AppModel, read_model: &'a ConsoleReadModel) -> &'a serde_json::Value {
     let label = active_navigation_label(model).unwrap_or_default();
-    if read_model.subject.scope == ConsoleScope::Global && label == "Projects" {
+    if read_model.subject.scope() == ConsoleScope::Global && label == "Projects" {
         return read_model
             .content
             .get("overview")
@@ -968,7 +962,7 @@ fn active_content<'a>(model: &AppModel, read_model: &'a ConsoleReadModel) -> &'a
     }
     // A path, not a key, because the §8.3 sections nest. The TUI still renders
     // whatever it is handed: it selects a view, it does not interpret one.
-    let path: &[&str] = match (read_model.subject.scope, label.as_str()) {
+    let path: &[&str] = match (read_model.subject.scope(), label.as_str()) {
         (ConsoleScope::Global, "Overview") => &["overview"],
         (ConsoleScope::Global, "Inbox") => &["inbox"],
         (ConsoleScope::Global, "Doctor") => &["doctor"],
@@ -979,7 +973,7 @@ fn active_content<'a>(model: &AppModel, read_model: &'a ConsoleReadModel) -> &'a
         // Resource and a tool exists only because an extension contributes it.
         (ConsoleScope::Project, "Overview") => &["overview"],
         (ConsoleScope::Project, "Tasks") => &["work", "tasks"],
-        (ConsoleScope::Project, "Changes") => &["work", "changes"],
+        (ConsoleScope::Project, "Packs") => &["work", "packs"],
         (ConsoleScope::Project, "Resources") => &["resources", "resources"],
         (ConsoleScope::Project, "Observation") => &["resources", "observation"],
         (ConsoleScope::Project, "Baselines") => &["baselines", "baselines"],
@@ -991,24 +985,24 @@ fn active_content<'a>(model: &AppModel, read_model: &'a ConsoleReadModel) -> &'a
         (ConsoleScope::Project, "Providers") => &["providers"],
         (ConsoleScope::Project, "Extensions") => &["extensions", "extensions"],
         (ConsoleScope::Project, "Tools") => &["extensions", "tools"],
-        // What the Change Graph holds about one Change. Every act is its own
+        // What the Change Graph holds about one ChangePack. Every act is its own
         // view because every act is its own fact — a reader who cannot tell an
         // approval from a passing check cannot tell what authorized a
         // promotion.
-        (ConsoleScope::Change, "Summary") => &["summary"],
-        (ConsoleScope::Change, "Intent") => &["intent"],
-        (ConsoleScope::Change, "Scope") => &["scope"],
-        (ConsoleScope::Change, "Revisions") => &["revisions"],
-        (ConsoleScope::Change, "Impact") => &["impact"],
-        (ConsoleScope::Change, "Representations") => &["representations"],
-        (ConsoleScope::Change, "Evidence") => &["authorization", "evidence"],
-        (ConsoleScope::Change, "Assessments") => &["authorization", "assessments"],
-        (ConsoleScope::Change, "Review") => &["authorization", "reviews"],
-        (ConsoleScope::Change, "Decisions") => &["authorization", "decisions"],
-        (ConsoleScope::Change, "Gates") => &["authorization", "gates"],
-        (ConsoleScope::Change, "Promotion") => &["authorization", "promotion"],
-        (ConsoleScope::Change, "Receipts") => &["receipts"],
-        (ConsoleScope::Change, "Recovery") => &["recovery"],
+        (ConsoleScope::ChangePack, "Summary") => &["summary"],
+        (ConsoleScope::ChangePack, "Intent") => &["intent"],
+        (ConsoleScope::ChangePack, "Scope") => &["scope"],
+        (ConsoleScope::ChangePack, "Revisions") => &["revisions"],
+        (ConsoleScope::ChangePack, "Impact") => &["impact"],
+        (ConsoleScope::ChangePack, "Representations") => &["representations"],
+        (ConsoleScope::ChangePack, "Evidence") => &["authorization", "evidence"],
+        (ConsoleScope::ChangePack, "Assessments") => &["authorization", "assessments"],
+        (ConsoleScope::ChangePack, "Review") => &["authorization", "reviews"],
+        (ConsoleScope::ChangePack, "Decisions") => &["authorization", "decisions"],
+        (ConsoleScope::ChangePack, "Gates") => &["authorization", "gates"],
+        (ConsoleScope::ChangePack, "Promotion") => &["authorization", "promotion"],
+        (ConsoleScope::ChangePack, "Receipts") => &["receipts"],
+        (ConsoleScope::ChangePack, "Recovery") => &["recovery"],
         // One accepted historical node. The three roots are separate views
         // because they answer three different questions and are never
         // collapsed into one another.
@@ -1103,7 +1097,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, mo
         help = format!("Search: {search}_  ·  Esc clear · Enter apply");
     }
     if let Some(typed) = &model.open_subject {
-        help = format!("Open chg_ or baseline id: {typed}_  ·  Esc cancel · Enter open");
+        help = format!("Open cpk_ or baseline id: {typed}_  ·  Esc cancel · Enter open");
     }
     frame.render_widget(
         Paragraph::new(help).block(Block::default().borders(Borders::ALL).title("Keys")),
@@ -1114,7 +1108,7 @@ fn render_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, mo
 fn render_help(frame: &mut ratatui::Frame<'_>, _model: &AppModel) {
     let area = centered(frame.area(), 72, 16);
     frame.render_widget(Paragraph::new(
-        "Contextual help\n\nArrows or j/k  Navigate focused pane\nEnter          Open/select\nEsc            Close/back\nTab/Shift+Tab  Change pane\n/              Search/filter\no              Open a Change or Baseline in its own scope\n: or Ctrl+K    Command palette\nCtrl+P         Project switching\n?              Toggle help\nq              Safe quit\n\nDomain actions are supplied and validated by draftd."
+        "Contextual help\n\nArrows or j/k  Navigate focused pane\nEnter          Open/select\nEsc            Close/back\nTab/Shift+Tab  ChangePack pane\n/              Search/filter\no              Open a ChangePack or Baseline in its own scope\n: or Ctrl+K    Command palette\nCtrl+P         Project switching\n?              Toggle help\nq              Safe quit\n\nDomain actions are supplied and validated by draftd."
     ).block(Block::default().borders(Borders::ALL).title("Help")).wrap(Wrap { trim: false }), area);
 }
 
@@ -1232,9 +1226,8 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, model: &AppModel) {
     };
     let target = model
         .subject
-        .change_id
-        .as_deref()
-        .or(model.subject.workspace_id.as_deref())
+        .change_pack_id()
+        .or(model.subject.workspace_id())
         .unwrap_or("current context");
     let body = format!(
         "Target: {target}\nAction: {}\nEffect: draftd will revalidate current permissions, lifecycle, and revisions before execution.\n\nEnter/y confirm · Esc/n cancel",
@@ -1312,11 +1305,18 @@ mod tests {
     /// restated the sections would keep passing while the TUI and the daemon
     /// drifted apart, which is precisely the drift these tests exist to catch.
     fn model(scope: ConsoleScope) -> AppModel {
-        let subject = ConsoleSubject {
-            scope,
-            workspace_id: (scope != ConsoleScope::Global).then(|| "prj_test".into()),
-            change_id: (scope == ConsoleScope::Change).then(|| "chg_test".into()),
-            baseline_id: (scope == ConsoleScope::Baseline).then(|| "sha256:base".into()),
+        let workspace_id = "prj_test".to_string();
+        let subject = match scope {
+            ConsoleScope::Global => ConsoleSubject::global(),
+            ConsoleScope::Project => ConsoleSubject::Project { workspace_id },
+            ConsoleScope::ChangePack => ConsoleSubject::ChangePack {
+                workspace_id,
+                change_pack_id: "cpk_test".into(),
+            },
+            ConsoleScope::Baseline => ConsoleSubject::Baseline {
+                workspace_id,
+                baseline_id: "sha256:base".into(),
+            },
         };
         let navigation = draft_ipc::console_application::navigation_for(scope);
         reduce(
@@ -1344,7 +1344,7 @@ mod tests {
         let global = render_test_frame(&model(ConsoleScope::Global), 140, 40).unwrap();
         assert!(global.contains("Projects") && global.contains("Doctor"));
         assert!(!global.contains("Approvals"));
-        let change = render_test_frame(&model(ConsoleScope::Change), 140, 40).unwrap();
+        let change = render_test_frame(&model(ConsoleScope::ChangePack), 140, 40).unwrap();
         // The Change Graph's own stages, each its own view. A single "Submit"
         // step is exactly what the ontology took apart: deciding authorizes,
         // promotion accepts, and a reader has to be able to see which happened.
@@ -1353,14 +1353,14 @@ mod tests {
         for retired in ["Submit", "Approvals", "Rollback", "Risk"] {
             assert!(
                 !change.contains(retired),
-                "the Change scope still offers the retired '{retired}' view"
+                "the ChangePack scope still offers the retired '{retired}' view"
             );
         }
-        // A Change is not a Pack. The header named the retired ontology long
+        // A ChangePack is not a Pack. The header named the retired ontology long
         // after the model stopped using it.
         assert!(
             !change.contains("PACK"),
-            "the Change header still names the retired Pack ontology:\n{change}"
+            "the ChangePack header still names the retired Pack ontology:\n{change}"
         );
     }
 
@@ -1376,7 +1376,7 @@ mod tests {
         for scope in [
             ConsoleScope::Global,
             ConsoleScope::Project,
-            ConsoleScope::Change,
+            ConsoleScope::ChangePack,
             ConsoleScope::Baseline,
         ] {
             let mut model = model(scope);
@@ -1430,7 +1430,7 @@ mod tests {
             .expect("Work is a section");
         assert_eq!(
             work.children,
-            vec!["Tasks".to_string(), "Changes".to_string()]
+            vec!["Tasks".to_string(), "Packs".to_string()]
         );
         // And the rows a frontend renders name their parent, so a reader can
         // still see that Tasks is a view of Work.
@@ -1443,20 +1443,17 @@ mod tests {
     #[test]
     fn the_change_graph_reaches_the_tui_through_the_same_model_the_browser_reads() {
         // The TUI selects a view of the daemon's model; it never interprets
-        // one. What this proves is that the selection reaches the Change
+        // one. What this proves is that the selection reaches the ChangePack
         // Graph's parts — a Baseline and a delivery rendered separately, so a
         // failed delivery can never be shown as the Baseline having failed.
-        let subject = ConsoleSubject {
-            scope: ConsoleScope::Project,
-            workspace_id: Some("prj_test".into()),
-            change_id: None,
-            baseline_id: None,
+        let subject = ConsoleSubject::Project {
+            workspace_id: "prj_test".into(),
         };
         let content = json!({
             "overview": {"name": "test"},
             "work": {
                 "tasks": [{"id": "tsk_1"}],
-                "changes": [{"change": "chg_1"}],
+                "packs": [{"change_pack_id": "cpk_1"}],
             },
             "baselines": {
                 "baselines": [{"baseline": "sha256:accepted"}],
@@ -1519,12 +1516,12 @@ mod tests {
             "provider state reaches the TUI:\n{providers}"
         );
 
-        select(&mut model, "Changes");
+        select(&mut model, "Packs");
         let changes = render_test_frame(&model, 140, 40).unwrap();
-        assert!(changes.contains("chg_1"), "{changes}");
+        assert!(changes.contains("cpk_1"), "{changes}");
     }
 
-    /// A Change and a Baseline are reachable, not merely defined.
+    /// A ChangePack and a Baseline are reachable, not merely defined.
     ///
     /// §8.3 gives each its own scope; a scope no frontend can navigate to is a
     /// specification, not a feature. The id's prefix chooses, so the terminal
@@ -1546,33 +1543,33 @@ mod tests {
             reduce(model, key(KeyCode::Enter))
         };
 
-        let (model, effects) = open("chg_abc123");
-        assert_eq!(model.subject.scope, ConsoleScope::Change);
-        assert_eq!(model.subject.change_id.as_deref(), Some("chg_abc123"));
-        assert!(model.subject.baseline_id.is_none());
+        let (model, effects) = open("cpk_abc123");
+        assert_eq!(model.subject.scope(), ConsoleScope::ChangePack);
+        assert_eq!(model.subject.change_pack_id(), Some("cpk_abc123"));
+        assert!(model.subject.baseline_id().is_none());
         assert!(effects
             .iter()
             .any(|effect| matches!(effect, Effect::ChangeSubject(_))));
 
         let (model, effects) = open("sha256:abc");
-        assert_eq!(model.subject.scope, ConsoleScope::Baseline);
-        assert_eq!(model.subject.baseline_id.as_deref(), Some("sha256:abc"));
-        assert!(model.subject.change_id.is_none());
+        assert_eq!(model.subject.scope(), ConsoleScope::Baseline);
+        assert_eq!(model.subject.baseline_id(), Some("sha256:abc"));
+        assert!(model.subject.change_pack_id().is_none());
         assert!(effects
             .iter()
             .any(|effect| matches!(effect, Effect::ChangeSubject(_))));
 
         // The project is kept, because both are things a project contains.
-        assert_eq!(model.subject.workspace_id.as_deref(), Some("prj_test"));
+        assert_eq!(model.subject.workspace_id(), Some("prj_test"));
 
         // Escape walks back out to the project, from either.
         let (out, _) = reduce(model, key(KeyCode::Esc));
-        assert_eq!(out.subject.scope, ConsoleScope::Project);
+        assert_eq!(out.subject.scope(), ConsoleScope::Project);
     }
 
     #[test]
     fn disconnect_preserves_models_and_invalidates_actions() {
-        let original = model(ConsoleScope::Change);
+        let original = model(ConsoleScope::ChangePack);
         let (stale, _) = reduce(original, AppEvent::Disconnected("daemon stopped".into()));
         assert!(stale.read_model.is_some());
         assert!(matches!(stale.connection, ConnectionState::Disconnected(_)));
@@ -1587,7 +1584,7 @@ mod tests {
 
     #[test]
     fn wide_standard_narrow_and_minimum_layouts_render() {
-        let model = model(ConsoleScope::Change);
+        let model = model(ConsoleScope::ChangePack);
         for (width, height) in [(200, 55), (140, 40), (100, 30), (80, 24), (60, 18)] {
             let frame = render_test_frame(&model, width, height).unwrap();
             assert!(frame.contains("Draft Console"));
@@ -1597,7 +1594,7 @@ mod tests {
 
     #[test]
     fn reducer_handles_focus_help_quit_and_confirmation_capture() {
-        let model = model(ConsoleScope::Change);
+        let model = model(ConsoleScope::ChangePack);
         let (model, _) = reduce(
             model,
             AppEvent::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),

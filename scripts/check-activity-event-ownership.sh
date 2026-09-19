@@ -36,11 +36,11 @@ WorkspaceCreated CheckpointCreated
 ProviderSemanticDefinitionAdded ProviderOperationalProfileAdded
 ProviderBindingAdded ProviderBindingRetargeted ProviderBindingUnbound ProviderBindingRebound
 TaskCreated TaskUpdated TaskClosed TaskReopened
-ChangeCreated ChangeDefinitionAmended ChangeCompleted ChangeAbandoned ChangeReopened
+ChangePackCreated ChangePackDefinitionAmended ChangePackCompleted ChangePackAbandoned ChangePackReopened
 AuthorityGranted AuthorityRevoked SecurityStateUpdated PolicyUpdated
 OperationPlanned OperationExecuted OperationRefused OperationReplanned
 ResourceObserved CoverageRecorded RelationDerived StateBearingDeclared
-ScopeResolved RevisionSealed
+ScopeResolved RevisionPackSealed
 EvidenceProduced AssessmentProduced
 ReviewSubmitted DecisionRecorded GateEvaluated GateWaived
 LeaseAcquired LeaseReleased LeaseRefused
@@ -117,8 +117,8 @@ REQUIRED = {
     "PublicationRetryAuthorized": "RetryAuthorizationJournal",
     "PublicationRequested": "PublicationCreationJournal",
     "PublicationDispatchCommitted": "PublicationAttemptJournal",
-    "ChangeCompleted": "PromotionJournal",
-    "ChangeAbandoned": "RecordMutationJournal",
+    "ChangePackCompleted": "PromotionJournal",
+    "ChangePackAbandoned": "RecordMutationJournal",
     # Immutable definitions are independent facts; folding them into the
     # binding's mutation would leave one created but never recorded.
     "ProviderSemanticDefinitionAdded": "FactCreationJournal",

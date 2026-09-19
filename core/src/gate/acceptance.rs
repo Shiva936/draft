@@ -376,7 +376,7 @@ pub struct AcceptanceRequirement {
 pub struct AcceptanceEvaluation {
     pub schema_version: u32,
     pub evaluator_revision: u32,
-    pub change_id: String,
+    pub change_pack_id: String,
     /// The transition being accepted. Recorded, never an input to the context.
     pub change_set_digest: String,
     pub acceptance_context_digest: String,
@@ -409,7 +409,7 @@ impl AcceptanceEvaluation {
         self.evaluation_digest.clear();
         self.evaluation_digest = canonical_hash(&serde_json::json!({
             "evaluator_revision": self.evaluator_revision,
-            "change_id": self.change_id,
+            "change_pack_id": self.change_pack_id,
             "change_set_digest": self.change_set_digest,
             "acceptance_context_digest": self.acceptance_context_digest,
             "requirements": self.requirements,
@@ -472,7 +472,7 @@ mod tests {
         for forbidden in [
             "change_set_digest",
             "snapshot_digest",
-            "change_id",
+            "change_pack_id",
             "candidate_id",
         ] {
             assert!(
@@ -562,7 +562,7 @@ mod tests {
         let evaluation = AcceptanceEvaluation {
             schema_version: current_version(ContractId::AcceptanceEvaluation),
             evaluator_revision: ACCEPTANCE_EVALUATOR_REVISION,
-            change_id: "chg_1".into(),
+            change_pack_id: "cpk_1".into(),
             change_set_digest: "chg-digest".into(),
             acceptance_context_digest: context.context_digest.clone(),
             requirements: vec![
@@ -602,7 +602,7 @@ mod tests {
         let mut evaluation = AcceptanceEvaluation {
             schema_version: current_version(ContractId::AcceptanceEvaluation),
             evaluator_revision: ACCEPTANCE_EVALUATOR_REVISION,
-            change_id: "chg_1".into(),
+            change_pack_id: "cpk_1".into(),
             change_set_digest: "chg".into(),
             acceptance_context_digest: context.context_digest.clone(),
             requirements: Vec::new(),
@@ -663,7 +663,7 @@ mod tests {
 /// same answer and a readiness result can be reproduced from what it recorded.
 #[derive(Debug, Clone)]
 pub struct EvaluationFacts {
-    pub change_id: String,
+    pub change_pack_id: String,
     pub change_set_digest: String,
     /// Whether every coverage domain the change touches was established.
     pub observation_complete: bool,
@@ -846,7 +846,7 @@ pub fn evaluate(context: &AcceptanceContext, facts: &EvaluationFacts) -> Accepta
     AcceptanceEvaluation {
         schema_version: current_version(ContractId::AcceptanceEvaluation),
         evaluator_revision: ACCEPTANCE_EVALUATOR_REVISION,
-        change_id: facts.change_id.clone(),
+        change_pack_id: facts.change_pack_id.clone(),
         change_set_digest: facts.change_set_digest.clone(),
         acceptance_context_digest: context.context_digest.clone(),
         requirements,
@@ -872,7 +872,7 @@ mod evaluation_tests {
 
     fn clean_facts() -> EvaluationFacts {
         EvaluationFacts {
-            change_id: "chg_1".into(),
+            change_pack_id: "cpk_1".into(),
             change_set_digest: "chg".into(),
             observation_complete: true,
             observation_detail: "every domain established".into(),

@@ -8,10 +8,10 @@
 //! # Nothing carries across revisions
 //!
 //! This is the rule the module exists to enforce. Evidence binds an *exact*
-//! `ChangeRevisionId`, and there is deliberately no way to ask whether it also
+//! `RevisionPackId`, and there is deliberately no way to ask whether it also
 //! covers a later one.
 //!
-//! The tempting shortcut is to let evidence follow the Change: the tests
+//! The tempting shortcut is to let evidence follow the ChangePack: the tests
 //! passed, the author edited one file, surely the result still holds. But
 //! nobody knows that without running them again, and an approval resting on
 //! evidence gathered before the edit is an approval of work that was never
@@ -38,7 +38,7 @@ pub mod representation;
 pub mod risk;
 pub mod verification;
 
-use draft_dcg_contract::ids::{ChangeRevisionId, EvidenceId};
+use draft_dcg_contract::ids::{EvidenceId, RevisionPackId};
 use draft_dcg_contract::observation::ObservationRef;
 use draft_dcg_contract::producer::ProducerIdentity;
 use draft_dcg_contract::Digest;
@@ -84,7 +84,7 @@ impl EvidenceOutcome {
 pub struct Evidence {
     pub id: EvidenceId,
     /// The exact revision this was established about.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The exact observations it read.
     pub inputs: BTreeSet<ObservationRef>,
     /// Who produced it.
@@ -129,8 +129,8 @@ impl Evidence {
     /// Exact equality, and deliberately the only way to ask. There is no
     /// "close enough" revision: evidence gathered before an edit says nothing
     /// about the work after it.
-    pub fn covers(&self, revision: &ChangeRevisionId) -> bool {
-        &self.revision == revision
+    pub fn covers(&self, revision: &RevisionPackId) -> bool {
+        &self.revision_pack == revision
     }
 }
 

@@ -11,7 +11,7 @@ use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {
     if let Ok(text) = std::str::from_utf8(data) {
         if let Ok(bundle) = serde_json::from_str::<
-            draft_core::evidence::representation::ChangeRepresentationBundle,
+            draft_core::evidence::representation::RevisionPackRepresentationBundle,
         >(text)
         {
             // Sealing recomputes the bundle's own identity, and the claim

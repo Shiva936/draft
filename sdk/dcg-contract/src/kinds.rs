@@ -74,13 +74,13 @@ kind_id!(
     /// What kind of mutation an Operation performs.
     OperationKindId);
 kind_id!(
-    /// What kind of Evidence was produced about a ChangeRevision.
+    /// What kind of Evidence was produced about a RevisionPack.
     EvidenceKindId);
 kind_id!(
-    /// What kind of Assessment was produced about a ChangeRevision.
+    /// What kind of Assessment was produced about a RevisionPack.
     AssessmentKindId);
 kind_id!(
-    /// What kind of rendering a ChangeRepresentation is.
+    /// What kind of rendering a RevisionPackRepresentation is.
     ///
     /// A line diff is one representation among many, never the universal one.
     RepresentationKindId);

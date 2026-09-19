@@ -7,12 +7,13 @@ Draft gives people control over agent-scale changes. It is organized around the 
 - [Installation](guides/installation.md) covers release binaries, supported platforms, upgrades, and source builds.
 - [Getting Started](guides/getting-started.md) walks through a complete local workflow and answers common questions.
 - [Workflows](guides/workflows.md) covers agent, Git-integrated, and Draft-only usage.
+- [Console](guides/console.md) covers console lifecycle.
 
 ## Reference
 
 - [The Draft Change Graph](reference/dcg.md) is the canonical model: the exact-reference audited set, immutable-fact integrity, provenance versus route, Baseline identity, and the staged-versus-dispatched attempt distinction.
 - [Command Reference](reference/commands.md) documents the CLI surface.
-- [Concepts](reference/concepts.md) explains workspaces, checkpoints, Changes, tasks, executions, evidence, comparison, and composition.
+- [Concepts](reference/concepts.md) explains workspaces, checkpoints, ChangePacks, tasks, executions, evidence, comparison, and composition.
 - [Configuration](reference/configuration.md) covers config files, hooks, precedence, and ignore rules.
 - [Review, Verification, And Policy](reference/review-and-policy.md) covers evidence gates, risk, approval, policy, and Draft Console.
 
@@ -29,6 +30,6 @@ Draft gives people control over agent-scale changes. It is organized around the 
 
 ## Draft Boundary
 
-Draft is local-first. It stores verified, signed, portable Changes in `.draft/`, supports optional opaque `hooks.*` command execution, and does not implement network, hosted-service, marketplace, cloud-sync, or native external-action behavior.
+Draft is local-first. It stores verified, signed, portable ChangePacks in `.draft/`, supports optional opaque `hooks.*` command execution, and does not implement network, hosted-service, marketplace, cloud-sync, or native external-action behavior.
 
 Draft does not read external tool metadata to decide what changed. The workspace scanner walks files directly and applies only Draft's own rules plus the hard `.draft/` exclusion.

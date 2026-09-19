@@ -261,7 +261,7 @@
     "CanonicalRevisions": {
       "additionalProperties": false,
       "properties": {
-        "change": {
+        "change_pack": {
           "type": [
             "string",
             "null"
@@ -346,16 +346,10 @@
       ],
       "type": "object"
     },
-    "ChangeSummaryDto": {
+    "ChangePackSummaryDto": {
       "properties": {
-        "change_id": {
+        "change_pack_id": {
           "type": "string"
-        },
-        "import_state": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "intent": {
           "type": "string"
@@ -375,7 +369,7 @@
         }
       },
       "required": [
-        "change_id",
+        "change_pack_id",
         "intent",
         "name",
         "submit_state",
@@ -383,8 +377,8 @@
       ],
       "type": "object"
     },
-    "ChangeViewDto": {
-      "description": "A Change's authoritative transition, plus any derived explanation of it.",
+    "ChangePackViewDto": {
+      "description": "A ChangePack's authoritative transition, plus any derived explanation of it.",
       "properties": {
         "base_snapshot_digest": {
           "type": "string"
@@ -503,7 +497,7 @@
     },
     "ConsoleNavigationSection": {
       "additionalProperties": false,
-      "description": "One entry in a scope's navigation, with the views nested under it.\n\nNested rather than flattened because §8.3 nests: `Work (Tasks | Changes)` is one section with two views, and flattening it would make Tasks and Changes look like peers of Resources and Baselines. A section with no children is a leaf and renders as one row.",
+      "description": "One entry in a scope's navigation, with the views nested under it.\n\nNested rather than flattened because §8.3 nests: `Work (Tasks | ChangePacks)` is one section with two views, and flattening it would make Tasks and ChangePacks look like peers of Resources and Baselines. A section with no children is a leaf and renders as one row.",
       "properties": {
         "children": {
           "default": [],
@@ -592,25 +586,6 @@
       ],
       "type": "object"
     },
-    "ConsoleScope": {
-      "oneOf": [
-        {
-          "enum": [
-            "GLOBAL",
-            "PROJECT",
-            "CHANGE"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "One accepted Baseline. §8.3 gives it its own scope because its views — the three roots, lineage, composition, recoverability — are about a historical node, not about the project as it stands now.",
-          "enum": [
-            "BASELINE"
-          ],
-          "type": "string"
-        }
-      ]
-    },
     "ConsoleSessionDto": {
       "properties": {
         "authenticated": {
@@ -638,36 +613,90 @@
       "type": "object"
     },
     "ConsoleSubject": {
-      "additionalProperties": false,
-      "properties": {
-        "baseline_id": {
-          "default": null,
-          "description": "Required by, and only meaningful for, the `BASELINE` scope.\n\nAlways serialized, like the sibling ids: a subject that sometimes carries the field and sometimes omits it is two shapes on the wire.",
-          "type": [
-            "string",
-            "null"
-          ]
+      "description": "What a Console view is about.\n\nA tagged union, so an impossible combination — a ChangePack without a project, a Baseline id on a ChangePack subject — cannot be represented at all rather than being rejected after the fact.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Empty braces rather than a unit variant: serde lets an internally tagged unit variant ignore extra fields even under `deny_unknown_fields`.",
+          "properties": {
+            "scope": {
+              "enum": [
+                "GLOBAL"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "type": "object"
         },
-        "change_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+        {
+          "additionalProperties": false,
+          "properties": {
+            "scope": {
+              "enum": [
+                "PROJECT"
+              ],
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "scope",
+            "workspace_id"
+          ],
+          "type": "object"
         },
-        "scope": {
-          "$ref": "#/definitions/ConsoleScope"
+        {
+          "additionalProperties": false,
+          "properties": {
+            "change_pack_id": {
+              "type": "string"
+            },
+            "scope": {
+              "enum": [
+                "CHANGE_PACK"
+              ],
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "change_pack_id",
+            "scope",
+            "workspace_id"
+          ],
+          "type": "object"
         },
-        "workspace_id": {
-          "type": [
-            "string",
-            "null"
-          ]
+        {
+          "additionalProperties": false,
+          "properties": {
+            "baseline_id": {
+              "type": "string"
+            },
+            "scope": {
+              "enum": [
+                "BASELINE"
+              ],
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "baseline_id",
+            "scope",
+            "workspace_id"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "scope"
-      ],
-      "type": "object"
+      ]
     },
     "DiscoveredExtensionDto": {
       "properties": {
@@ -943,9 +972,9 @@
     },
     "ProjectSummaryDto": {
       "properties": {
-        "changes": {
+        "change_packs": {
           "items": {
-            "$ref": "#/definitions/ChangeSummaryDto"
+            "$ref": "#/definitions/ChangePackSummaryDto"
           },
           "type": "array"
         },
@@ -970,7 +999,7 @@
         }
       },
       "required": [
-        "changes",
+        "change_packs",
         "inbox",
         "project",
         "revision",
@@ -1276,7 +1305,7 @@
     },
     "SearchResultDto": {
       "properties": {
-        "change_id": {
+        "change_pack_id": {
           "type": [
             "string",
             "null"
@@ -1635,8 +1664,8 @@
     "capability_gap": {
       "$ref": "#/definitions/CapabilityGapDto"
     },
-    "change_view": {
-      "$ref": "#/definitions/ChangeViewDto"
+    "change_pack_view": {
+      "$ref": "#/definitions/ChangePackViewDto"
     },
     "classification_bundle": {
       "$ref": "#/definitions/ClassificationBundleDto"
@@ -1698,7 +1727,7 @@
   },
   "required": [
     "capability_gap",
-    "change_view",
+    "change_pack_view",
     "classification_bundle",
     "console_action_invocation",
     "console_model",

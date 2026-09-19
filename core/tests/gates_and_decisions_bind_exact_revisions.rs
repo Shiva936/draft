@@ -7,13 +7,13 @@ use draft_core::evidence::context::{
 use draft_core::gate::waiver::{GateWaiver, GateWaiverStore};
 use draft_core::gate::{GateCondition, GateEvaluation, GateEvaluationStore};
 use draft_dcg_contract::identifier::{NamespacedId, ScopedId};
-use draft_dcg_contract::ids::{ActorId, ChangeRevisionId, DecisionId};
+use draft_dcg_contract::ids::{ActorId, DecisionId, RevisionPackId};
 use draft_dcg_contract::security::{PolicyDigest, SecurityControlKindId, SecurityFactRef};
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::Digest;
 
-fn revision(id: &str) -> ChangeRevisionId {
-    ChangeRevisionId::parse(id).unwrap()
+fn revision(id: &str) -> RevisionPackId {
+    RevisionPackId::parse(id).unwrap()
 }
 
 fn at(nanos: i64) -> Timestamp {
@@ -55,7 +55,7 @@ fn condition(id: &str, satisfied: bool) -> GateCondition {
 fn evaluation(id: &str, rev: &str, conditions: Vec<GateCondition>) -> GateEvaluation {
     GateEvaluation {
         id: id.into(),
-        revision: revision(rev),
+        revision_pack: revision(rev),
         definition: Digest::of_bytes(b"definition"),
         scope: Digest::of_bytes(b"scope"),
         evidence: Default::default(),
@@ -69,7 +69,7 @@ fn evaluation(id: &str, rev: &str, conditions: Vec<GateCondition>) -> GateEvalua
 fn a_gate_that_checked_nothing_does_not_pass() {
     // Without this an empty condition set satisfies `all()` vacuously, and a
     // misconfiguration that selected no conditions would read as approval.
-    let empty = evaluation("gate_1", "rev_000000000001", vec![]);
+    let empty = evaluation("gate_1", "rpk_000000000001", vec![]);
     assert!(empty.validate().is_err());
 }
 
@@ -77,16 +77,16 @@ fn a_gate_that_checked_nothing_does_not_pass() {
 fn a_failed_condition_must_say_why() {
     let mut silent = condition("tests", false);
     silent.detail = None;
-    let gate = evaluation("gate_1", "rev_000000000001", vec![silent]);
+    let gate = evaluation("gate_1", "rpk_000000000001", vec![silent]);
     assert!(gate.validate().is_err());
 }
 
 #[test]
 fn a_gate_binds_the_revision_it_evaluated() {
-    let gate = evaluation("gate_1", "rev_000000000001", vec![condition("tests", true)]);
+    let gate = evaluation("gate_1", "rpk_000000000001", vec![condition("tests", true)]);
     assert!(gate.is_satisfied());
-    assert!(gate.covers(&revision("rev_000000000001")));
-    assert!(!gate.covers(&revision("rev_000000000002")));
+    assert!(gate.covers(&revision("rpk_000000000001")));
+    assert!(!gate.covers(&revision("rpk_000000000002")));
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn failures_are_recorded_rather_than_dropped() {
     // pass: "risk unassessed" and "tests failed" call for different work.
     let gate = evaluation(
         "gate_1",
-        "rev_000000000001",
+        "rpk_000000000001",
         vec![condition("tests", true), condition("risk", false)],
     );
     assert!(!gate.is_satisfied());
@@ -110,12 +110,12 @@ fn a_gate_evaluation_cannot_be_rewritten_behind_its_id() {
     let store = GateEvaluationStore::new(directory.path());
     let failed = evaluation(
         "gate_1",
-        "rev_000000000001",
+        "rpk_000000000001",
         vec![condition("tests", false)],
     );
     store.put(&failed).unwrap();
 
-    let passed = evaluation("gate_1", "rev_000000000001", vec![condition("tests", true)]);
+    let passed = evaluation("gate_1", "rpk_000000000001", vec![condition("tests", true)]);
     assert!(
         store.put(&passed).is_err(),
         "a gate result cannot be flipped behind the id a promotion cites"
@@ -126,7 +126,7 @@ fn a_gate_evaluation_cannot_be_rewritten_behind_its_id() {
 fn an_approval_must_cite_its_authority_but_a_refusal_need_not() {
     let approval_without_authority = Decision {
         id: DecisionId::parse("dec_000000000001").unwrap(),
-        revision: revision("rev_000000000001"),
+        revision_pack: revision("rpk_000000000001"),
         outcome: DecisionOutcome::Approved,
         decided_by: ActorId::parse("act_000000000001").unwrap(),
         decided_at: at(1),
@@ -161,7 +161,7 @@ fn requesting_changes_is_not_a_rejection() {
     // stop.
     let base = Decision {
         id: DecisionId::parse("dec_000000000001").unwrap(),
-        revision: revision("rev_000000000001"),
+        revision_pack: revision("rpk_000000000001"),
         outcome: DecisionOutcome::Approved,
         decided_by: ActorId::parse("act_000000000001").unwrap(),
         decided_at: at(1),
@@ -192,7 +192,7 @@ fn a_decision_cannot_be_rewritten_behind_its_id() {
     let store = DecisionStore::new(directory.path());
     let rejected = Decision {
         id: DecisionId::parse("dec_000000000001").unwrap(),
-        revision: revision("rev_000000000001"),
+        revision_pack: revision("rpk_000000000001"),
         outcome: DecisionOutcome::Rejected {
             reason: "not this approach".into(),
         },
@@ -217,7 +217,7 @@ fn a_decision_cannot_be_rewritten_behind_its_id() {
 fn a_waiver_covers_one_condition_on_one_revision_until_it_expires() {
     let waiver = GateWaiver {
         id: "wvr_1".into(),
-        revision: revision("rev_000000000001"),
+        revision_pack: revision("rpk_000000000001"),
         condition: "risk".into(),
         reason: "no risk rules are contributed for this project".into(),
         waived_by: ActorId::parse("act_000000000001").unwrap(),
@@ -227,11 +227,11 @@ fn a_waiver_covers_one_condition_on_one_revision_until_it_expires() {
     };
     waiver.validate().unwrap();
 
-    assert!(waiver.is_in_force(&revision("rev_000000000001"), "risk", at(50)));
+    assert!(waiver.is_in_force(&revision("rpk_000000000001"), "risk", at(50)));
     // Not for another condition, another revision, or after it lapses.
-    assert!(!waiver.is_in_force(&revision("rev_000000000001"), "tests", at(50)));
-    assert!(!waiver.is_in_force(&revision("rev_000000000002"), "risk", at(50)));
-    assert!(!waiver.is_in_force(&revision("rev_000000000001"), "risk", at(100)));
+    assert!(!waiver.is_in_force(&revision("rpk_000000000001"), "tests", at(50)));
+    assert!(!waiver.is_in_force(&revision("rpk_000000000002"), "risk", at(50)));
+    assert!(!waiver.is_in_force(&revision("rpk_000000000001"), "risk", at(100)));
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn a_waiver_without_an_end_is_refused() {
     // An exception with no expiry is a policy change nobody decided to make.
     let waiver = GateWaiver {
         id: "wvr_1".into(),
-        revision: revision("rev_000000000001"),
+        revision_pack: revision("rpk_000000000001"),
         condition: "risk".into(),
         reason: "accepted".into(),
         waived_by: ActorId::parse("act_000000000001").unwrap(),

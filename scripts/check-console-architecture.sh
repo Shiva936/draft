@@ -40,7 +40,7 @@ done <<< "$methods"
 
 rg -Fq 'pub const IPC_PROTOCOL: &str = "draft-ipc"' "$root_dir/services/ipc/src/protocol.rs"
 rg -Fq '.route("/api/v1/' "$gateway"
-rg -Fq 'valid_actions_for_label' "$root_dir/core/src/dcg/revision.rs"
+rg -Fq 'valid_actions_for_label' "$root_dir/core/src/dcg/revision_pack.rs"
 if rg -Fq '/api/console/v1' "$root_dir/console/src" "$root_dir/console/web/src"; then
   echo "Retired Console routes remain in active source." >&2
   exit 1

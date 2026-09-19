@@ -226,6 +226,61 @@ fn mutation_request(method: &str, params: serde_json::Value) -> Request {
     Request::new(format!("req_{operation_id}"), method, params).with_operation_id(operation_id)
 }
 
+/// Ask the daemon to shut down and wait, bounded, until it has.
+pub fn stop_and_wait(timeout: Duration) -> Result<(), DraftError> {
+    if !daemon_running() {
+        return Ok(());
+    }
+    let _ = call(
+        &socket_path(),
+        &mutation_request("service.shutdown", serde_json::Value::Null),
+    );
+    let deadline = Instant::now() + timeout;
+    while daemon_running() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if daemon_running() {
+        return Err(DraftError::new(
+            draft_core::support::error::DraftErrorKind::ServiceUnavailable,
+            "draftd did not stop before the timeout",
+        ));
+    }
+    Ok(())
+}
+
+/// Start the daemon at exactly `draftd` and wait, bounded, until it is running
+/// and answers `service.status`.
+pub fn start_at_and_wait(draftd: &Path, timeout: Duration) -> Result<(), DraftError> {
+    std::process::Command::new(draftd)
+        .arg("--detach")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(DraftError::from)?;
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if status_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Err(DraftError::new(
+        draft_core::support::error::DraftErrorKind::ServiceUnavailable,
+        "draftd did not become healthy before the timeout",
+    ))
+}
+
+/// Running *and* answering `service.status` — never process existence alone.
+pub fn status_ok() -> bool {
+    daemon_running()
+        && call(
+            &socket_path(),
+            &Request::new("cli", "service.status", serde_json::Value::Null),
+        )
+        .is_ok_and(|response| response.ok)
+}
+
 /// Spawn `draftd --detach`, preferring the binary shipped next to this CLI so
 /// Console cannot accidentally pair with an older installation from PATH.
 fn spawn_daemon() -> std::io::Result<()> {

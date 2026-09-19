@@ -123,13 +123,6 @@ core/src/publication/dispatch.rs:provider_binding_generation_at_dispatch
 core/src/support/telemetry.rs:ProviderBindingCasConflicts
 core/src/support/telemetry.rs:provider_binding_cas_conflicts
 
-# --- The provider model in the exported Baseline composition -----------------
-# A DraftPack carries `baseline/composition.json` precisely so a recipient can
-# see which binding established which part of the accepted state. The comment
-# explains why that member travels; it is naming the frozen model, not minting
-# a word.
-core/src/draftpack/transfer.rs:provider established any part of it
-
 # --- The freshness watermark reads the binding store --------------------------
 # §2.56 lists a `ProviderBinding` generation change as invalidating current
 # configuration, routability and publication eligibility, so the watermark has

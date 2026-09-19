@@ -1,12 +1,12 @@
 //! Scenario B: evidence and assessments never carry to a later revision.
 //!
-//! The shortcut this forbids is the tempting one. An agent seals `rev_1`,
+//! The shortcut this forbids is the tempting one. An agent seals `rpk_1`,
 //! evidence is gathered, a reviewer approves. The agent then edits one file and
-//! seals `rev_2`. Letting the earlier evidence satisfy the new revision would
+//! seals `rpk_2`. Letting the earlier evidence satisfy the new revision would
 //! be convenient and would look right most of the time — the change was small,
 //! the tests passed, nothing obviously moved.
 //!
-//! But nobody ran anything against `rev_2`. An approval resting on evidence
+//! But nobody ran anything against `rpk_2`. An approval resting on evidence
 //! gathered before the edit approves work that was never examined, and the
 //! record would show a satisfied gate either way. So the binding is exact, and
 //! there is deliberately no API for asking whether evidence "still" applies.
@@ -19,15 +19,15 @@ use draft_core::evidence::context::{
 };
 use draft_core::evidence::{Evidence, EvidenceOutcome, EvidenceStore};
 use draft_dcg_contract::identifier::NamespacedId;
-use draft_dcg_contract::ids::{AssessmentId, ChangeRevisionId, EvidenceId, ObservationId};
+use draft_dcg_contract::ids::{AssessmentId, EvidenceId, ObservationId, RevisionPackId};
 use draft_dcg_contract::observation::{ObservationDigest, ObservationRef};
 use draft_dcg_contract::producer::ProducerIdentity;
 use draft_dcg_contract::security::PolicyDigest;
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::Digest;
 
-fn revision(id: &str) -> ChangeRevisionId {
-    ChangeRevisionId::parse(id).unwrap()
+fn revision(id: &str) -> RevisionPackId {
+    RevisionPackId::parse(id).unwrap()
 }
 
 fn producer() -> ProducerIdentity {
@@ -59,7 +59,7 @@ fn observation() -> ObservationRef {
 fn evidence_for(id: &str, rev: &str) -> Evidence {
     Evidence {
         id: EvidenceId::parse(id).unwrap(),
-        revision: revision(rev),
+        revision_pack: revision(rev),
         inputs: [observation()].into_iter().collect(),
         producer: producer(),
         configuration: Digest::of_bytes(b"verify.toml"),
@@ -70,11 +70,11 @@ fn evidence_for(id: &str, rev: &str) -> Evidence {
 
 #[test]
 fn evidence_for_one_revision_does_not_cover_the_next() {
-    let evidence = evidence_for("evd_000000000001", "rev_000000000001");
+    let evidence = evidence_for("evd_000000000001", "rpk_000000000001");
 
-    assert!(evidence.covers(&revision("rev_000000000001")));
+    assert!(evidence.covers(&revision("rpk_000000000001")));
     assert!(
-        !evidence.covers(&revision("rev_000000000002")),
+        !evidence.covers(&revision("rpk_000000000002")),
         "a later revision was never examined by this evidence"
     );
 }
@@ -83,7 +83,7 @@ fn evidence_for_one_revision_does_not_cover_the_next() {
 fn an_assessment_binds_the_revision_it_judged() {
     let assessment = Assessment {
         id: AssessmentId::parse("asm_000000000001").unwrap(),
-        revision: revision("rev_000000000001"),
+        revision_pack: revision("rpk_000000000001"),
         inputs: [EvidenceId::parse("evd_000000000001").unwrap()]
             .into_iter()
             .collect(),
@@ -94,15 +94,15 @@ fn an_assessment_binds_the_revision_it_judged() {
         context: context(),
     };
 
-    assert!(assessment.covers(&revision("rev_000000000001")));
-    assert!(!assessment.covers(&revision("rev_000000000002")));
+    assert!(assessment.covers(&revision("rpk_000000000001")));
+    assert!(!assessment.covers(&revision("rpk_000000000002")));
 }
 
 #[test]
 fn evidence_cannot_pass_over_nothing() {
     // "Unavailable" and "passed with no inputs" are different claims, and only
     // one of them is honest about having examined nothing.
-    let mut hollow = evidence_for("evd_000000000002", "rev_000000000001");
+    let mut hollow = evidence_for("evd_000000000002", "rpk_000000000001");
     hollow.inputs.clear();
     assert!(hollow.validate().is_err());
 
@@ -130,7 +130,7 @@ fn evidence_is_immutable_behind_its_id() {
     let directory = tempfile::tempdir().unwrap();
     let store = EvidenceStore::new(directory.path());
 
-    let passed = evidence_for("evd_000000000001", "rev_000000000001");
+    let passed = evidence_for("evd_000000000001", "rpk_000000000001");
     store.put(&passed).unwrap();
     store
         .put(&passed)
@@ -157,7 +157,7 @@ fn an_assessment_is_immutable_behind_its_id() {
     let store = AssessmentStore::new(directory.path());
     let critical = Assessment {
         id: AssessmentId::parse("asm_000000000001").unwrap(),
-        revision: revision("rev_000000000001"),
+        revision_pack: revision("rpk_000000000001"),
         inputs: [EvidenceId::parse("evd_000000000001").unwrap()]
             .into_iter()
             .collect(),

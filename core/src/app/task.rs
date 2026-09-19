@@ -243,15 +243,18 @@ impl App {
         // the strength of a judgement about different work.
         let mut task_evidence = 0usize;
         let mut approved_changes = 0usize;
-        for view in self.dcg_changes(&ws.root)? {
-            if !produced_changes.iter().any(|id| id == view.change.as_str()) {
+        for view in self.dcg_change_packs(&ws.root)? {
+            if !produced_changes
+                .iter()
+                .any(|id| id == view.change_pack.as_str())
+            {
                 continue;
             }
             let Some(revision) = view.revisions.first() else {
                 continue;
             };
             let authorization =
-                self.dcg_authorization(&ws.root, view.change.as_str(), revision.id.as_str())?;
+                self.dcg_authorization(&ws.root, view.change_pack.as_str(), revision.id.as_str())?;
             task_evidence += authorization.evidence.len();
             if authorization.approving_decision().is_some() {
                 approved_changes += 1;
@@ -279,9 +282,9 @@ impl App {
             if approved_changes > 0 {
                 // Promotion is the only step that changes what the project
                 // accepts, and it names the exact revision it accepts.
-                format!("draft promote {change} <rev-id>")
+                format!("draft promote {change} <rpk-id>")
             } else {
-                format!("draft change gates list {change} <rev-id>")
+                format!("draft pack gates list {change} <rpk-id>")
             }
         } else if running > 0 {
             format!("draft task {id_or_name} --executions")
@@ -327,19 +330,26 @@ impl App {
         }
         if include_all || options.evidence {
             // The Evidence recorded against the revisions this task produced.
-            // Evidence binds an exact ChangeRevisionId, so there is nothing to
+            // Evidence binds an exact RevisionPackId, so there is nothing to
             // match loosely on and nothing that carries from another revision.
             let mut evidence = Vec::new();
-            for view in self.dcg_changes(&ws.root)? {
-                if !produced_changes.iter().any(|id| id == view.change.as_str()) {
+            for view in self.dcg_change_packs(&ws.root)? {
+                if !produced_changes
+                    .iter()
+                    .any(|id| id == view.change_pack.as_str())
+                {
                     continue;
                 }
                 let Some(revision) = view.revisions.first() else {
                     continue;
                 };
                 evidence.extend(
-                    self.dcg_authorization(&ws.root, view.change.as_str(), revision.id.as_str())?
-                        .evidence,
+                    self.dcg_authorization(
+                        &ws.root,
+                        view.change_pack.as_str(),
+                        revision.id.as_str(),
+                    )?
+                    .evidence,
                 );
             }
             map.insert("evidence".to_string(), serde_json::to_value(evidence)?);
@@ -365,7 +375,7 @@ impl App {
                 .iter()
                 .map(|execution| execution.id.to_string())
                 .collect::<BTreeSet<_>>();
-            let change_ids = produced_changes.iter().cloned().collect::<BTreeSet<_>>();
+            let change_pack_ids = produced_changes.iter().cloned().collect::<BTreeSet<_>>();
             let events = ws
                 .events()?
                 .read_all()?
@@ -375,7 +385,9 @@ impl App {
                         .subject
                         .as_ref()
                         .map(|id| {
-                            id == &task_id || execution_ids.contains(id) || change_ids.contains(id)
+                            id == &task_id
+                                || execution_ids.contains(id)
+                                || change_pack_ids.contains(id)
                         })
                         .unwrap_or(false)
                 })
@@ -754,12 +766,20 @@ impl App {
         &self,
         cwd: &Path,
         name: &str,
-        change_id: Option<&str>,
+        change_pack_id: Option<&str>,
         candidates: Vec<String>,
         cron: Option<String>,
         instruction: Vec<String>,
     ) -> DraftResult<TaskSpawnReport> {
-        self.task_spawn_with_preset(cwd, name, change_id, candidates, None, cron, instruction)
+        self.task_spawn_with_preset(
+            cwd,
+            name,
+            change_pack_id,
+            candidates,
+            None,
+            cron,
+            instruction,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -767,7 +787,7 @@ impl App {
         &self,
         cwd: &Path,
         name: &str,
-        change_id: Option<&str>,
+        change_pack_id: Option<&str>,
         mut candidates: Vec<String>,
         preset: Option<String>,
         cron: Option<String>,
@@ -890,20 +910,20 @@ impl App {
                 self,
                 &ws,
                 "task spawn",
-                "create a Change from the current edits, discard them, or run the task from a \
+                "create a ChangePack from the current edits, discard them, or run the task from a \
                  workspace matching the accepted Baseline",
             )?;
         }
 
-        let parent_change = Some(match change_id {
-            Some(change_id) => change_id.to_string(),
-            None => self.selected_change_id(cwd)?,
+        let parent_change = Some(match change_pack_id {
+            Some(change_pack_id) => change_pack_id.to_string(),
+            None => self.selected_change_pack_id(cwd)?,
         });
         ws.events()?.append(
             crate::activity::EventKind::TaskUpdated,
             Some(task.id.to_string()),
             serde_json::json!({
-                "change_id": parent_change,
+                "change_pack_id": parent_change,
                 "candidates": candidates,
                 "preset": preset_used.as_ref().map(|p| p.name.clone()),
                 "instruction": redact_secrets(&task.goal),
@@ -940,7 +960,7 @@ impl App {
                     produced_change: None,
                     error: None,
                     note: Some(
-                        "human execution: make edits in the editor or workspace, then create a Change"
+                        "human execution: make edits in the editor or workspace, then create a ChangePack"
                             .to_string(),
                     ),
                 });
@@ -987,11 +1007,11 @@ impl App {
             .find(|e| e.status == "completed" && e.produced_change.is_some())
         {
             format!(
-                "draft change review {}",
+                "draft pack review {}",
                 done.produced_change.clone().unwrap_or_default()
             )
         } else if executions.iter().any(|e| e.status == "queued") {
-            "make the edits, then run `draft change new` to capture them".to_string()
+            "make the edits, then run `draft pack new` to capture them".to_string()
         } else {
             format!("draft task {} --executions", task.name)
         };

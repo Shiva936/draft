@@ -17,12 +17,12 @@ draft config set user.email "ada@example.com"
 ## Capture A Baseline
 
 ```bash
-draft change checkpoint "before parser cleanup"
+draft pack checkpoint "before parser cleanup"
 ```
 
 A checkpoint stores a snapshot of the current workspace content. Draft uses snapshots to determine what changed later. The scanner walks the workspace directly and always excludes `.draft/`.
 
-## Make Changes
+## Make ChangePacks
 
 Edit files by hand, through scripts, or through an agent. Draft does not care how files changed. To inspect the current delta:
 
@@ -32,23 +32,23 @@ draft status
 
 Status compares the current workspace to the latest snapshot and reports added, modified, deleted, renamed, type-changed, and permission-changed files.
 
-## Create A Change
+## Create A ChangePack
 
 ```bash
-draft change new "parser cleanup" --scope src/parser.rs
-draft change list
-draft change revision seal <chg-id>
+draft pack new "parser cleanup" --scope src/parser.rs
+draft pack list
+draft pack revision seal <cpk-id>
 ```
 
-A Change is the unit of proposed work. Sealing observes the project's current state and records it as an immutable revision; sealing the same state twice is the same revision, so a re-run is not a second thing to review.
+A ChangePack is the unit of proposed work. Sealing observes the project's current state and records it as an immutable revision; sealing the same state twice is the same revision, so a re-run is not a second thing to review.
 
 ## Evidence, assessment, gate, decision
 
 ```bash
-draft change evidence run <rev-id>
-draft change assess <rev-id> --risk low --rationale "small, covered by tests"
-draft change gates evaluate <rev-id>
-draft change decide <rev-id> --approve
+draft pack evidence run <rpk-id>
+draft pack assess <rpk-id> --risk low --rationale "small, covered by tests"
+draft pack gates evaluate <rpk-id>
+draft pack decide <rpk-id> --approve
 ```
 
 Each of those is a separate act, and the separations are the point. Evidence says what was observed. An assessment says what somebody judged it to mean. A gate says whether the required conditions hold. A Decision authorizes — and still does not accept anything.
@@ -58,7 +58,7 @@ Every one of them binds one exact revision and never carries to another.
 ## Promote
 
 ```bash
-draft promote <chg-id> <rev-id>
+draft promote <cpk-id> <rpk-id>
 draft baseline show
 draft baseline receipts
 ```
@@ -68,7 +68,7 @@ Promotion is the only command that changes what this project accepts. It require
 ## Recover
 
 ```bash
-draft recover run <chk-id|chg-id|evt-id>
+draft recover run <chk-id|cpk-id|evt-id>
 ```
 
 Rollback infers the target type from the ID prefix. Rollback never restores `.draft/`.
@@ -116,4 +116,4 @@ No. The CLI works without `draftd`. Service crates support optional local backgr
 
 ### What Should I Do Before Risky Work?
 
-Run `draft change checkpoint "before work"` so you have a clear rollback target.
+Run `draft pack checkpoint "before work"` so you have a clear rollback target.

@@ -172,7 +172,6 @@ PY
 
 package_crate draft-dcg-contract sdk/dcg-contract
 package_crate draft-extension-contract sdk/extension-contract
-package_crate draft-draftpack-contract sdk/draftpack-contract
 
 # ---------------------------------------------------------------------------
 # The normalized manifests must show the layering, with no path dependencies.
@@ -180,8 +179,7 @@ package_crate draft-draftpack-contract sdk/draftpack-contract
 
 if ! python3 - \
   "${extracted_root_of[draft-dcg-contract]}/Cargo.toml" \
-  "${extracted_root_of[draft-extension-contract]}/Cargo.toml" \
-  "${extracted_root_of[draft-draftpack-contract]}/Cargo.toml" <<'PY'
+  "${extracted_root_of[draft-extension-contract]}/Cargo.toml" <<'PY'
 import sys, tomllib
 
 TABLES = ("dependencies", "build-dependencies", "dev-dependencies")
@@ -199,7 +197,7 @@ def path_dependencies(deps):
     return sorted(n for n, s in deps.items() if isinstance(s, dict) and "path" in s)
 
 
-dcg_path, extension_path, draftpack_path = sys.argv[1], sys.argv[2], sys.argv[3]
+dcg_path, extension_path = sys.argv[1], sys.argv[2]
 
 dcg = dependencies(dcg_path)
 if paths := path_dependencies(dcg):
@@ -211,11 +209,10 @@ if draft := sorted(n for n in dcg if n.startswith("draft")):
         "draft-dcg-contract must package as a leaf but depends on: " + ", ".join(draft)
     )
 
-# Both upper crates sit directly on the DCG contract and on nothing else of
-# Draft's, so the same assertion applies to each.
+# The extension contract sits directly on the DCG contract and on nothing
+# else of Draft's.
 for name, path in (
     ("draft-extension-contract", extension_path),
-    ("draft-draftpack-contract", draftpack_path),
 ):
     deps = dependencies(path)
     if paths := path_dependencies(deps):
@@ -275,6 +272,5 @@ EOF
 
 verify_archive draft-dcg-contract 'tests/portable_closure.rs'
 verify_archive draft-extension-contract 'tests/v1_compatibility.rs'
-verify_archive draft-draftpack-contract 'tests/v1_format.rs'
 
-echo "All three SDK contract archives are self-contained and preserve the SDK layering."
+echo "Both SDK contract archives are self-contained and preserve the SDK layering."

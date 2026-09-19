@@ -87,6 +87,120 @@ pub enum DraftErrorKind {
     Storage,
     NotFound,
     Internal,
+    /// A typed installation-lifecycle failure (`draft update` /
+    /// `draft uninstall` / the installer coordinator).
+    Installation(InstallationFailure),
+}
+
+/// Every installation-lifecycle failure, kept distinct rather than collapsed
+/// into "update failed": each one has a different remedy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InstallationFailure {
+    UnsupportedPlatform,
+    UnsupportedInstallationMethod,
+    UnknownInstallationProvenance,
+    UnsupportedReleaseChannel,
+    ReleaseUnavailable,
+    ReleaseEnumerationLimitExceeded,
+    InvalidUpdateFlagCombination,
+    NetworkFailure,
+    ReleaseMetadataInvalid,
+    ReleaseManifestTooLarge,
+    ReleaseArtifactTooLarge,
+    ReleaseSigningKeyUnknown,
+    ReleaseSignatureInvalid,
+    TrustedReleaseKeyCollision,
+    DigestMismatch,
+    ArchiveInvalid,
+    InstallationReceiptInvalid,
+    InstallationEntryIdentityMismatch,
+    PathSymlinkTargetMismatch,
+    PermissionDenied,
+    InstallationBusy,
+    DaemonStopFailed,
+    DaemonRestartFailed,
+    ReplacementFailed,
+    ValidationFailed,
+    ReceiptCommitFailed,
+    RollbackFailed,
+    RecoveryFailed,
+    UninstallRecoveryFailed,
+    UninstallPlanInvalid,
+    LegacyInstallationConflict,
+    LegacyInstallationMigrationUnsafe,
+    ReleaseTrustBridgeUnavailable,
+    ReleaseTrustHopLimitExceeded,
+    GlobalStorePurgeUnsafe,
+    GlobalStoreOwnershipInvalid,
+    UninstallRecoveryBootstrapFailed,
+    TerminalCleanupPending,
+    TerminalCleanupRecordInvalid,
+    InstallationRecoveryUnavailable,
+    InstallationRecoveryIncompatible,
+    InstallerLifecycleStateChanged,
+    UninstallRecoveryExecutorUnavailable,
+    WindowsPathStateInvalid,
+    WindowsPathConcurrentMutation,
+    FreshInstallRecoveryArtifactMismatch,
+    ReleaseTrustSetMismatch,
+    ReleaseRetirementBridgeInvalid,
+}
+
+impl InstallationFailure {
+    /// The stable machine code, in the repository's SCREAMING_SNAKE style.
+    pub fn code(self) -> &'static str {
+        use InstallationFailure::*;
+        match self {
+            UnsupportedPlatform => "UNSUPPORTED_PLATFORM",
+            UnsupportedInstallationMethod => "UNSUPPORTED_INSTALLATION_METHOD",
+            UnknownInstallationProvenance => "UNKNOWN_INSTALLATION_PROVENANCE",
+            UnsupportedReleaseChannel => "UNSUPPORTED_RELEASE_CHANNEL",
+            ReleaseUnavailable => "RELEASE_UNAVAILABLE",
+            ReleaseEnumerationLimitExceeded => "RELEASE_ENUMERATION_LIMIT_EXCEEDED",
+            InvalidUpdateFlagCombination => "INVALID_UPDATE_FLAG_COMBINATION",
+            NetworkFailure => "NETWORK_FAILURE",
+            ReleaseMetadataInvalid => "RELEASE_METADATA_INVALID",
+            ReleaseManifestTooLarge => "RELEASE_MANIFEST_TOO_LARGE",
+            ReleaseArtifactTooLarge => "RELEASE_ARTIFACT_TOO_LARGE",
+            ReleaseSigningKeyUnknown => "RELEASE_SIGNING_KEY_UNKNOWN",
+            ReleaseSignatureInvalid => "RELEASE_SIGNATURE_INVALID",
+            TrustedReleaseKeyCollision => "TRUSTED_RELEASE_KEY_COLLISION",
+            DigestMismatch => "DIGEST_MISMATCH",
+            ArchiveInvalid => "ARCHIVE_INVALID",
+            InstallationReceiptInvalid => "INSTALLATION_RECEIPT_INVALID",
+            InstallationEntryIdentityMismatch => "INSTALLATION_ENTRY_IDENTITY_MISMATCH",
+            PathSymlinkTargetMismatch => "PATH_SYMLINK_TARGET_MISMATCH",
+            PermissionDenied => "PERMISSION_DENIED",
+            InstallationBusy => "INSTALLATION_BUSY",
+            DaemonStopFailed => "DAEMON_STOP_FAILED",
+            DaemonRestartFailed => "DAEMON_RESTART_FAILED",
+            ReplacementFailed => "REPLACEMENT_FAILED",
+            ValidationFailed => "VALIDATION_FAILED",
+            ReceiptCommitFailed => "RECEIPT_COMMIT_FAILED",
+            RollbackFailed => "ROLLBACK_FAILED",
+            RecoveryFailed => "RECOVERY_FAILED",
+            UninstallRecoveryFailed => "UNINSTALL_RECOVERY_FAILED",
+            UninstallPlanInvalid => "UNINSTALL_PLAN_INVALID",
+            LegacyInstallationConflict => "LEGACY_INSTALLATION_CONFLICT",
+            LegacyInstallationMigrationUnsafe => "LEGACY_INSTALLATION_MIGRATION_UNSAFE",
+            ReleaseTrustBridgeUnavailable => "RELEASE_TRUST_BRIDGE_UNAVAILABLE",
+            ReleaseTrustHopLimitExceeded => "RELEASE_TRUST_HOP_LIMIT_EXCEEDED",
+            GlobalStorePurgeUnsafe => "GLOBAL_STORE_PURGE_UNSAFE",
+            GlobalStoreOwnershipInvalid => "GLOBAL_STORE_OWNERSHIP_INVALID",
+            UninstallRecoveryBootstrapFailed => "UNINSTALL_RECOVERY_BOOTSTRAP_FAILED",
+            TerminalCleanupPending => "TERMINAL_CLEANUP_PENDING",
+            TerminalCleanupRecordInvalid => "TERMINAL_CLEANUP_RECORD_INVALID",
+            InstallationRecoveryUnavailable => "INSTALLATION_RECOVERY_UNAVAILABLE",
+            InstallationRecoveryIncompatible => "INSTALLATION_RECOVERY_INCOMPATIBLE",
+            InstallerLifecycleStateChanged => "INSTALLER_LIFECYCLE_STATE_CHANGED",
+            UninstallRecoveryExecutorUnavailable => "UNINSTALL_RECOVERY_EXECUTOR_UNAVAILABLE",
+            WindowsPathStateInvalid => "WINDOWS_PATH_STATE_INVALID",
+            WindowsPathConcurrentMutation => "WINDOWS_PATH_CONCURRENT_MUTATION",
+            FreshInstallRecoveryArtifactMismatch => "FRESH_INSTALL_RECOVERY_ARTIFACT_MISMATCH",
+            ReleaseTrustSetMismatch => "RELEASE_TRUST_SET_MISMATCH",
+            ReleaseRetirementBridgeInvalid => "RELEASE_RETIREMENT_BRIDGE_INVALID",
+        }
+    }
 }
 
 impl DraftErrorKind {
@@ -129,6 +243,7 @@ impl DraftErrorKind {
             DraftErrorKind::Storage => "STORAGE_ERROR",
             DraftErrorKind::NotFound => "NOT_FOUND",
             DraftErrorKind::Internal => "INTERNAL_ERROR",
+            DraftErrorKind::Installation(kind) => kind.code(),
         }
     }
 }

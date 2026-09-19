@@ -1,0 +1,23 @@
+{
+  "name": "review-progress-state",
+  "payload_schema": "review-progress-state.schema.json",
+  "payload": {
+    "schema_version": 1,
+    "change_pack_id": "cpk_0a1b2c3d4e5f",
+    "content_revision_id": "content_initial",
+    "content_revision_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "progress": "draft",
+    "updated_at": "2026-09-18T00:00:00Z",
+    "last_operation_id": "op_init"
+  },
+  "invalid_payload": {
+    "schema_version": 1,
+    "change_id": "cpk_0a1b2c3d4e5f",
+    "revision_id": "content_initial",
+    "revision_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "lifecycle": "draft",
+    "updated_at": "2026-09-18T00:00:00Z",
+    "last_operation_id": "op_init"
+  },
+  "expect": { "valid": true, "retired_spellings": "rejected" }
+}

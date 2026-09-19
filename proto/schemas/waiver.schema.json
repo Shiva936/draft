@@ -3,13 +3,13 @@
   "$id": "https://draft.dev/schemas/waiver.schema.json",
   "title": "Draft Gate Waiver",
   "x-draft-format-revision": 1,
-  "description": "An authorized exception to one gate condition, on one exact revision. Bound to the revision rather than the Change: an exception accepted for the work as it stood is not an exception for whatever it becomes.",
+  "description": "An authorized exception to one gate condition, on one exact revision. Bound to the revision rather than the ChangePack: an exception accepted for the work as it stood is not an exception for whatever it becomes.",
   "type": "object",
-  "required": ["id", "revision", "condition", "reason", "waived_by", "waived_at", "expires_at", "authority"],
+  "required": ["id", "revision_pack", "condition", "reason", "waived_by", "waived_at", "expires_at", "authority"],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "minLength": 1 },
-    "revision": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]+$" },
+    "revision_pack": { "type": "string", "pattern": "^rpk_[A-Za-z0-9_-]+$" },
     "condition": { "type": "string", "minLength": 1 },
     "reason": {
       "description": "Required: an unexplained waiver cannot be reviewed, renewed or revoked on its merits.",

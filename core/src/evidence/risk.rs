@@ -12,7 +12,7 @@
 //! matters here" and "Draft checked and this is fine" are different facts, and a
 //! gate that cannot tell them apart is not a gate.
 
-use crate::dcg::change_store::RevisionRecord;
+use crate::dcg::change_pack_store::ChangePackContentRevisionRecord;
 use crate::extension::provenance::ProducerRef;
 use crate::provenance::derived::{DerivationInputs, DerivedArtifactKind};
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
@@ -208,9 +208,9 @@ impl RiskOutcome {
 #[serde(deny_unknown_fields)]
 pub struct RiskAssessment {
     pub schema_version: u32,
-    pub change_id: String,
-    pub revision_id: String,
-    pub revision_digest: String,
+    pub change_pack_id: String,
+    pub content_revision_id: String,
+    pub content_revision_digest: String,
     pub dependency_digests: Vec<String>,
     /// Exactly what this assessment consumed. An artifact it never read cannot
     /// invalidate it.
@@ -227,7 +227,7 @@ impl crate::contracts::VersionedContract for RiskAssessment {
 }
 
 impl RiskAssessment {
-    pub fn validate_binding(&self, revision: &RevisionRecord) -> DraftResult<()> {
+    pub fn validate_binding(&self, revision: &ChangePackContentRevisionRecord) -> DraftResult<()> {
         if !crate::contracts::supports_version(
             crate::contracts::ContractId::RiskAssessment,
             self.schema_version,
@@ -240,14 +240,14 @@ impl RiskAssessment {
                 ),
             ));
         }
-        if self.change_id != revision.change_id
-            || self.revision_id != revision.revision_id
-            || self.revision_digest != revision.revision_digest
+        if self.change_pack_id != revision.change_pack_id
+            || self.content_revision_id != revision.content_revision_id
+            || self.content_revision_digest != revision.content_revision_digest
             || self.dependency_digests != revision.resolved_dependency_digests
         {
             return Err(DraftError::new(
                 DraftErrorKind::CorruptData,
-                "risk evidence is bound to a different Change revision or dependencies",
+                "risk evidence is bound to a different ChangePack revision or dependencies",
             ));
         }
         Ok(())
@@ -261,7 +261,7 @@ impl RiskAssessment {
 /// confusion this model removes back into the surface humans read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RiskSummary {
-    pub change_id: String,
+    pub change_pack_id: String,
     pub receipt_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<RiskLevel>,
@@ -283,7 +283,7 @@ pub struct RiskSummary {
 impl RiskSummary {
     /// Project one outcome for display.
     pub fn from_outcome(
-        change_id: impl Into<String>,
+        change_pack_id: impl Into<String>,
         receipt_id: impl Into<String>,
         outcome: &RiskOutcome,
         hotspots: Vec<crate::dcg::resource::ResourceLocator>,
@@ -316,7 +316,7 @@ impl RiskSummary {
             ),
         };
         Self {
-            change_id: change_id.into(),
+            change_pack_id: change_pack_id.into(),
             receipt_id: receipt_id.into(),
             level,
             score,

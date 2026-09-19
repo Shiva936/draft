@@ -2,7 +2,7 @@
 //!
 //! Two questions that look similar and must never be conflated:
 //!
-//! | | Answers | Changes when |
+//! | | Answers | ChangePacks when |
 //! |---|---|---|
 //! | [`HistoricalBaselineComposition`] | what established this accepted state? | never |
 //! | [`CurrentProviderRoutability`] | could that provider act right now? | the binding moves |
@@ -377,9 +377,9 @@ mod tests {
     }
 }
 
-// ---- Change composition ----
+// ---- ChangePack composition ----
 
-use draft_dcg_contract::ids::{ChangeId, ChangeRevisionId};
+use draft_dcg_contract::ids::{ChangePackId, RevisionPackId};
 use draft_dcg_contract::BaselineId;
 use serde::{Deserialize, Serialize};
 
@@ -415,16 +415,16 @@ pub enum CompositionStatus {
     Failed,
 }
 
-/// One member of a composition: the exact revision, not the Change.
+/// One member of a composition: the exact revision, not the ChangePack.
 ///
-/// A Change is an intention that can be resealed; a revision is what was
-/// actually sealed. Composing Changes rather than revisions would let a reseal
+/// A ChangePack is an intention that can be resealed; a revision is what was
+/// actually sealed. Composing ChangePacks rather than revisions would let a reseal
 /// change what a composition claimed without the composition moving.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComposedRevision {
-    pub change: ChangeId,
-    pub revision: ChangeRevisionId,
+    pub change_pack: ChangePackId,
+    pub revision_pack: RevisionPackId,
     /// The Baseline this revision was sealed from.
     pub base_baseline: BaselineId,
     pub touched: BTreeSet<ResourceId>,
@@ -434,8 +434,8 @@ pub struct ComposedRevision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PairwiseRelation {
-    pub left: ChangeRevisionId,
-    pub right: ChangeRevisionId,
+    pub left: RevisionPackId,
+    pub right: RevisionPackId,
     pub relation: Relationship,
     /// Empty for `Independent`. Otherwise names what stands in the way, so a
     /// reader can judge the claim rather than take a verdict on trust.
@@ -490,12 +490,12 @@ pub fn compose(
     }
     let mut seen = BTreeSet::new();
     for member in members {
-        if !seen.insert(member.revision.clone()) {
+        if !seen.insert(member.revision_pack.clone()) {
             return Err(DraftError::new(
                 DraftErrorKind::Validation,
                 format!(
-                    "revision '{}' appears twice; a composition names each member once",
-                    member.revision
+                    "RevisionPack '{}' appears twice; a composition names each member once",
+                    member.revision_pack
                 ),
             ));
         }
@@ -555,8 +555,8 @@ pub fn compose(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DispersedRevision {
-    pub change: ChangeId,
-    pub revision: ChangeRevisionId,
+    pub change_pack: ChangePackId,
+    pub revision_pack: RevisionPackId,
     /// True when nothing in the composition stands in this member's way.
     pub independent: bool,
     /// The members it cannot be separated from, and why.
@@ -580,13 +580,14 @@ pub fn disperse(composition: &Composition) -> Vec<DispersedRevision> {
                 .iter()
                 .filter(|relation| {
                     !relation.relation.is_composable()
-                        && (relation.left == member.revision || relation.right == member.revision)
+                        && (relation.left == member.revision_pack
+                            || relation.right == member.revision_pack)
                 })
                 .cloned()
                 .collect();
             DispersedRevision {
-                change: member.change.clone(),
-                revision: member.revision.clone(),
+                change_pack: member.change_pack.clone(),
+                revision_pack: member.revision_pack.clone(),
                 independent: held_by.is_empty()
                     && member.base_baseline == composition.base_baseline,
                 held_by,
@@ -619,8 +620,8 @@ pub fn relate_by_state(left: &ComposedRevision, right: &ComposedRevision) -> Pai
         )
     };
     PairwiseRelation {
-        left: left.revision.clone(),
-        right: right.revision.clone(),
+        left: left.revision_pack.clone(),
+        right: right.revision_pack.clone(),
         relation,
         detail,
         shared_resources: shared,

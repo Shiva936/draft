@@ -46,14 +46,14 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     std::fs::write(dir.join("app.txt"), "hello\n").unwrap();
     let checkpoint = json(
         draft(dir)
-            .args(["change", "checkpoint", "before change", "--json"])
+            .args(["pack", "checkpoint", "before change", "--json"])
             .output()
             .unwrap(),
     );
     let snapshot_id = checkpoint["snapshot_id"].as_str().unwrap().to_string();
 
     // Neither file is in the accepted Baseline — `init` observed an empty
-    // directory. A Change may still declare them: adding a Resource is an
+    // directory. A ChangePack may still declare them: adding a Resource is an
     // ordinary change, and naming one by path is how you name something that
     // has no id yet.
     std::fs::write(dir.join("app.txt"), "hello world\n").unwrap();
@@ -61,7 +61,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     let change = json(
         draft(dir)
             .args([
-                "change",
+                "pack",
                 "new",
                 "edit the app",
                 "--scope",
@@ -72,11 +72,11 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
             .output()
             .unwrap(),
     );
-    let change_id = change["id"].as_str().unwrap().to_string();
+    let change_pack_id = change["id"].as_str().unwrap().to_string();
 
     let revision = json(
         draft(dir)
-            .args(["change", "revision", "seal", &change_id, "--json"])
+            .args(["pack", "revision", "seal", &change_pack_id, "--json"])
             .output()
             .unwrap(),
     );
@@ -89,19 +89,19 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     // answer.
     let evidence = json(
         draft(dir)
-            .args(["change", "evidence", "run", &revision_id, "--json"])
+            .args(["pack", "evidence", "run", &revision_id, "--json"])
             .output()
             .unwrap(),
     );
     assert_eq!(evidence["outcome"], serde_json::json!("unavailable"));
-    assert_eq!(evidence["revision"], serde_json::json!(revision_id));
+    assert_eq!(evidence["revision_pack"], serde_json::json!(revision_id));
 
     // Two separate refusals, because "nothing verified this" and "nobody
     // assessed the risk" are separate facts. A gate that reported one of them
     // would let the other through unnoticed.
     let gate = json(
         draft(dir)
-            .args(["change", "gates", "evaluate", &revision_id, "--json"])
+            .args(["pack", "gates", "evaluate", &revision_id, "--json"])
             .output()
             .unwrap(),
     );
@@ -125,7 +125,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     // has nothing to act on.
     draft(dir)
         .args([
-            "change",
+            "pack",
             "decide",
             &revision_id,
             "--approve",
@@ -143,7 +143,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     let waiver = json(
         draft(dir)
             .args([
-                "change",
+                "pack",
                 "gates",
                 "waive",
                 &revision_id,
@@ -162,7 +162,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     let gate = json(
         draft(dir)
             .args([
-                "change",
+                "pack",
                 "gates",
                 "evaluate",
                 &revision_id,
@@ -200,7 +200,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     // default to `low`.
     draft(dir)
         .args([
-            "change",
+            "pack",
             "assess",
             &revision_id,
             "--risk",
@@ -214,7 +214,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     let gate = json(
         draft(dir)
             .args([
-                "change",
+                "pack",
                 "gates",
                 "evaluate",
                 &revision_id,
@@ -238,7 +238,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     let decision = json(
         draft(dir)
             .args([
-                "change",
+                "pack",
                 "decide",
                 &revision_id,
                 "--approve",
@@ -262,7 +262,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
         draft(dir)
             .args([
                 "promote",
-                &change_id,
+                &change_pack_id,
                 &revision_id,
                 "--gate",
                 &gate_id,
@@ -283,7 +283,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
     assert_ne!(before["baseline"], after["baseline"]);
 
     // Promotion appends its preallocated events: the commit, the Baseline it
-    // accepted, the Change it completed, the receipt it issued, and the
+    // accepted, the ChangePack it completed, the receipt it issued, and the
     // finalization. Naming them is how a reader can tell a promotion that
     // committed from one that only got as far as intending to.
     draft(dir)
@@ -293,7 +293,7 @@ fn plain_directory_end_to_end_with_waived_gate_and_recovery() {
         .stdout(
             contains("PromotionCommitted")
                 .and(contains("BaselinePromoted"))
-                .and(contains("ChangeCompleted"))
+                .and(contains("ChangePackCompleted"))
                 .and(contains("ReceiptIssued"))
                 .and(contains("PromotionFinalized")),
         );

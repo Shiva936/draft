@@ -23,7 +23,7 @@ pub mod acceptance;
 pub mod reviewability;
 pub mod waiver;
 
-use draft_dcg_contract::ids::{AssessmentId, ChangeRevisionId, EvidenceId};
+use draft_dcg_contract::ids::{AssessmentId, EvidenceId, RevisionPackId};
 use draft_dcg_contract::Digest;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -57,7 +57,7 @@ pub struct GateCondition {
 pub struct GateEvaluation {
     pub id: String,
     /// The exact revision evaluated.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The exact definition and scope that revision was sealed against.
     pub definition: Digest,
     pub scope: Digest,
@@ -122,8 +122,8 @@ impl GateEvaluation {
     }
 
     /// Whether this evaluation speaks to `revision`.
-    pub fn covers(&self, revision: &ChangeRevisionId) -> bool {
-        &self.revision == revision
+    pub fn covers(&self, revision: &RevisionPackId) -> bool {
+        &self.revision_pack == revision
     }
 }
 

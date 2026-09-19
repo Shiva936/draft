@@ -58,25 +58,25 @@
       "type": "string",
       "pattern": "^res_[A-Za-z0-9_-]+$"
     },
-    "revision_id": {
+    "revision_pack_id": {
       "type": "string",
-      "pattern": "^rev_[A-Za-z0-9_-]+$"
+      "pattern": "^rpk_[A-Za-z0-9_-]+$"
     },
     "member": {
       "type": "object",
       "required": [
-        "change",
-        "revision",
+        "change_pack",
+        "revision_pack",
         "base_baseline",
         "touched"
       ],
       "properties": {
-        "change": {
+        "change_pack": {
           "type": "string",
-          "pattern": "^chg_[A-Za-z0-9_-]+$"
+          "pattern": "^cpk_[A-Za-z0-9_-]+$"
         },
-        "revision": {
-          "$ref": "#/$defs/revision_id"
+        "revision_pack": {
+          "$ref": "#/$defs/revision_pack_id"
         },
         "base_baseline": {
           "$ref": "#/$defs/baseline_id"
@@ -99,10 +99,10 @@
       ],
       "properties": {
         "left": {
-          "$ref": "#/$defs/revision_id"
+          "$ref": "#/$defs/revision_pack_id"
         },
         "right": {
-          "$ref": "#/$defs/revision_id"
+          "$ref": "#/$defs/revision_pack_id"
         },
         "relation": {
           "enum": [

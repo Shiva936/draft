@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "sdk/dcg-contract",
-    "sdk/draftpack-contract",
     "sdk/extension-contract",
     "core",
     "services/ipc",

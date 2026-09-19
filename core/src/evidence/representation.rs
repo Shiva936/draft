@@ -10,14 +10,14 @@
 //! # It binds an exact revision
 //!
 //! Like the Evidence and Assessments beside it, a representation names one
-//! `ChangeRevisionId` and never carries to another. Two revisions can share a
+//! `RevisionPackId` and never carries to another. Two revisions can share a
 //! change set — a reseal that touched nothing material — while differing in
 //! everything a reviewer weighed, so "explains the same bytes" is not
 //! "explains the same revision".
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use draft_dcg_contract::ids::ChangeRevisionId;
+use draft_dcg_contract::ids::RevisionPackId;
 use draft_dcg_contract::observation::ObservationRef;
 use draft_dcg_contract::producer::ProducerIdentity;
 use draft_dcg_contract::Digest;
@@ -30,7 +30,7 @@ use crate::dcg::representation::{
     ReviewUnit, MAX_INLINE_PAYLOAD_BYTES,
 };
 use crate::dcg::resource::ResourceId;
-use crate::dcg::revision::ChangeRevision;
+use crate::dcg::revision_pack::RevisionPack;
 use crate::provenance::derived::DerivationProvenance;
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 use crate::support::hashing;
@@ -38,7 +38,7 @@ use crate::support::hashing;
 /// One derived explanation of how one resource changed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChangeRepresentation {
+pub struct RevisionPackRepresentation {
     pub representation_id: String,
     pub resource_id: ResourceId,
     /// Contributed and namespaced.
@@ -73,10 +73,10 @@ pub struct ChangeRepresentation {
 /// prevent. All three now answer "about which revision?" the same way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ChangeRepresentationBundle {
+pub struct RevisionPackRepresentationBundle {
     pub schema_version: u32,
     /// The exact revision this explains.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The exact observations the explanation read, id and digest.
     ///
     /// Re-observing the same state later produces a different historical
@@ -91,16 +91,16 @@ pub struct ChangeRepresentationBundle {
     /// different explanation from one produced after another took over, and a
     /// reader comparing two bundles needs to know whether the rules moved.
     pub configuration: Digest,
-    pub representations: Vec<ChangeRepresentation>,
+    pub representations: Vec<RevisionPackRepresentation>,
     pub representation_bundle_digest: String,
 }
 
-impl crate::contracts::VersionedContract for ChangeRepresentationBundle {
+impl crate::contracts::VersionedContract for RevisionPackRepresentationBundle {
     const CONTRACT: crate::contracts::ContractId =
-        crate::contracts::ContractId::ChangeRepresentationBundle;
+        crate::contracts::ContractId::RevisionPackRepresentationBundle;
 }
 
-impl ChangeRepresentationBundle {
+impl RevisionPackRepresentationBundle {
     /// Seal a bundle, deriving its own identity.
     ///
     /// Note what this does *not* touch: the revision it names. A bundle is an
@@ -108,7 +108,7 @@ impl ChangeRepresentationBundle {
     /// thing explained.
     pub fn seal(mut self) -> Self {
         self.schema_version = crate::contracts::current_version(
-            crate::contracts::ContractId::ChangeRepresentationBundle,
+            crate::contracts::ContractId::RevisionPackRepresentationBundle,
         );
         self.representations.sort_by(|left, right| {
             (&left.resource_id, &left.strategy_id).cmp(&(&right.resource_id, &right.strategy_id))
@@ -120,7 +120,7 @@ impl ChangeRepresentationBundle {
     }
 
     /// The representation for one resource, if any was derived.
-    pub fn for_resource(&self, resource_id: &ResourceId) -> Option<&ChangeRepresentation> {
+    pub fn for_resource(&self, resource_id: &ResourceId) -> Option<&RevisionPackRepresentation> {
         self.representations
             .iter()
             .find(|representation| &representation.resource_id == resource_id)
@@ -141,8 +141,8 @@ impl ChangeRepresentationBundle {
     }
 
     /// Reject a bundle that does not explain the revision it names.
-    pub fn validate_against(&self, revision: &ChangeRevision) -> DraftResult<()> {
-        if self.revision != revision.id {
+    pub fn validate_against(&self, revision: &RevisionPack) -> DraftResult<()> {
+        if self.revision_pack != revision.id {
             return Err(DraftError::new(
                 DraftErrorKind::CorruptData,
                 "representation bundle explains a different revision",
@@ -206,9 +206,9 @@ pub enum InterferenceRelation {
 /// composable.
 pub fn interference(
     left_touched: &BTreeSet<ResourceId>,
-    left_bundle: Option<&ChangeRepresentationBundle>,
+    left_bundle: Option<&RevisionPackRepresentationBundle>,
     right_touched: &BTreeSet<ResourceId>,
-    right_bundle: Option<&ChangeRepresentationBundle>,
+    right_bundle: Option<&RevisionPackRepresentationBundle>,
 ) -> Vec<ResourceInterference> {
     let mut findings = Vec::new();
     for resource in left_touched.intersection(right_touched) {
@@ -246,7 +246,7 @@ pub fn interference(
 
 /// Create-once storage for revision-bound representation bundles.
 pub struct RepresentationStore {
-    facts: crate::support::immutable_store::ImmutableFactStore<ChangeRepresentationBundle>,
+    facts: crate::support::immutable_store::ImmutableFactStore<RevisionPackRepresentationBundle>,
 }
 
 impl RepresentationStore {
@@ -263,27 +263,31 @@ impl RepresentationStore {
     /// layered, because a reviewer who read one and a reader who later sees
     /// the other would disagree about what the change was, with nothing to say
     /// which they saw.
-    pub fn put(&self, bundle: &ChangeRepresentationBundle) -> DraftResult<()> {
-        self.facts.put(bundle.revision.as_str(), bundle)?;
+    pub fn put(&self, bundle: &RevisionPackRepresentationBundle) -> DraftResult<()> {
+        self.facts.put(bundle.revision_pack.as_str(), bundle)?;
         Ok(())
     }
 
     pub fn get(
         &self,
-        revision: &ChangeRevisionId,
-    ) -> DraftResult<Option<ChangeRepresentationBundle>> {
+        revision: &RevisionPackId,
+    ) -> DraftResult<Option<RevisionPackRepresentationBundle>> {
         self.facts.get(revision.as_str())
     }
 
     /// Every revision this project has an explanation for.
-    pub fn list(&self) -> DraftResult<Vec<ChangeRepresentationBundle>> {
+    pub fn list(&self) -> DraftResult<Vec<RevisionPackRepresentationBundle>> {
         let mut bundles = Vec::new();
         for id in self.facts.list_ids()? {
             if let Some(bundle) = self.facts.get(&id)? {
                 bundles.push(bundle);
             }
         }
-        bundles.sort_by(|left, right| left.revision.as_str().cmp(right.revision.as_str()));
+        bundles.sort_by(|left, right| {
+            left.revision_pack
+                .as_str()
+                .cmp(right.revision_pack.as_str())
+        });
         Ok(bundles)
     }
 }

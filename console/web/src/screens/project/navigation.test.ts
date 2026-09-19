@@ -27,9 +27,9 @@ describe("project navigation", () => {
     ]);
   });
 
-  it("nests Tasks and Changes under Work rather than beside it", () => {
+  it("nests Tasks and Packs under Work rather than beside it", () => {
     const work = CONSOLE_NAVIGATION.PROJECT.find((section) => section.label === "Work");
-    expect(work?.children).toEqual(["Tasks", "Changes"]);
+    expect(work?.children).toEqual(["Tasks", "Packs"]);
   });
 
   it("gives every nested authoritative view a route", () => {
@@ -59,7 +59,7 @@ describe("project navigation", () => {
     }
   });
 
-  it("carries the fourteen frozen Change views and no retired ones", () => {
+  it("carries the fourteen frozen ChangePack views and no retired ones", () => {
     expect(CONSOLE_NAVIGATION.CHANGE.map((section) => section.label)).toEqual([
       "Summary",
       "Intent",
@@ -77,7 +77,7 @@ describe("project navigation", () => {
       "Recovery",
     ]);
     const serialized = JSON.stringify(CONSOLE_NAVIGATION);
-    for (const retired of ["Submit", "Approvals", "Risk", "Rollback", "Verify", "Pack"]) {
+    for (const retired of ["Submit", "Approvals", "Risk", "Rollback", "Verify", "Changes"]) {
       expect(serialized).not.toContain(retired);
     }
   });

@@ -100,14 +100,14 @@ test("project-level navigation is the frozen §8.3 architecture", async ({ page 
     await expect(page.getByRole("heading", { name: heading, exact: true }).first()).toBeVisible();
   }
 
-  // Work nests Tasks and Changes; Resources nests Observation; Extensions
+  // Work nests Tasks and Packs; Resources nests Observation; Extensions
   // nests Tools. Coverage and Tools must still resolve — they moved, they did
   // not disappear.
   await projectNav.getByRole("link", { name: "Work", exact: true }).click();
   const workNav = page.getByRole("navigation", { name: "Work navigation" });
-  await expect(workNav.getByRole("link")).toHaveText(["Tasks", "Changes"]);
-  await workNav.getByRole("link", { name: "Changes", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Changes", exact: true }).first()).toBeVisible();
+  await expect(workNav.getByRole("link")).toHaveText(["Tasks", "Packs"]);
+  await workNav.getByRole("link", { name: "Packs", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Packs", exact: true }).first()).toBeVisible();
 
   await projectNav.getByRole("link", { name: "Resources", exact: true }).click();
   await page
@@ -131,7 +131,7 @@ test("project-level navigation is the frozen §8.3 architecture", async ({ page 
   await expect(page.getByRole("heading", { name: "Publication", exact: true }).first()).toBeVisible();
 });
 
-test("task, attributed tree edit, and Change workflows persist through real Draft APIs", async ({ page }) => {
+test("task, attributed tree edit, and ChangePack workflows persist through real Draft APIs", async ({ page }) => {
   test.setTimeout(240_000);
 
   await page.getByRole("navigation", { name: "Project navigation" }).getByRole("link", { name: "Work", exact: true }).click();
@@ -139,7 +139,7 @@ test("task, attributed tree edit, and Change workflows persist through real Draf
   const createTask = page.getByRole("dialog", { name: "Create task" });
   await createTask.getByLabel("Task name").fill("console-e2e-task");
   await createTask.getByLabel("Task goal").fill("Prove canonical browser mutations");
-  await createTask.getByLabel("Task success criterion").fill("The persisted file and Change are visible");
+  await createTask.getByLabel("Task success criterion").fill("The persisted file and ChangePack are visible");
   await createTask.getByRole("button", { name: "Create task", exact: true }).click();
   await expect(page.getByRole("cell", { name: /console-e2e-task/ })).toBeVisible();
 
@@ -182,13 +182,13 @@ test("the Change Graph names each act separately and none of them promotes", asy
     .click();
   await expect(page.getByRole("heading", { name: "Publication", exact: true })).toBeVisible();
 
-  // Authorization lives with the Change it authorizes, under Work.
+  // Authorization lives with the ChangePack it authorizes, under Work.
   await projectNav.getByRole("link", { name: "Work", exact: true }).click();
   await page
     .getByRole("navigation", { name: "Work navigation" })
-    .getByRole("link", { name: "Changes", exact: true })
+    .getByRole("link", { name: "Packs", exact: true })
     .click();
-  await expect(page.getByRole("heading", { name: "Changes", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Packs", exact: true }).first()).toBeVisible();
 
   await expect(page.locator(".error-state")).toHaveCount(0);
 });

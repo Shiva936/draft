@@ -69,8 +69,8 @@ fn item(
 /// assembles them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionAttention<'a> {
-    pub change: &'a str,
-    pub revision: &'a str,
+    pub change_pack_id: &'a str,
+    pub revision_pack_id: &'a str,
     /// An approving decision citing a satisfied gate exists.
     pub approved: bool,
     /// Somebody asked for changes on this exact revision.
@@ -86,8 +86,8 @@ pub struct RevisionAttention<'a> {
 /// the only place an outstanding question can live.
 pub fn derive(attention: &RevisionAttention<'_>) -> Vec<InboxItem> {
     let RevisionAttention {
-        change,
-        revision,
+        change_pack_id: change,
+        revision_pack_id: revision,
         approved,
         changes_requested,
         unsatisfied_conditions,
@@ -104,7 +104,7 @@ pub fn derive(attention: &RevisionAttention<'_>) -> Vec<InboxItem> {
             change,
             "changes_requested",
             format!("Revision {revision} was returned with requested changes"),
-            format!("draft change review {change}"),
+            format!("draft pack review {change}"),
         ));
     }
 
@@ -122,7 +122,7 @@ pub fn derive(attention: &RevisionAttention<'_>) -> Vec<InboxItem> {
                     "Revision {revision} does not satisfy {}",
                     unsatisfied_conditions.join(", ")
                 ),
-                format!("draft change gates evaluate {change} {revision}"),
+                format!("draft pack gates evaluate {change} {revision}"),
             ));
         } else if !changes_requested {
             items.push(item(
@@ -130,8 +130,8 @@ pub fn derive(attention: &RevisionAttention<'_>) -> Vec<InboxItem> {
                 "change_review",
                 change,
                 "review_needed",
-                format!("Change {change} has a revision awaiting a decision"),
-                format!("draft change gates list {change} {revision}"),
+                format!("ChangePack {change} has a revision awaiting a decision"),
+                format!("draft pack gates list {change} {revision}"),
             ));
         }
     }

@@ -11,7 +11,7 @@ import { EmptyState } from "../../components/states";
  * This picks a view and shows what the model holds under it; it derives
  * nothing. A view the model has no data for says so rather than rendering an
  * empty object, because "nothing was recorded" and "there is nothing to
- * record" are different answers and only one of them is about this Change.
+ * record" are different answers and only one of them is about this ChangePack.
  */
 export function ScopeViews({
   model,

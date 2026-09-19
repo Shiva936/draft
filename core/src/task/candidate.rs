@@ -372,7 +372,7 @@ impl CandidateRegistry {
                 format!("candidate '{name}' is not configured"),
             )
             .with_suggestion(format!(
-                "add [candidates.{name}] to .draft/config.toml or run `draft change candidate add {name} -- <command>`"
+                "add [candidates.{name}] to .draft/config.toml or run `draft pack candidate add {name} -- <command>`"
             ))
         })
     }

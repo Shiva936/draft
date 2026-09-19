@@ -1,7 +1,7 @@
 //! Promotion nests two record locks and must not reacquire either.
 //!
 //! §2.34's commit sequence takes the ProjectControlStore lock (order 4) and,
-//! while still holding it, the Change's lock (order 8). `ProcessFileLock` is
+//! while still holding it, the ChangePack's lock (order 8). `ProcessFileLock` is
 //! deliberately **not** reentrant — `flock` is per-file-description, so a
 //! second acquisition of the same lock by the same thread blocks forever
 //! rather than succeeding.
@@ -16,10 +16,10 @@
 
 mod support;
 
-use draft_core::dcg::{Change, ChangeLifecycle, ChangeStore};
+use draft_core::dcg::{ChangePack, ChangePackLifecycle, ChangePackStore};
 use draft_core::project::control::{ProjectControlStore, ProjectLifecycle};
 use draft_core::project::security::ProjectSecurityState;
-use draft_dcg_contract::ids::{ChangeId, ProjectId};
+use draft_dcg_contract::ids::{ChangePackId, ProjectId};
 use draft_dcg_contract::security::{PolicyDigest, ProjectSecurityStateDigest};
 use draft_dcg_contract::{BaselineId, Digest};
 use std::sync::mpsc;
@@ -70,36 +70,36 @@ fn the_promotion_commit_sequence_nests_two_distinct_locks_without_reacquiring() 
         .initialize(&control_state(&project, b"baseline-1"))
         .unwrap();
 
-    let changes = ChangeStore::new(directory.path().join("graph/changes"));
-    let change_id = ChangeId::parse("chg_000000000001").unwrap();
+    let changes = ChangePackStore::new(directory.path().join("graph/change-packs"));
+    let change_pack_id = ChangePackId::parse("cpk_000000000001").unwrap();
     changes
-        .create(&Change {
+        .create(&ChangePack {
             generation: 0,
-            id: change_id.clone(),
+            id: change_pack_id.clone(),
             project: project.clone(),
             current_definition: Digest::of_bytes(b"definition"),
-            lifecycle: ChangeLifecycle::Active,
+            lifecycle: ChangePackLifecycle::Active,
         })
         .unwrap();
 
     let path = directory.path().to_path_buf();
     let completed = must_not_hang("the promotion commit sequence", move || {
         let control = ProjectControlStore::new(path.join("project"));
-        let changes = ChangeStore::new(path.join("graph/changes"));
-        let id = ChangeId::parse("chg_000000000001").unwrap();
+        let changes = ChangePackStore::new(path.join("graph/change-packs"));
+        let id = ChangePackId::parse("cpk_000000000001").unwrap();
 
-        // Exactly §2.34: control lock outermost, Change lock nested inside it,
+        // Exactly §2.34: control lock outermost, ChangePack lock nested inside it,
         // and each acquired once.
         control.with_locked_control(|_control_guard| {
             changes.with_locked_record(&id, |change_guard| {
-                let current = change_guard.current()?.expect("the Change exists");
+                let current = change_guard.current()?.expect("the ChangePack exists");
                 Ok(current.lifecycle)
             })
         })
     })
     .unwrap();
 
-    assert_eq!(completed, ChangeLifecycle::Active);
+    assert_eq!(completed, ChangePackLifecycle::Active);
 }
 
 #[test]

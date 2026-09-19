@@ -579,7 +579,7 @@ mod tests {
             .unwrap()
         {
             BeginOperation::New(record) => store
-                .begin_finalization(record, Some("chg_target".into()))
+                .begin_finalization(record, Some("cpk_target".into()))
                 .unwrap(),
             BeginOperation::Replay(_) => unreachable!(),
         };

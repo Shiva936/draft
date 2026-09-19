@@ -8,7 +8,7 @@ mod support;
 
 use draft_core::execution::plan::PlannedOperation;
 use draft_core::project::provider::ProviderBindingStore;
-use draft_dcg_contract::ids::{ChangeRevisionId, OperationId};
+use draft_dcg_contract::ids::{OperationId, RevisionPackId};
 use draft_dcg_contract::kinds::OperationKindId;
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::{ProviderProvenanceRef, ProviderRouteRef};
@@ -17,7 +17,7 @@ use support::providers;
 fn plan_for(binding: &draft_core::project::provider::ProviderBinding) -> PlannedOperation {
     PlannedOperation {
         id: OperationId::parse("op_000000000001").unwrap(),
-        change_revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+        change_revision: RevisionPackId::parse("rpk_000000000001").unwrap(),
         kind: OperationKindId::parse("draft.change.operate/v1").unwrap(),
         route: binding.current_route(),
         planned_at: Timestamp::from_unix_nanos(0),

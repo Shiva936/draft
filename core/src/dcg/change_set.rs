@@ -176,7 +176,7 @@ impl std::fmt::Display for ChangeSetId {
 impl ChangeSetId {
     pub fn generate() -> Self {
         Self(format!(
-            "chg_{}",
+            "cpk_{}",
             &uuid::Uuid::new_v4().simple().to_string()[..12]
         ))
     }

@@ -242,8 +242,8 @@ fn every_identifier_prefix_is_frozen() {
     assert_eq!(ids::ResourceId::PREFIX, "res_");
     assert_eq!(ids::ObservationId::PREFIX, "obs_");
     assert_eq!(ids::ObservationRunId::PREFIX, "run_");
-    assert_eq!(ids::ChangeId::PREFIX, "chg_");
-    assert_eq!(ids::ChangeRevisionId::PREFIX, "rev_");
+    assert_eq!(ids::ChangePackId::PREFIX, "cpk_");
+    assert_eq!(ids::RevisionPackId::PREFIX, "rpk_");
     assert_eq!(ids::OperationId::PREFIX, "op_");
     assert_eq!(ids::WorkspaceId::PREFIX, "wsp_");
     assert_eq!(ids::CheckpointId::PREFIX, "ckp_");

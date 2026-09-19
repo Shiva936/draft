@@ -94,8 +94,8 @@ fn bench_events(c: &mut Criterion) {
             log.append(
                 &format!("evt_{next:024}"),
                 &serde_json::json!({
-                    "kind": "ChangeCreated",
-                    "subject": "chg_x",
+                    "kind": "ChangePackCreated",
+                    "subject": "cpk_x",
                     "actor": "act_000000000001",
                     "metadata": {},
                 }),
@@ -282,14 +282,14 @@ fn bench_impact_index(c: &mut Criterion) {
     c.bench_function("impact_index_revision", |b| {
         b.iter(|| {
             index
-                .index_revision(black_box("rev_bench000001"), black_box(&merged))
+                .index_revision(black_box("rpk_bench000001"), black_box(&merged))
                 .unwrap()
         })
     });
     c.bench_function("impact_elements_touched", |b| {
         b.iter(|| {
             index
-                .elements_touched_by(black_box("rev_bench000001"))
+                .elements_touched_by(black_box("rpk_bench000001"))
                 .unwrap()
         })
     });
@@ -304,8 +304,9 @@ fn bench_baseline() -> draft_dcg_contract::BaselineId {
 fn make_members(n: usize) -> Vec<compose::ComposedRevision> {
     (0..n)
         .map(|i| compose::ComposedRevision {
-            change: draft_dcg_contract::ids::ChangeId::parse(format!("chg_{i:012}")).unwrap(),
-            revision: draft_dcg_contract::ids::ChangeRevisionId::parse(format!("rev_{i:012}"))
+            change_pack: draft_dcg_contract::ids::ChangePackId::parse(format!("cpk_{i:012}"))
+                .unwrap(),
+            revision_pack: draft_dcg_contract::ids::RevisionPackId::parse(format!("rpk_{i:012}"))
                 .unwrap(),
             base_baseline: bench_baseline(),
             touched: [crate_resource_id(if i % 4 == 3 { i - 1 } else { i })]
@@ -356,13 +357,13 @@ fn bench_conflict_detection(c: &mut Criterion) {
     let mut index = AffectedPathIndex::default();
     for member in &members {
         index.changes.insert(
-            member.change.to_string(),
+            member.change_pack.to_string(),
             member.touched.iter().map(ToString::to_string).collect(),
         );
     }
     let candidate = vec![crate_resource_id(500).to_string()];
     c.bench_function("affected_path_index_lookup_1k", |b| {
-        b.iter(|| index.changes_touching(black_box(&candidate)))
+        b.iter(|| index.change_packs_touching(black_box(&candidate)))
     });
 }
 

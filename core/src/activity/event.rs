@@ -55,12 +55,12 @@ pub enum EventKind {
     TaskClosed,
     TaskReopened,
 
-    // Changes.
-    ChangeCreated,
-    ChangeDefinitionAmended,
-    ChangeCompleted,
-    ChangeAbandoned,
-    ChangeReopened,
+    // ChangePacks.
+    ChangePackCreated,
+    ChangePackDefinitionAmended,
+    ChangePackCompleted,
+    ChangePackAbandoned,
+    ChangePackReopened,
 
     // Security and policy.
     AuthorityGranted,
@@ -80,7 +80,7 @@ pub enum EventKind {
     RelationDerived,
     StateBearingDeclared,
     ScopeResolved,
-    RevisionSealed,
+    RevisionPackSealed,
 
     // Evidence and assessment.
     EvidenceProduced,
@@ -147,7 +147,7 @@ pub enum AuditFactKind {
     Initialization,
     Security,
     Promotion,
-    ChangeLifecycle,
+    ChangePackLifecycle,
     TaskLifecycle,
     ProviderLifecycle,
     Extension,
@@ -177,7 +177,7 @@ pub enum JournalMechanism {
     RecordMutationJournal,
     /// An immutable fact's own creation journal, in its owning Store.
     FactCreationJournal,
-    /// The Promotion journal, which also carries the planned Change completion.
+    /// The Promotion journal, which also carries the planned ChangePack completion.
     PromotionJournal,
     /// The Publication creation journal, under the registry lock.
     PublicationCreationJournal,
@@ -222,11 +222,11 @@ impl EventKind {
         Self::TaskUpdated,
         Self::TaskClosed,
         Self::TaskReopened,
-        Self::ChangeCreated,
-        Self::ChangeDefinitionAmended,
-        Self::ChangeCompleted,
-        Self::ChangeAbandoned,
-        Self::ChangeReopened,
+        Self::ChangePackCreated,
+        Self::ChangePackDefinitionAmended,
+        Self::ChangePackCompleted,
+        Self::ChangePackAbandoned,
+        Self::ChangePackReopened,
         Self::AuthorityGranted,
         Self::AuthorityRevoked,
         Self::SecurityStateUpdated,
@@ -240,7 +240,7 @@ impl EventKind {
         Self::RelationDerived,
         Self::StateBearingDeclared,
         Self::ScopeResolved,
-        Self::RevisionSealed,
+        Self::RevisionPackSealed,
         Self::EvidenceProduced,
         Self::AssessmentProduced,
         Self::ReviewSubmitted,
@@ -315,14 +315,16 @@ impl EventKind {
                 (Fact::TaskLifecycle, Journal::RecordMutationJournal)
             }
 
-            // Change completion is the Promotion's, because it is that
+            // ChangePack completion is the Promotion's, because it is that
             // transaction's deterministic finalization rather than a separate
             // decision somebody makes afterwards.
-            Self::ChangeCompleted => (Fact::ChangeLifecycle, Journal::PromotionJournal),
-            Self::ChangeCreated
-            | Self::ChangeDefinitionAmended
-            | Self::ChangeAbandoned
-            | Self::ChangeReopened => (Fact::ChangeLifecycle, Journal::RecordMutationJournal),
+            Self::ChangePackCompleted => (Fact::ChangePackLifecycle, Journal::PromotionJournal),
+            Self::ChangePackCreated
+            | Self::ChangePackDefinitionAmended
+            | Self::ChangePackAbandoned
+            | Self::ChangePackReopened => {
+                (Fact::ChangePackLifecycle, Journal::RecordMutationJournal)
+            }
 
             Self::AuthorityGranted | Self::AuthorityRevoked => {
                 (Fact::Security, Journal::FactCreationJournal)
@@ -340,8 +342,8 @@ impl EventKind {
             | Self::CoverageRecorded
             | Self::RelationDerived
             | Self::StateBearingDeclared => (Fact::Observation, Journal::FactCreationJournal),
-            Self::ScopeResolved | Self::RevisionSealed => {
-                (Fact::ChangeLifecycle, Journal::FactCreationJournal)
+            Self::ScopeResolved | Self::RevisionPackSealed => {
+                (Fact::ChangePackLifecycle, Journal::FactCreationJournal)
             }
 
             Self::EvidenceProduced | Self::AssessmentProduced => {
@@ -422,6 +424,38 @@ impl std::fmt::Display for EventKind {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn pack_events_persist_under_their_exact_member_names() {
+        for (kind, wire) in [
+            (EventKind::ChangePackCreated, "ChangePackCreated"),
+            (
+                EventKind::ChangePackDefinitionAmended,
+                "ChangePackDefinitionAmended",
+            ),
+            (EventKind::ChangePackCompleted, "ChangePackCompleted"),
+            (EventKind::ChangePackAbandoned, "ChangePackAbandoned"),
+            (EventKind::ChangePackReopened, "ChangePackReopened"),
+            (EventKind::RevisionPackSealed, "RevisionPackSealed"),
+        ] {
+            let encoded = serde_json::to_value(kind).unwrap();
+            assert_eq!(encoded, serde_json::json!(wire));
+            assert_eq!(serde_json::from_value::<EventKind>(encoded).unwrap(), kind);
+        }
+        // retired-architecture-ok: the pre-rename discriminants must not parse.
+        for retired in [
+            "ChangeCreated",
+            "ChangeCompleted",
+            "RevisionSealed",
+            "PackCreated",
+        ] {
+            assert!(serde_json::from_value::<EventKind>(serde_json::json!(retired)).is_err());
+        }
+        assert_eq!(
+            EventKind::ChangePackCompleted.ownership().mechanism,
+            JournalMechanism::PromotionJournal
+        );
+    }
 
     #[test]
     fn every_event_has_a_fact_owner_and_a_named_mechanism() {
@@ -512,11 +546,11 @@ mod tests {
         // It is the Promotion's deterministic finalization, not a separate
         // decision taken afterwards.
         assert_eq!(
-            EventKind::ChangeCompleted.ownership().mechanism,
+            EventKind::ChangePackCompleted.ownership().mechanism,
             JournalMechanism::PromotionJournal
         );
         assert_eq!(
-            EventKind::ChangeAbandoned.ownership().mechanism,
+            EventKind::ChangePackAbandoned.ownership().mechanism,
             JournalMechanism::RecordMutationJournal
         );
     }
@@ -528,8 +562,8 @@ mod tests {
             assert_eq!(&serde_json::from_str::<EventKind>(&encoded).unwrap(), kind);
         }
         assert_eq!(
-            serde_json::to_string(&EventKind::ChangeCreated).unwrap(),
-            "\"ChangeCreated\""
+            serde_json::to_string(&EventKind::ChangePackCreated).unwrap(),
+            "\"ChangePackCreated\""
         );
     }
 

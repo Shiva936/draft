@@ -174,7 +174,6 @@ forbidden=(
   draft-core
   draft-extension-contract
   draft-extension-service
-  draft-draftpack-contract
   draftd
   draft-cli
   draft-console

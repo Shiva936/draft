@@ -114,10 +114,10 @@ fn baselines(layout: &DraftLayout, graph: &mut RootGraph) -> DraftResult<()> {
     Ok(())
 }
 
-/// Every Change, its current definition, and its sealed revisions.
+/// Every ChangePack, its current definition, and its sealed revisions.
 fn changes(layout: &DraftLayout, graph: &mut RootGraph) -> DraftResult<()> {
-    let store = crate::dcg::change::ChangeStore::new(layout.changes_dir());
-    let revisions = crate::dcg::revision::RevisionStore::new(layout.revisions_dir());
+    let store = crate::dcg::change_pack::ChangePackStore::new(layout.change_packs_dir());
+    let revisions = crate::dcg::revision_pack::RevisionPackStore::new(layout.revision_packs_dir());
     let changes = match store.list() {
         Ok(changes) => changes,
         Err(error) => {
@@ -129,14 +129,14 @@ fn changes(layout: &DraftLayout, graph: &mut RootGraph) -> DraftResult<()> {
     };
     for change in changes {
         let change_key = key("change", change.id.to_string());
-        // Every Change is a root, terminal ones included. Abandoning is a
+        // Every ChangePack is a root, terminal ones included. Abandoning is a
         // statement about the future; the record of work that was tried and
         // stopped is frequently the part worth keeping.
         graph.roots.insert(change_key.clone());
         let mut referenced =
             BTreeSet::from([key("change-definition", change.current_definition.as_str())]);
         if let Ok(sealed) = revisions.list() {
-            for revision in sealed.iter().filter(|value| value.change == change.id) {
+            for revision in sealed.iter().filter(|value| value.change_pack == change.id) {
                 let revision_key = key("revision", revision.id.to_string());
                 referenced.insert(revision_key.clone());
                 let mut from_revision = BTreeSet::from([
@@ -160,7 +160,7 @@ fn changes(layout: &DraftLayout, graph: &mut RootGraph) -> DraftResult<()> {
 /// binds.
 ///
 /// Rooted rather than merely referenced: a judgement about a revision is
-/// history in its own right, and a Change that is later abandoned does not make
+/// history in its own right, and a ChangePack that is later abandoned does not make
 /// the review that happened collectible.
 fn judgements(layout: &DraftLayout, graph: &mut RootGraph) {
     let stores = crate::app::authorization::AuthorizationStores::for_layout(layout);
@@ -172,7 +172,7 @@ fn judgements(layout: &DraftLayout, graph: &mut RootGraph) {
                 let evidence_key = key("evidence", evidence.id.to_string());
                 graph.roots.insert(evidence_key.clone());
                 let mut referenced =
-                    BTreeSet::from([key("revision", evidence.revision.to_string())]);
+                    BTreeSet::from([key("revision", evidence.revision_pack.to_string())]);
                 for input in &evidence.inputs {
                     referenced.insert(key("observation", input.id.to_string()));
                 }
@@ -202,7 +202,7 @@ fn judgements(layout: &DraftLayout, graph: &mut RootGraph) {
         "assessment",
         stores.assessments.list().map(|all| {
             all.into_iter()
-                .map(|value| (value.id.to_string(), value.revision.to_string()))
+                .map(|value| (value.id.to_string(), value.revision_pack.to_string()))
                 .collect()
         }),
     );
@@ -210,7 +210,7 @@ fn judgements(layout: &DraftLayout, graph: &mut RootGraph) {
         "decision",
         stores.decisions.list().map(|all| {
             all.into_iter()
-                .map(|value| (value.id.to_string(), value.revision.to_string()))
+                .map(|value| (value.id.to_string(), value.revision_pack.to_string()))
                 .collect()
         }),
     );
@@ -218,7 +218,7 @@ fn judgements(layout: &DraftLayout, graph: &mut RootGraph) {
         "gate-evaluation",
         stores.gates.list().map(|all| {
             all.into_iter()
-                .map(|value| (value.id.clone(), value.revision.to_string()))
+                .map(|value| (value.id.clone(), value.revision_pack.to_string()))
                 .collect()
         }),
     );

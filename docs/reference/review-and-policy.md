@@ -7,11 +7,11 @@ Draft separates evidence collection, risk assessment, review and the final Decis
 ### Review
 
 ```bash
-draft change review <rev-id>
-draft change review <rev-id> --comment "looks good"
+draft pack review <rpk-id>
+draft pack review <rpk-id> --comment "looks good"
 ```
 
-Review records that the Change entered the human review boundary. Inspect:
+Review records that the ChangePack entered the human review boundary. Inspect:
 
 - the resources that changed, and what could not be determined about them;
 - verification results in all five states, with the producer and the decision that permitted each check;
@@ -23,8 +23,8 @@ Review units are resource-level by default. Where an installed comparison capabi
 ### Approval And Rejection
 
 ```bash
-draft change decide --approve -p <Change> --reason "verified locally"
-draft change decide --reject -p <Change> --reason "needs changes"
+draft pack decide --approve -p <ChangePack> --reason "verified locally"
+draft pack decide --reject -p <ChangePack> --reason "needs changes"
 ```
 
 Default policy requires an approving Decision before a promotion, and high-risk changes require human approval when that policy is enabled. A Decision is local Draft metadata, not a hosted code-review approval.
@@ -38,7 +38,7 @@ The first view is summary-first: overview, hotspots, evidence gaps, provenance, 
 Console sections cover:
 
 - workspace status and latest scan time;
-- Change list, selection, file changes, and overlap indicators;
+- ChangePack list, selection, file changes, and overlap indicators;
 - verification and gate-readiness counts;
 - risk findings, evidence gaps, and policy blockers;
 - decisions and approve or reject actions;
@@ -53,7 +53,7 @@ The TUI receives authoritative models and short-lived action capabilities from `
 Verification runs checks and records their results as Draft evidence.
 
 ```bash
-draft change evidence run -p <Change-id-or-name>
+draft pack evidence run -p <ChangePack-id-or-name>
 ```
 
 Draft resolves the checks that apply to the change, runs each one through its single authorized execution boundary, and captures stdout, stderr, exit code, and timing in a verification receipt. Every check names the extension that contributed it, the artifact attestation it was accepted under, and the authorization decision that permitted the run.
@@ -76,12 +76,12 @@ When verification fails:
 
 1. Inspect the receipt and its stdout and stderr objects.
 2. Fix the workspace.
-3. Create or update the Change.
+3. Create or update the ChangePack.
 4. Run verification again.
 
 ## Risk
 
-`draft change assess` is deterministic and local. Its result is one of two things, and they are not interchangeable:
+`draft pack assess` is deterministic and local. Its result is one of two things, and they are not interchangeable:
 
 - `unassessed` — no rule was available to judge this change. The report names why and what would supply one. This is **not** a low score; Draft has no opinion, and says so.
 - `assessed` — rules ran. The report carries a score, band, stable reason codes, per-rule results with the extension that contributed each rule, hotspots, evidence gaps, and a receipt.
@@ -123,8 +123,8 @@ A key in a higher layer overrides only that key; unspecified keys fall through. 
 | `require_approval_on_high_risk`        | `true`  | promotion gate                                     |
 | `require_reverify_on_workspace_change` | `true`  | promotion gate                                     |
 | `require_local_verify_for_imports`     | `true`  | import promotion gate                              |
-| `require_full_verify_intents`          | `[]`    | `draft change evidence run`; escalates to `--full` |
-| `require_fuzz_intents`                 | `[]`    | `draft change evidence run`; escalates to `--fuzz` |
+| `require_full_verify_intents`          | `[]`    | `draft pack evidence run`; escalates to `--full` |
+| `require_fuzz_intents`                 | `[]`    | `draft pack evidence run`; escalates to `--fuzz` |
 
 The two intent keys are empty by default and deliberately so. An intent is a namespaced identifier from a contributed vocabulary, so an intent id Draft invented would name a vocabulary nothing declares and could never match. Escalations arrive from the same package that declares the intent — `draft.software.project` escalates its own `security` intent to full and exploratory verification, and its `migration` intent to full — or from the project's `policy.toml`. Contributed escalations only ever add, so neither a second extension nor a permissive file can relax what another already requires.
 
@@ -137,8 +137,8 @@ The default policy requires:
 - verification and an approving Decision before a promotion;
 - no unresolved critical risk and a canonical risk report;
 - re-verification after workspace changes;
-- local re-verification and approval of imported Changes;
-- full verification and fuzzing for security-intent Changes;
+- local re-verification and approval of imported work (inert in this release, which has no import path);
+- full verification and fuzzing for security-intent ChangePacks;
 - valid event, receipt, and transparency evidence for trust-relevant actions.
 
 Draft refuses a promotion when a required verification or approving Decision is missing, a blocking verification failed, the risk report is missing or critical, high risk lacks human approval, the workspace changed after verification, an import has not been locally re-verified and approved, or `.draft/` appears in the candidate. The `.draft/` block is not configurable.

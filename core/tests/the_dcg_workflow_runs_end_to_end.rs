@@ -63,7 +63,7 @@ impl Project {
     fn authorize(&self, intent: &str) -> (String, String, String) {
         let change = self
             .app
-            .dcg_open_change(&self.root, intent, &self.scope())
+            .dcg_open_change_pack(&self.root, intent, &self.scope())
             .unwrap();
         // A revision proposes a change, so there has to be one. The intent is
         // the content, which keeps two differently-intended revisions from
@@ -127,7 +127,7 @@ fn the_workflow_reaches_a_baseline_and_then_publishes_it() {
 
     let change = project
         .app
-        .dcg_open_change(&project.root, "change the file", &project.scope())
+        .dcg_open_change_pack(&project.root, "change the file", &project.scope())
         .unwrap();
     std::fs::write(project.root.join("a.txt"), "changed").unwrap();
 
@@ -308,7 +308,7 @@ fn action_availability_tracks_the_workflow_stage_by_stage() {
 
     let change = project
         .app
-        .dcg_open_change(&project.root, "staged work", &project.scope())
+        .dcg_open_change_pack(&project.root, "staged work", &project.scope())
         .unwrap();
     std::fs::write(project.root.join("a.txt"), "staged").unwrap();
     let revision = project
@@ -394,7 +394,7 @@ fn action_availability_tracks_the_workflow_stage_by_stage() {
         )
         .unwrap();
 
-    // After promotion the Change is completed, so the same work is not
+    // After promotion the ChangePack is completed, so the same work is not
     // offered for promotion again — and publishing becomes available.
     let view = project
         .app
@@ -433,7 +433,7 @@ fn a_rejected_decision_authorizes_nothing() {
 
     let change = project
         .app
-        .dcg_open_change(&project.root, "work to refuse", &project.scope())
+        .dcg_open_change_pack(&project.root, "work to refuse", &project.scope())
         .unwrap();
     std::fs::write(project.root.join("a.txt"), "refused").unwrap();
     let revision = project
@@ -524,7 +524,7 @@ fn a_promotion_against_a_baseline_that_has_moved_is_refused_not_rebased() {
     // A second, decided against the Baseline as it was before.
     let change = project
         .app
-        .dcg_open_change(&project.root, "second change", &project.scope())
+        .dcg_open_change_pack(&project.root, "second change", &project.scope())
         .unwrap();
     std::fs::write(project.root.join("a.txt"), "two").unwrap();
     let revision = project
@@ -597,7 +597,7 @@ fn a_repeated_promotion_request_converges_rather_than_promoting_twice() {
 
     let change = project
         .app
-        .dcg_open_change(&project.root, "work promoted twice", &project.scope())
+        .dcg_open_change_pack(&project.root, "work promoted twice", &project.scope())
         .unwrap();
     std::fs::write(project.root.join("a.txt"), "once").unwrap();
     let revision = project
@@ -852,7 +852,7 @@ fn promote_one(project: &Project, intent: &str, content: &str) -> draft_dcg_cont
         .baseline;
     let change = project
         .app
-        .dcg_open_change(&project.root, intent, &project.scope())
+        .dcg_open_change_pack(&project.root, intent, &project.scope())
         .unwrap();
     std::fs::write(project.root.join("a.txt"), content).unwrap();
     let revision = project

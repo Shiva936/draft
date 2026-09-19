@@ -2,12 +2,12 @@
 //!
 //! # What it guarantees
 //!
-//! > No new Change mutation begins while a promotion's Change lifecycle
+//! > No new ChangePack mutation begins while a promotion's ChangePack lifecycle
 //! > finalization is still outstanding.
 //!
 //! A promotion that committed has already moved the accepted Baseline. If the
-//! crash landed between that commit and the Change's `Active → Completed`
-//! transition, the Change is still open — and a new mutation on it would let
+//! crash landed between that commit and the ChangePack's `Active → Completed`
+//! transition, the ChangePack is still open — and a new mutation on it would let
 //! the same work be revised and promoted a second time, accepting it twice
 //! into a Baseline that already contains it (Scenario DI).
 //!
@@ -25,19 +25,19 @@
 //! the signature, which is exactly the review moment it deserves.
 
 use crate::promotion::journal::{
-    resolve, ChangeMatch, ControlMatch, PromotionJournalState, PromotionResolution,
+    resolve, ChangePackMatch, ControlMatch, PromotionJournalState, PromotionResolution,
 };
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 
-/// What the barrier requires before a new Change mutation may proceed.
+/// What the barrier requires before a new ChangePack mutation may proceed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BarrierOutcome {
     /// Nothing outstanding. The mutation may proceed.
     Clear,
-    /// A committed promotion still owes its Change completion.
+    /// A committed promotion still owes its ChangePack completion.
     ///
     /// The caller must finish that first. Deliberately not done silently here:
-    /// completing a Change is an audited mutation with its own journal, and
+    /// completing a ChangePack is an audited mutation with its own journal, and
     /// burying it inside a barrier check would hide a durable state change in
     /// what reads like a precondition.
     CompletionOutstanding,
@@ -53,18 +53,20 @@ pub enum BarrierOutcome {
 pub fn enforce(
     journal: PromotionJournalState,
     control: ControlMatch,
-    change: ChangeMatch,
+    change: ChangePackMatch,
 ) -> BarrierOutcome {
     match resolve(journal, control, change) {
         // Nothing was accepted, or everything already finished.
         PromotionResolution::DidNotCommit | PromotionResolution::AlreadyFinalized => {
             BarrierOutcome::Clear
         }
-        // The Baseline moved but the Change did not. This is the case the
+        // The Baseline moved but the ChangePack did not. This is the case the
         // barrier exists for.
-        PromotionResolution::CompleteChangeThenFinalize => BarrierOutcome::CompletionOutstanding,
+        PromotionResolution::CompleteChangePackThenFinalize => {
+            BarrierOutcome::CompletionOutstanding
+        }
         // Committed and completed; only idempotent finalization remains, which
-        // no longer constrains new work on the Change.
+        // no longer constrains new work on the ChangePack.
         PromotionResolution::ContinueFinalization => BarrierOutcome::Clear,
         PromotionResolution::Inconsistent { detail } => BarrierOutcome::Inconsistent { detail },
     }
@@ -77,8 +79,8 @@ impl BarrierOutcome {
             Self::Clear => Ok(()),
             Self::CompletionOutstanding => Err(DraftError::new(
                 DraftErrorKind::ConflictDetected,
-                "a promotion accepted this work into the Baseline but its Change completion did \
-                 not finish; that must be completed before the Change is mutated again",
+                "a promotion accepted this work into the Baseline but its ChangePack completion did \
+                 not finish; that must be completed before the ChangePack is mutated again",
             )
             .with_suggestion(
                 "run `draft doctor` to finish the outstanding completion, then retry",
@@ -95,7 +97,7 @@ impl BarrierOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ChangeMatch as C;
+    use ChangePackMatch as C;
     use ControlMatch as K;
     use PromotionJournalState as J;
 
@@ -131,7 +133,7 @@ mod tests {
             );
         }
         // And a committed-and-completed promotion only owes idempotent
-        // finalization, which does not constrain the Change.
+        // finalization, which does not constrain the ChangePack.
         assert_eq!(
             enforce(J::Committed, K::Planned, C::PlannedCompleted),
             BarrierOutcome::Clear

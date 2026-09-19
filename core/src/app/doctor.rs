@@ -152,8 +152,7 @@ impl App {
             ("events-dir", paths.events_dir()),
             ("receipts-dir", paths.receipts_dir()),
             ("transparency-dir", paths.transparency_dir()),
-            ("changes-dir", paths.changes_content_dir()),
-            ("quarantine-dir", paths.quarantine_dir()),
+            ("change-packs-dir", paths.change_packs_content_dir()),
             ("recovery-dir", paths.recovery_dir()),
         ] {
             checks.push(bool_check(
@@ -206,9 +205,9 @@ impl App {
             )?,
             index_status("task", paths.task_name_index(), &[paths.tasks_dir()])?,
             index_status(
-                "change",
-                paths.change_graph_index(),
-                &[paths.changes_content_dir()],
+                "change-pack",
+                paths.change_pack_graph_index(),
+                &[paths.change_packs_content_dir()],
             )?,
             index_status(
                 "receipt",

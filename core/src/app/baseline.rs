@@ -256,26 +256,27 @@ pub fn require_workspace_matches_baseline(
     .with_suggestion(suggestion))
 }
 
-/// The promotion that accepts a Change's work onto a parent Baseline.
+/// The promotion that accepts a ChangePack's work onto a parent Baseline.
 ///
-/// Derived from the Change and the Baseline it advances, so a retried promotion
+/// Derived from the ChangePack and the Baseline it advances, so a retried promotion
 /// converges on the same promotion rather than minting a second one for the
 /// same acceptance.
 pub fn promotion_id_for(
-    change_id: &str,
+    change_pack_id: &str,
     parent: &BaselineId,
 ) -> DraftResult<draft_dcg_contract::ids::PromotionId> {
-    let seed = draft_dcg_contract::Digest::of_bytes(format!("{change_id}|{parent}").as_bytes());
+    let seed =
+        draft_dcg_contract::Digest::of_bytes(format!("{change_pack_id}|{parent}").as_bytes());
     draft_dcg_contract::ids::PromotionId::parse(format!("pro_{}", short_hex(&seed)))
         .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))
 }
 
-/// The revision identity of the Change being promoted.
-pub fn change_revision_id_for(
-    change_id: &str,
-) -> DraftResult<draft_dcg_contract::ids::ChangeRevisionId> {
-    let seed = draft_dcg_contract::Digest::of_bytes(change_id.as_bytes());
-    draft_dcg_contract::ids::ChangeRevisionId::parse(format!("rev_{}", short_hex(&seed)))
+/// The revision identity of the ChangePack being promoted.
+pub fn revision_pack_id_for(
+    change_pack_id: &str,
+) -> DraftResult<draft_dcg_contract::ids::RevisionPackId> {
+    let seed = draft_dcg_contract::Digest::of_bytes(change_pack_id.as_bytes());
+    draft_dcg_contract::ids::RevisionPackId::parse(format!("rpk_{}", short_hex(&seed)))
         .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))
 }
 

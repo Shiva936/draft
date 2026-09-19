@@ -20,7 +20,7 @@
 //! reviewer. Under §2.45 the revision id is a create-once binding, so a
 //! substituted revision cannot inherit an approval given for the original.
 
-use draft_dcg_contract::ids::{ActorId, ChangeRevisionId, DecisionId};
+use draft_dcg_contract::ids::{ActorId, DecisionId, RevisionPackId};
 use draft_dcg_contract::security::SecurityFactRef;
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::Digest;
@@ -55,7 +55,7 @@ pub enum DecisionOutcome {
 pub struct Decision {
     pub id: DecisionId,
     /// The exact revision judged.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     pub outcome: DecisionOutcome,
     pub decided_by: ActorId,
     pub decided_at: Timestamp,
@@ -99,8 +99,8 @@ impl Decision {
     }
 
     /// Whether this decision speaks to `revision`.
-    pub fn covers(&self, revision: &ChangeRevisionId) -> bool {
-        &self.revision == revision
+    pub fn covers(&self, revision: &RevisionPackId) -> bool {
+        &self.revision_pack == revision
     }
 
     /// Whether this decision permits the work to proceed.
@@ -111,7 +111,7 @@ impl Decision {
     /// Whether the work remains open after this decision.
     ///
     /// Both refusals leave it open. A rejected revision can be revised and
-    /// resealed; only promotion finishes a Change.
+    /// resealed; only promotion finishes a ChangePack.
     pub fn leaves_work_open(&self) -> bool {
         !self.is_approval()
     }

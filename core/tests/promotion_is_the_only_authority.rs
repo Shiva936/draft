@@ -26,7 +26,7 @@ use draft_core::project::Workspace;
 use draft_dcg_contract::baseline::BaselineId;
 use draft_dcg_contract::identifier::{NamespacedId, ScopedId};
 use draft_dcg_contract::ids::{
-    ActorId, AssessmentId, ChangeId, ChangeRevisionId, DecisionId, EvidenceId, ObservationId,
+    ActorId, AssessmentId, ChangePackId, DecisionId, EvidenceId, ObservationId, RevisionPackId,
 };
 use draft_dcg_contract::observation::{ObservationDigest, ObservationRef};
 use draft_dcg_contract::producer::ProducerIdentity;
@@ -91,7 +91,7 @@ impl Project {
     /// Evidence → assessment → gate, for one revision at one risk level.
     fn authorize_up_to_gate(
         &self,
-        revision: &ChangeRevisionId,
+        revision: &RevisionPackId,
         outcome: EvidenceOutcome,
         risk: AssessedRisk,
     ) -> draft_core::gate::GateEvaluation {
@@ -100,7 +100,7 @@ impl Project {
             .evidence
             .put(&Evidence {
                 id: evidence_id.clone(),
-                revision: revision.clone(),
+                revision_pack: revision.clone(),
                 inputs: [ObservationRef {
                     id: ObservationId::parse("obs_000000000001").unwrap(),
                     digest: ObservationDigest::new(Digest::of_bytes(b"observed")),
@@ -119,7 +119,7 @@ impl Project {
             &self.stores,
             &Assessment {
                 id: assessment_id.clone(),
-                revision: revision.clone(),
+                revision_pack: revision.clone(),
                 inputs: [evidence_id].into_iter().collect(),
                 risk,
                 rationale: "assessed for the test".into(),
@@ -134,7 +134,7 @@ impl Project {
             &self.stores,
             &GateRequest {
                 id: format!("gate_{}", suffix(revision)),
-                revision: revision.clone(),
+                revision_pack: revision.clone(),
                 definition: Digest::of_bytes(b"definition"),
                 scope: Digest::of_bytes(b"scope"),
                 assessments: [assessment_id].into_iter().collect(),
@@ -152,7 +152,7 @@ impl Project {
     /// The same chain, with waivers offered and a clock later than time zero.
     fn gate_with_waivers(
         &self,
-        revision: &ChangeRevisionId,
+        revision: &RevisionPackId,
         outcome: EvidenceOutcome,
         risk: AssessedRisk,
         waivers: BTreeSet<String>,
@@ -164,7 +164,7 @@ impl Project {
             &self.stores,
             &GateRequest {
                 id: format!("{}-waived", base.id),
-                revision: revision.clone(),
+                revision_pack: revision.clone(),
                 definition: Digest::of_bytes(b"definition"),
                 scope: Digest::of_bytes(b"scope"),
                 assessments: base.assessments.clone(),
@@ -181,7 +181,7 @@ impl Project {
 
     fn approve(
         &self,
-        revision: &ChangeRevisionId,
+        revision: &RevisionPackId,
         gate: &draft_core::gate::GateEvaluation,
     ) -> DecisionId {
         let id = DecisionId::parse(format!("dec_{}", suffix(revision))).unwrap();
@@ -189,7 +189,7 @@ impl Project {
             &self.stores,
             &DecisionRequest {
                 id: id.clone(),
-                revision: revision.clone(),
+                revision_pack: revision.clone(),
                 outcome: DecisionOutcome::Approved,
                 decided_by: actor(),
                 decided_at: Timestamp::from_unix_nanos(1),
@@ -201,28 +201,28 @@ impl Project {
         id
     }
 
-    /// The Change a promotion completes. Created once, because promotion
-    /// completes a Change rather than creating one.
-    fn ensure_change(&self) -> ChangeId {
-        let id = ChangeId::parse("chg_000000000001").unwrap();
-        let store = draft_core::dcg::ChangeStore::new(self.workspace.layout.changes_dir());
+    /// The ChangePack a promotion completes. Created once, because promotion
+    /// completes a ChangePack rather than creating one.
+    fn ensure_change(&self) -> ChangePackId {
+        let id = ChangePackId::parse("cpk_000000000001").unwrap();
+        let store = draft_core::dcg::ChangePackStore::new(self.workspace.layout.change_packs_dir());
         if store.read_unlocked(&id).unwrap().is_none() {
             store
-                .create(&draft_core::dcg::change::Change {
+                .create(&draft_core::dcg::change_pack::ChangePack {
                     generation: 0,
                     id: id.clone(),
                     project: self.workspace.workspace_id.clone(),
                     current_definition: Digest::of_bytes(b"definition"),
-                    lifecycle: draft_core::dcg::change::ChangeLifecycle::Active,
+                    lifecycle: draft_core::dcg::change_pack::ChangePackLifecycle::Active,
                 })
                 .unwrap();
         }
         id
     }
 
-    fn change_lifecycle(&self) -> draft_core::dcg::change::ChangeLifecycle {
-        draft_core::dcg::ChangeStore::new(self.workspace.layout.changes_dir())
-            .read_unlocked(&ChangeId::parse("chg_000000000001").unwrap())
+    fn change_lifecycle(&self) -> draft_core::dcg::change_pack::ChangePackLifecycle {
+        draft_core::dcg::ChangePackStore::new(self.workspace.layout.change_packs_dir())
+            .read_unlocked(&ChangePackId::parse("cpk_000000000001").unwrap())
             .unwrap()
             .unwrap()
             .lifecycle
@@ -230,14 +230,14 @@ impl Project {
 
     fn request(
         &self,
-        revision: &ChangeRevisionId,
+        revision: &RevisionPackId,
         decision: DecisionId,
         gate: &draft_core::gate::GateEvaluation,
         parent: Option<BaselineId>,
     ) -> PromotionRequest {
         PromotionRequest {
-            change: self.ensure_change(),
-            revision: revision.clone(),
+            change_pack: self.ensure_change(),
+            revision_pack: revision.clone(),
             decision,
             gate: gate.id.clone(),
             expected_parent: parent,
@@ -245,12 +245,12 @@ impl Project {
     }
 }
 
-fn suffix(revision: &ChangeRevisionId) -> String {
-    revision.to_string().replace("rev_", "")
+fn suffix(revision: &RevisionPackId) -> String {
+    revision.to_string().replace("rpk_", "")
 }
 
-fn revision(name: &str) -> ChangeRevisionId {
-    ChangeRevisionId::parse(format!("rev_{name}")).unwrap()
+fn revision(name: &str) -> RevisionPackId {
+    RevisionPackId::parse(format!("rpk_{name}")).unwrap()
 }
 
 fn producer() -> ProducerIdentity {
@@ -334,7 +334,7 @@ fn a_failing_gate_stops_the_decision_and_therefore_the_promotion() {
         &project.stores,
         &DecisionRequest {
             id: DecisionId::parse("dec_00000000000f").unwrap(),
-            revision: rev.clone(),
+            revision_pack: rev.clone(),
             outcome: DecisionOutcome::Approved,
             decided_by: actor(),
             decided_at: Timestamp::from_unix_nanos(1),
@@ -359,7 +359,7 @@ fn a_rejecting_decision_cannot_promote() {
         &project.stores,
         &DecisionRequest {
             id: decision.clone(),
-            revision: rev.clone(),
+            revision_pack: rev.clone(),
             outcome: DecisionOutcome::Rejected {
                 reason: "not this approach".into(),
             },
@@ -567,7 +567,7 @@ fn an_in_force_waiver_excuses_a_condition_and_says_so() {
 
     let waiver = draft_core::gate::waiver::GateWaiver {
         id: "wvr_00000000000w".into(),
-        revision: rev.clone(),
+        revision_pack: rev.clone(),
         condition: "draft.gate/verified".into(),
         reason: "the verifier is unavailable in this environment".into(),
         waived_by: actor(),
@@ -612,7 +612,7 @@ fn an_expired_or_unrelated_waiver_excuses_nothing() {
     // Expired before the evaluation moment.
     let expired = draft_core::gate::waiver::GateWaiver {
         id: "wvr_expired00000x".into(),
-        revision: rev.clone(),
+        revision_pack: rev.clone(),
         condition: "draft.gate/verified".into(),
         reason: "lapsed".into(),
         waived_by: actor(),
@@ -624,7 +624,7 @@ fn an_expired_or_unrelated_waiver_excuses_nothing() {
     // work as it stood is not one for whatever it became.
     let elsewhere = draft_core::gate::waiver::GateWaiver {
         id: "wvr_elsewhere0000".into(),
-        revision: other,
+        revision_pack: other,
         condition: "draft.gate/verified".into(),
         reason: "different work".into(),
         waived_by: actor(),
@@ -652,7 +652,7 @@ fn an_expired_or_unrelated_waiver_excuses_nothing() {
 
 #[test]
 fn promotion_completes_the_change_so_the_same_work_cannot_be_promoted_twice() {
-    // The gap this closes: with the Change left open, a second promotion of
+    // The gap this closes: with the ChangePack left open, a second promotion of
     // the same work could accept it into a second Baseline. Completion is
     // mandatory once the Baseline exists, not a tidy-up afterwards.
     let project = Project::new();
@@ -664,8 +664,8 @@ fn promotion_completes_the_change_so_the_same_work_cannot_be_promoted_twice() {
     project.ensure_change();
     assert_eq!(
         project.change_lifecycle(),
-        draft_core::dcg::change::ChangeLifecycle::Active,
-        "the Change is open before its work is accepted"
+        draft_core::dcg::change_pack::ChangePackLifecycle::Active,
+        "the ChangePack is open before its work is accepted"
     );
 
     promote(
@@ -677,14 +677,14 @@ fn promotion_completes_the_change_so_the_same_work_cannot_be_promoted_twice() {
 
     assert_eq!(
         project.change_lifecycle(),
-        draft_core::dcg::change::ChangeLifecycle::Completed,
-        "promotion completes the Change whose work it accepted"
+        draft_core::dcg::change_pack::ChangePackLifecycle::Completed,
+        "promotion completes the ChangePack whose work it accepted"
     );
 }
 
 #[test]
 fn a_completed_change_accepts_no_further_work() {
-    // The consequence that makes completion worth doing: a Change whose work
+    // The consequence that makes completion worth doing: a ChangePack whose work
     // is in an accepted Baseline cannot be revised and re-promoted.
     let project = Project::new();
     let initial = project.accepted().unwrap();
@@ -699,15 +699,15 @@ fn a_completed_change_accepts_no_further_work() {
     )
     .unwrap();
 
-    let store = draft_core::dcg::ChangeStore::new(project.workspace.layout.changes_dir());
+    let store = draft_core::dcg::ChangePackStore::new(project.workspace.layout.change_packs_dir());
     let completed = store
-        .read_unlocked(&ChangeId::parse("chg_000000000001").unwrap())
+        .read_unlocked(&ChangePackId::parse("cpk_000000000001").unwrap())
         .unwrap()
         .unwrap();
     assert!(!completed.lifecycle.accepts_work());
     // Reopening is refused: its work is already in an accepted Baseline.
     assert!(store
-        .reopen(&ChangeId::parse("chg_000000000001").unwrap())
+        .reopen(&ChangePackId::parse("cpk_000000000001").unwrap())
         .is_err());
 }
 
@@ -717,7 +717,7 @@ fn completing_a_change_twice_converges_rather_than_refusing() {
     // state you were trying to reach is not a conflict.
     let project = Project::new();
     let id = project.ensure_change();
-    let store = draft_core::dcg::ChangeStore::new(project.workspace.layout.changes_dir());
+    let store = draft_core::dcg::ChangePackStore::new(project.workspace.layout.change_packs_dir());
 
     let first = store.complete(&id).unwrap();
     let again = store.complete(&id).unwrap();

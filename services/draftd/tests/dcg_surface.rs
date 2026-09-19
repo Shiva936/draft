@@ -3,12 +3,12 @@
 //! `draftd` is the authoritative application-service boundary: the CLI,
 //! Console Web and Console TUI all reach Draft through these methods. What
 //! this proves is that the boundary itself carries the whole chain — that a
-//! client with nothing but a socket can take work from an unopened Change to
+//! client with nothing but a socket can take work from an unopened ChangePack to
 //! an accepted Baseline and out to an external system, and that the refusals
 //! along the way survive the trip.
 //!
 //! ```text
-//! dcg.change.open → dcg.revision.seal → dcg.evidence.record
+//! dcg.change_pack.open → dcg.revision.seal → dcg.evidence.record
 //!   → dcg.assessment.record → dcg.gate.evaluate → dcg.decision.record
 //!   → dcg.promotion.run → dcg.publication.run
 //! ```
@@ -128,7 +128,7 @@ fn the_daemon_carries_the_whole_chain_to_a_baseline_and_out() {
 
     let change = daemon.call(
         "open",
-        "dcg.change.open",
+        "dcg.change_pack.open",
         json!({ "intent": "edit the file", "scope": scope }),
     )["id"]
         .as_str()
@@ -136,7 +136,11 @@ fn the_daemon_carries_the_whole_chain_to_a_baseline_and_out() {
         .to_string();
     std::fs::write(daemon.root.join("a.txt"), "changed").unwrap();
 
-    let revision = daemon.call("seal", "dcg.revision.seal", json!({ "change": change }))["id"]
+    let revision = daemon.call(
+        "seal",
+        "dcg.revision_pack.seal",
+        json!({ "change_pack_id": change }),
+    )["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -144,16 +148,20 @@ fn the_daemon_carries_the_whole_chain_to_a_baseline_and_out() {
     let evidence = daemon.call(
         "verify",
         "dcg.evidence.record",
-        json!({ "revision": revision }),
+        json!({ "revision_pack_id": revision }),
     );
     assert_eq!(evidence["outcome"], "passed");
 
     daemon.call(
         "assess",
         "dcg.assessment.record",
-        json!({ "revision": revision, "risk": "low" }),
+        json!({ "revision_pack_id": revision, "risk": "low" }),
     );
-    let gate = daemon.call("gate", "dcg.gate.evaluate", json!({ "revision": revision }));
+    let gate = daemon.call(
+        "gate",
+        "dcg.gate.evaluate",
+        json!({ "revision_pack_id": revision }),
+    );
     let gate_id = gate["id"].as_str().unwrap().to_string();
 
     // A satisfied gate is not authority: the Baseline has not moved.
@@ -162,7 +170,7 @@ fn the_daemon_carries_the_whole_chain_to_a_baseline_and_out() {
     let decision = daemon.call(
         "decide",
         "dcg.decision.record",
-        json!({ "revision": revision, "gate": gate_id, "approve": true }),
+        json!({ "revision_pack_id": revision, "gate": gate_id, "approve": true }),
     )["id"]
         .as_str()
         .unwrap()
@@ -178,7 +186,7 @@ fn the_daemon_carries_the_whole_chain_to_a_baseline_and_out() {
         "promote-without-precondition",
         "dcg.promotion.run",
         json!({
-            "change": change, "revision": revision,
+            "change_pack_id": change, "revision_pack_id": revision,
             "decision": decision, "gate": gate_id,
         }),
     );
@@ -188,7 +196,7 @@ fn the_daemon_carries_the_whole_chain_to_a_baseline_and_out() {
         "promote",
         "dcg.promotion.run",
         json!({
-            "change": change, "revision": revision,
+            "change_pack_id": change, "revision_pack_id": revision,
             "decision": decision, "gate": gate_id,
             "expected_baseline": initial,
         }),
@@ -255,35 +263,43 @@ fn a_client_retry_neither_promotes_nor_delivers_twice() {
 
     let change = daemon.call(
         "open",
-        "dcg.change.open",
+        "dcg.change_pack.open",
         json!({ "intent": "work retried", "scope": scope }),
     )["id"]
         .as_str()
         .unwrap()
         .to_string();
     std::fs::write(daemon.root.join("a.txt"), "retried").unwrap();
-    let revision = daemon.call("seal", "dcg.revision.seal", json!({ "change": change }))["id"]
+    let revision = daemon.call(
+        "seal",
+        "dcg.revision_pack.seal",
+        json!({ "change_pack_id": change }),
+    )["id"]
         .as_str()
         .unwrap()
         .to_string();
     daemon.call(
         "verify",
         "dcg.evidence.record",
-        json!({ "revision": revision }),
+        json!({ "revision_pack_id": revision }),
     );
     daemon.call(
         "assess",
         "dcg.assessment.record",
-        json!({ "revision": revision, "risk": "low" }),
+        json!({ "revision_pack_id": revision, "risk": "low" }),
     );
-    let gate_id = daemon.call("gate", "dcg.gate.evaluate", json!({ "revision": revision }))["id"]
+    let gate_id = daemon.call(
+        "gate",
+        "dcg.gate.evaluate",
+        json!({ "revision_pack_id": revision }),
+    )["id"]
         .as_str()
         .unwrap()
         .to_string();
     let decision = daemon.call(
         "decide",
         "dcg.decision.record",
-        json!({ "revision": revision, "gate": gate_id, "approve": true }),
+        json!({ "revision_pack_id": revision, "gate": gate_id, "approve": true }),
     )["id"]
         .as_str()
         .unwrap()
@@ -294,7 +310,7 @@ fn a_client_retry_neither_promotes_nor_delivers_twice() {
             operation,
             "dcg.promotion.run",
             json!({
-                "change": change, "revision": revision,
+                "change_pack_id": change, "revision_pack_id": revision,
                 "decision": decision, "gate": gate_id,
                 "expected_baseline": initial,
             }),

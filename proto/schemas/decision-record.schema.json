@@ -3,16 +3,16 @@
   "$id": "https://draft.dev/schemas/decision-record.schema.json",
   "title": "Draft Decision",
   "x-draft-format-revision": 1,
-  "description": "One immutable judgement about one exact ChangeRevision. A Decision authorizes a promotion; it never performs one, and it never carries to another revision.",
+  "description": "One immutable judgement about one exact RevisionPack. A Decision authorizes a promotion; it never performs one, and it never carries to another revision.",
   "type": "object",
-  "required": ["id", "revision", "outcome", "decided_by", "decided_at"],
+  "required": ["id", "revision_pack", "outcome", "decided_by", "decided_at"],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^dec_[A-Za-z0-9_-]+$" },
-    "revision": {
+    "revision_pack": {
       "description": "The exact revision judged. Backed by a create-once digest binding, so 'the same revision' means the same bytes.",
       "type": "string",
-      "pattern": "^rev_[A-Za-z0-9_-]+$"
+      "pattern": "^rpk_[A-Za-z0-9_-]+$"
     },
     "outcome": { "$ref": "#/$defs/outcome" },
     "decided_by": { "type": "string", "pattern": "^act_[A-Za-z0-9_-]+$" },

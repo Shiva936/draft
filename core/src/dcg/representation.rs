@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 /// Largest inline representation payload Core will hold in a record.
 ///
 /// Anything larger is stored as an object and referenced, so a pathological
-/// representation cannot make a Change record unreadable.
+/// representation cannot make a ChangePack record unreadable.
 pub const MAX_INLINE_PAYLOAD_BYTES: usize = 256 * 1024;
 
 /// Where a representation's payload lives.

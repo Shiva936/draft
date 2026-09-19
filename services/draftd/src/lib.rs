@@ -88,7 +88,7 @@ pub fn dispatch(store: &ServiceStore, sessions: &SessionManager, req: Request) -
     let record = if has_irreversible_boundary(&req.method) {
         let target_identity = req
             .params
-            .get("change")
+            .get("change_pack_id")
             .or_else(|| req.params.get("target"))
             .or_else(|| req.params.get("workspace_id"))
             .and_then(Value::as_str)
@@ -243,17 +243,17 @@ fn is_mutation(method: &str) -> bool {
             | "dcg.baseline"
             | "dcg.baseline.list"
             | "dcg.baseline.show"
-            | "dcg.change.list"
-            | "dcg.change.intent"
-            | "dcg.change.scope"
-            | "dcg.change.receipts"
+            | "dcg.change_pack.list"
+            | "dcg.change_pack.intent"
+            | "dcg.change_pack.scope"
+            | "dcg.change_pack.receipts"
             // Reporting where an interrupted promotion stands is a read; the
             // classifier behind it counts nothing, so reading cannot be
             // mistaken for recovering.
-            | "dcg.change.recovery"
-            | "dcg.change.representation"
-            | "dcg.change.conflicts"
-            | "dcg.change.coverage"
+            | "dcg.change_pack.recovery"
+            | "dcg.change_pack.representation"
+            | "dcg.change_pack.conflicts"
+            | "dcg.change_pack.coverage"
             | "project.provider.list"
             | "project.provider.show"
             | "dcg.authorization"
@@ -783,27 +783,27 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
         // -----------------------------------------------------------------
         "dcg.project" => with_path(&req, |p| app.dcg_project(p)).into_response(id),
         "dcg.baseline" => with_path(&req, |p| app.dcg_baseline(p)).into_response(id),
-        "dcg.change.list" => with_path(&req, |p| app.dcg_changes(p)).into_response(id),
-        // The §8.3 Change views that have their own authority. Each is one
+        "dcg.change_pack.list" => with_path(&req, |p| app.dcg_change_packs(p)).into_response(id),
+        // The §8.3 ChangePack views that have their own authority. Each is one
         // call into the application API that owns the question; `draftd`
         // composes, it does not compute.
-        "dcg.change.intent" => with_path(&req, |p| {
-            app.dcg_change_intent(p, &string_param(&req, "change")?)
+        "dcg.change_pack.intent" => with_path(&req, |p| {
+            app.dcg_change_pack_intent(p, &string_param(&req, "change_pack_id")?)
         })
         .into_response(id),
-        "dcg.change.scope" => with_path(&req, |p| {
-            app.dcg_change_scope(p, &string_param(&req, "change")?)
+        "dcg.change_pack.scope" => with_path(&req, |p| {
+            app.dcg_change_pack_scope(p, &string_param(&req, "change_pack_id")?)
         })
         .into_response(id),
-        // Where an interrupted promotion of this Change stands, classified by
+        // Where an interrupted promotion of this ChangePack stands, classified by
         // the restart table. Read-only: reporting a position must never be
         // mistaken for performing the recovery.
-        "dcg.change.recovery" => with_path(&req, |p| {
-            app.dcg_change_recovery(p, &string_param(&req, "change")?)
+        "dcg.change_pack.recovery" => with_path(&req, |p| {
+            app.dcg_change_pack_recovery(p, &string_param(&req, "change_pack_id")?)
         })
         .into_response(id),
-        "dcg.change.receipts" => with_path(&req, |p| {
-            app.dcg_change_receipts(p, &string_param(&req, "change")?)
+        "dcg.change_pack.receipts" => with_path(&req, |p| {
+            app.dcg_change_pack_receipts(p, &string_param(&req, "change_pack_id")?)
         })
         .into_response(id),
         // Baselines, in full. The accepted lineage and one exact node.
@@ -824,44 +824,44 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
         // The derived explanation of a revision, and what it stands to. Reads
         // only: the explanation was recorded when the revision was sealed, and
         // re-deriving it now would explain a workspace that has since moved.
-        "dcg.change.representation" => with_path(&req, |p| {
-            app.dcg_representation(p, &string_param(&req, "revision")?)
+        "dcg.change_pack.representation" => with_path(&req, |p| {
+            app.dcg_representation(p, &string_param(&req, "revision_pack_id")?)
         })
         .into_response(id),
-        "dcg.change.conflicts" => with_path(&req, |p| {
-            app.dcg_conflicts(p, &string_param(&req, "change")?)
+        "dcg.change_pack.conflicts" => with_path(&req, |p| {
+            app.dcg_conflicts(p, &string_param(&req, "change_pack_id")?)
         })
         .into_response(id),
-        "dcg.change.coverage" => with_path(&req, |p| {
-            app.dcg_coverage(p, &string_param(&req, "revision")?)
+        "dcg.change_pack.coverage" => with_path(&req, |p| {
+            app.dcg_coverage(p, &string_param(&req, "revision_pack_id")?)
         })
         .into_response(id),
         // Deliberately absent: impact. Extraction crosses the process boundary
         // to an authorized extractor, so it is a mutation of the impact index
         // rather than a projection, and a "read model" that ran external
         // programs would be a read model in name only.
-        "dcg.change.impact" => with_path(&req, |p| {
-            app.dcg_impact(p, &string_param(&req, "revision")?)
+        "dcg.change_pack.impact" => with_path(&req, |p| {
+            app.dcg_impact(p, &string_param(&req, "revision_pack_id")?)
         })
         .into_response(id),
-        "dcg.change.open" => with_path(&req, |p| {
-            app.dcg_open_change(
+        "dcg.change_pack.open" => with_path(&req, |p| {
+            app.dcg_open_change_pack(
                 p,
                 &string_param(&req, "intent")?,
                 &string_vec_param(&req, "scope")?,
             )
         })
         .into_response(id),
-        // Stopping and resuming work on a Change. Exposed here so the Console
+        // Stopping and resuming work on a ChangePack. Exposed here so the Console
         // can do what the CLI can: a lifecycle transition reachable from one
         // surface and invisible to the other is how the two disagree about
         // what a project contains.
-        "dcg.change.abandon" => with_path(&req, |p| {
-            app.dcg_abandon_change(p, &string_param(&req, "change")?)
+        "dcg.change_pack.abandon" => with_path(&req, |p| {
+            app.dcg_abandon_change_pack(p, &string_param(&req, "change_pack_id")?)
         })
         .into_response(id),
-        "dcg.change.reopen" => with_path(&req, |p| {
-            app.dcg_reopen_change(p, &string_param(&req, "change")?)
+        "dcg.change_pack.reopen" => with_path(&req, |p| {
+            app.dcg_reopen_change_pack(p, &string_param(&req, "change_pack_id")?)
         })
         .into_response(id),
         // Recording that somebody looked. Not a Decision, and never treated as
@@ -869,22 +869,23 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
         "dcg.review.record" => with_path(&req, |p| {
             app.dcg_review(
                 p,
-                &string_param(&req, "revision")?,
+                &string_param(&req, "revision_pack_id")?,
                 &string_vec_param_default(&req, "comments"),
             )
         })
         .into_response(id),
-        "dcg.revision.seal" => {
-            with_path(&req, |p| app.dcg_seal(p, &string_param(&req, "change")?)).into_response(id)
-        }
+        "dcg.revision_pack.seal" => with_path(&req, |p| {
+            app.dcg_seal(p, &string_param(&req, "change_pack_id")?)
+        })
+        .into_response(id),
         "dcg.evidence.record" => with_path(&req, |p| {
-            app.dcg_verify(p, &string_param(&req, "revision")?)
+            app.dcg_verify(p, &string_param(&req, "revision_pack_id")?)
         })
         .into_response(id),
         "dcg.assessment.record" => with_path(&req, |p| {
             app.dcg_assess(
                 p,
-                &string_param(&req, "revision")?,
+                &string_param(&req, "revision_pack_id")?,
                 &string_param(&req, "risk")?,
                 optional_string_param(&req, "rationale")
                     .as_deref()
@@ -895,7 +896,7 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
         "dcg.gate.evaluate" => with_path(&req, |p| {
             app.dcg_evaluate_gate(
                 p,
-                &string_param(&req, "revision")?,
+                &string_param(&req, "revision_pack_id")?,
                 &string_vec_param_default(&req, "waivers"),
             )
         })
@@ -906,7 +907,7 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
         "dcg.gate.waive" => with_path(&req, |p| {
             app.dcg_waive(
                 p,
-                &string_param(&req, "revision")?,
+                &string_param(&req, "revision_pack_id")?,
                 &string_param(&req, "condition")?,
                 &string_param(&req, "reason")?,
                 req.params.get("days").and_then(Value::as_u64).unwrap_or(7) as u32,
@@ -916,15 +917,15 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
         "dcg.authorization" => with_path(&req, |p| {
             app.dcg_authorization(
                 p,
-                &string_param(&req, "change")?,
-                &string_param(&req, "revision")?,
+                &string_param(&req, "change_pack_id")?,
+                &string_param(&req, "revision_pack_id")?,
             )
         })
         .into_response(id),
         "dcg.decision.record" => with_path(&req, |p| {
             app.dcg_decide(
                 p,
-                &string_param(&req, "revision")?,
+                &string_param(&req, "revision_pack_id")?,
                 optional_string_param(&req, "gate").as_deref(),
                 req.params
                     .get("approve")
@@ -941,8 +942,8 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
         "dcg.promotion.run" => with_path(&req, |p| {
             app.dcg_promote(
                 p,
-                &string_param(&req, "change")?,
-                &string_param(&req, "revision")?,
+                &string_param(&req, "change_pack_id")?,
+                &string_param(&req, "revision_pack_id")?,
                 &string_param(&req, "decision")?,
                 &string_param(&req, "gate")?,
                 Some(string_param(&req, "expected_baseline")?.as_str()),
@@ -1011,10 +1012,10 @@ fn dispatch_inner(store: &ServiceStore, sessions: &SessionManager, req: Request)
 fn stage_in_change_workspace(app: &App, root: &Path, req: &Request) -> DraftResult<Value> {
     let attribution: draft_core::execution::workspace::EditAttribution =
         serde_json::from_value(req.params.get("attribution").cloned().ok_or_else(|| {
-            DraftError::invalid_config("a Change workspace attribution is required")
+            DraftError::invalid_config("a ChangePack workspace attribution is required")
         })?)
         .map_err(|error| {
-            DraftError::invalid_config(format!("invalid Change workspace attribution: {error}"))
+            DraftError::invalid_config(format!("invalid ChangePack workspace attribution: {error}"))
         })?;
     validate_workspace_attribution(app, root, &attribution)?;
     let operation_id = draft_core::support::common::OperationId::new(
@@ -1031,7 +1032,7 @@ fn stage_in_change_workspace(app: &App, root: &Path, req: &Request) -> DraftResu
         if existing.attribution != attribution {
             return Err(DraftError::new(
                 DraftErrorKind::ConflictDetected,
-                "attribution cannot change within an open Change workspace",
+                "attribution cannot change within an open ChangePack workspace",
             ));
         }
         existing
@@ -1100,19 +1101,19 @@ fn validate_workspace_attribution(
         EditAttribution::Task { id } => {
             app.task_show(root, id)?;
         }
-        EditAttribution::Change { id } | EditAttribution::Review { id } => {
+        EditAttribution::ChangePack { id } | EditAttribution::Review { id } => {
             let change = app
-                .dcg_changes(root)?
+                .dcg_change_packs(root)?
                 .into_iter()
-                .find(|view| view.change.as_str() == id)
+                .find(|view| view.change_pack.as_str() == id)
                 .ok_or_else(|| {
                     DraftError::invalid_config(format!(
-                        "change '{id}' is not in this project's graph"
+                        "ChangePack '{id}' is not in this project's graph"
                     ))
                 })?;
             if !change.lifecycle.accepts_work() {
                 return Err(DraftError::invalid_config(
-                    "a Change that accepts no further work cannot receive workspace mutations",
+                    "a ChangePack that accepts no further work cannot receive workspace mutations",
                 ));
             }
         }
@@ -1405,8 +1406,8 @@ where
 {
     let path = if let Some(path) = optional_string_param(req, "path") {
         path
-    // The *project*, not a Change workspace. The Console gateway addresses every
-    // project call by this id, so naming it after the Change-workspace
+    // The *project*, not a ChangePack workspace. The Console gateway addresses every
+    // project call by this id, so naming it after the ChangePack-workspace
     // parameter would make each of them resolve to nothing.
     } else if let Some(project_id) = optional_string_param(req, "workspace_id") {
         let registry = draft_core::project::registry::ProjectRegistry::global()?;
@@ -1538,7 +1539,7 @@ fn console_snapshot(
     // could disagree, and the visible one would be the wrong one.
     let mut dcg_availability: Vec<draft_core::app::workflow::ActionAvailability> = Vec::new();
     let mut dcg_next_action: Option<String> = None;
-    let (content, health, freshness, read_only) = match requested.subject.scope {
+    let (content, health, freshness, read_only) = match requested.subject.scope() {
         ConsoleScope::Global => (
             json!({
                 "overview": console_overview(store, app)?,
@@ -1561,10 +1562,10 @@ fn console_snapshot(
         ),
         ConsoleScope::Project => {
             let workspace_id =
-                required_subject_value(requested.subject.workspace_id.as_deref(), "workspace_id")?;
-            if requested.subject.change_id.is_some() {
+                required_subject_value(requested.subject.workspace_id(), "workspace_id")?;
+            if requested.subject.change_pack_id().is_some() {
                 return Err(DraftError::invalid_config(
-                    "PROJECT subjects cannot include change_id",
+                    "PROJECT subjects cannot include change_pack_id",
                 )
                 .into());
             }
@@ -1604,7 +1605,7 @@ fn console_snapshot(
                                 })?;
                                 let graph = app.dcg_project(root)?;
                                 // Availability for the newest revision of each
-                                // Change, computed here so no frontend has to
+                                // ChangePack, computed here so no frontend has to
                                 // work out whether promoting is legal by
                                 // reading lifecycle enums.
                                 let authorizations = dcg_authorizations(app, root, &graph);
@@ -1614,16 +1615,16 @@ fn console_snapshot(
                                 // structure a frontend renders and the
                                 // structure the authority serves are the same
                                 // structure. Authorization is not a section of
-                                // its own: it is what a Change's own views
+                                // its own: it is what a ChangePack's own views
                                 // show, and it is carried here only so the
-                                // project-level Changes list can say which
-                                // Change may advance without asking again.
+                                // project-level ChangePacks list can say which
+                                // ChangePack may advance without asking again.
                                 (
                                     json!({
                                         "overview": model,
                                         "work": {
                                             "tasks": app.task_list(root)?,
-                                            "changes": console_change_summaries(app, root)?,
+                                            "packs": console_change_pack_summaries(app, root)?,
                                             "authorizations": authorizations,
                                         },
                                         "resources": {
@@ -1696,34 +1697,34 @@ fn console_snapshot(
                 }
             }
         }
-        ConsoleScope::Change => {
+        ConsoleScope::ChangePack => {
             let workspace_id =
-                required_subject_value(requested.subject.workspace_id.as_deref(), "workspace_id")?;
-            let change_id =
-                required_subject_value(requested.subject.change_id.as_deref(), "change_id")?;
+                required_subject_value(requested.subject.workspace_id(), "workspace_id")?;
+            let change_pack_id =
+                required_subject_value(requested.subject.change_pack_id(), "change_pack_id")?;
             let entry = registry.resolve(workspace_id)?;
             let root = Path::new(&entry.project_path);
             revisions.workspace =
                 Some(draft_core::dcg::source_view::WorkspaceRevision::derive(root)?.content_digest);
 
-            // One Change, as the Change Graph sees it: its newest sealed
+            // One ChangePack, as the Change Graph sees it: its newest sealed
             // revision and everything decided about it. The availability comes
             // from the same computation the project scope uses, so the two
             // scopes can never disagree about whether promoting is legal.
             let change = app
-                .dcg_changes(root)?
+                .dcg_change_packs(root)?
                 .into_iter()
-                .find(|view| view.change.as_str() == change_id)
+                .find(|view| view.change_pack.as_str() == change_pack_id)
                 .ok_or_else(|| {
                     DraftError::new(
                         DraftErrorKind::NotFound,
-                        format!("change '{change_id}' is not in this project's graph"),
+                        format!("ChangePack '{change_pack_id}' is not in this project's graph"),
                     )
                 })?;
             let authorization = match change.revisions.first() {
                 Some(revision) => {
-                    revisions.change = Some(revision.id.to_string());
-                    Some(app.dcg_authorization(root, change_id, revision.id.as_str())?)
+                    revisions.change_pack = Some(revision.id.to_string());
+                    Some(app.dcg_authorization(root, change_pack_id, revision.id.as_str())?)
                 }
                 None => None,
             };
@@ -1731,7 +1732,7 @@ fn console_snapshot(
                 .as_ref()
                 .map(|view| view.actions.clone())
                 .unwrap_or_default();
-            // Every §8.3 Change view, each from the authoritative application
+            // Every §8.3 ChangePack view, each from the authoritative application
             // API that owns it. Impact and representation are per-revision and
             // are absent — not empty — when nothing has been sealed yet: an
             // empty impact report would claim a revision touches nothing.
@@ -1748,17 +1749,17 @@ fn console_snapshot(
                 json!({
                     "project": entry,
                     "summary": change,
-                    "intent": app.dcg_change_intent(root, change_id)?,
-                    "scope": app.dcg_change_scope(root, change_id)?,
+                    "intent": app.dcg_change_pack_intent(root, change_pack_id)?,
+                    "scope": app.dcg_change_pack_scope(root, change_pack_id)?,
                     "revisions": change.revisions,
                     "impact": impact,
                     "coverage": coverage,
                     "representations": representation,
                     "authorization": authorization,
-                    "receipts": app.dcg_change_receipts(root, change_id)?,
-                    "recovery": app.dcg_change_recovery(root, change_id)?,
+                    "receipts": app.dcg_change_pack_receipts(root, change_pack_id)?,
+                    "recovery": app.dcg_change_pack_recovery(root, change_pack_id)?,
                     "activity": app.canonical_events(root)?.into_iter()
-                        .filter(|event| event.subject.as_deref() == Some(change_id))
+                        .filter(|event| event.subject.as_deref() == Some(change_pack_id))
                         .collect::<Vec<_>>(),
                 }),
                 "healthy".into(),
@@ -1768,16 +1769,16 @@ fn console_snapshot(
         }
         ConsoleScope::Baseline => {
             let workspace_id =
-                required_subject_value(requested.subject.workspace_id.as_deref(), "workspace_id")?;
+                required_subject_value(requested.subject.workspace_id(), "workspace_id")?;
             let baseline_id =
-                required_subject_value(requested.subject.baseline_id.as_deref(), "baseline_id")?;
+                required_subject_value(requested.subject.baseline_id(), "baseline_id")?;
             let entry = registry.resolve(workspace_id)?;
             let root = Path::new(&entry.project_path);
             revisions.workspace =
                 Some(draft_core::dcg::source_view::WorkspaceRevision::derive(root)?.content_digest);
             // One accepted historical node. Read-only: nothing about a
             // Baseline is mutable, and the acts that produce one live on the
-            // Change that was promoted.
+            // ChangePack that was promoted.
             (
                 json!({
                     "project": entry,
@@ -1809,7 +1810,7 @@ fn console_snapshot(
     // remedy may only point at an action that was actually issued. A frontend
     // then renders the link rather than inferring one.
     let mut content = content;
-    let capability_gaps = if requested.subject.scope == ConsoleScope::Global {
+    let capability_gaps = if requested.subject.scope() == ConsoleScope::Global {
         withheld_capability_gaps(&actions)
     } else {
         Vec::new()
@@ -1859,7 +1860,7 @@ fn console_snapshot(
         health,
         read_only,
         permission_reason: read_only.then(|| "Current state is inspection-only".into()),
-        navigation: draft_ipc::console_application::navigation_for(requested.subject.scope),
+        navigation: draft_ipc::console_application::navigation_for(requested.subject.scope()),
         content,
         actions,
         next_safe_actions,
@@ -1965,10 +1966,10 @@ fn confirmation_input(id: &str, label: &str) -> ActionInputField {
     }
 }
 
-/// The authorization view for the newest revision of each Change.
+/// The authorization view for the newest revision of each ChangePack.
 ///
 /// Computed by the server so a frontend never derives legality from raw
-/// records. A Change with no sealed revision has nothing to authorize yet and
+/// records. A ChangePack with no sealed revision has nothing to authorize yet and
 /// simply contributes nothing.
 fn dcg_authorizations(
     app: &App,
@@ -1976,11 +1977,11 @@ fn dcg_authorizations(
     graph: &draft_core::app::workflow::ProjectWorkflowView,
 ) -> Vec<draft_core::app::workflow::AuthorizationView> {
     graph
-        .changes
+        .change_packs
         .iter()
         .filter_map(|change| {
             let revision = change.revisions.first()?;
-            app.dcg_authorization(root, change.change.as_str(), revision.id.as_str())
+            app.dcg_authorization(root, change.change_pack.as_str(), revision.id.as_str())
                 .ok()
         })
         .collect()
@@ -2075,22 +2076,25 @@ fn graph_actions(
 
     vec![
         gate(
-            OfferedAction::new("dcg.change.open", "Open a Change").taking(vec![
+            OfferedAction::new("dcg.change_pack.open", "Open a ChangePack").taking(vec![
                 text_input("intent", "What the change is for", true),
                 text_input("scope", "Resources it may touch (space-separated)", true),
             ]),
         ),
         gate(
-            OfferedAction::new("dcg.change.seal", "Seal a revision")
-                .taking(vec![text_input("change", "Change", true)]),
+            OfferedAction::new("dcg.revision_pack.seal", "Seal a revision")
+                .taking(vec![text_input("change_pack_id", "ChangePack", true)]),
         ),
         gate(
-            OfferedAction::new("dcg.evidence.record", "Record evidence")
-                .taking(vec![text_input("revision", "Revision", true)]),
+            OfferedAction::new("dcg.evidence.record", "Record evidence").taking(vec![text_input(
+                "revision_pack_id",
+                "RevisionPack",
+                true,
+            )]),
         ),
         gate(
             OfferedAction::new("dcg.assessment.record", "Assess risk").taking(vec![
-                text_input("revision", "Revision", true),
+                text_input("revision_pack_id", "RevisionPack", true),
                 select_input(
                     "risk",
                     "Assessed risk",
@@ -2106,13 +2110,16 @@ fn graph_actions(
             ]),
         ),
         gate(
-            OfferedAction::new("dcg.gate.evaluate", "Evaluate the gate")
-                .taking(vec![text_input("revision", "Revision", true)]),
+            OfferedAction::new("dcg.gate.evaluate", "Evaluate the gate").taking(vec![text_input(
+                "revision_pack_id",
+                "RevisionPack",
+                true,
+            )]),
         ),
         gate(
             OfferedAction::new("dcg.decision.approve", "Approve — authorizes a promotion")
                 .taking(vec![
-                    text_input("revision", "Revision", true),
+                    text_input("revision_pack_id", "RevisionPack", true),
                     text_input("gate", "Gate", false),
                 ])
                 .confirmed(),
@@ -2120,7 +2127,7 @@ fn graph_actions(
         gate(
             OfferedAction::new("dcg.decision.reject", "Reject")
                 .taking(vec![
-                    text_input("revision", "Revision", true),
+                    text_input("revision_pack_id", "RevisionPack", true),
                     text_input("reason", "Reason", true),
                 ])
                 .confirmed(),
@@ -2131,8 +2138,8 @@ fn graph_actions(
         gate(
             OfferedAction::new("dcg.promote", "Promote — changes the accepted Baseline")
                 .taking(vec![
-                    text_input("change", "Change", true),
-                    text_input("revision", "Revision", true),
+                    text_input("change_pack_id", "ChangePack", true),
+                    text_input("revision_pack_id", "RevisionPack", true),
                     text_input("decision", "Decision", true),
                     text_input("gate", "Gate", true),
                     text_input(
@@ -2404,12 +2411,12 @@ fn withheld_capability_gaps(actions: &[ActionPresentation]) -> Vec<CapabilityGap
 /// `None` for a global subject: there is no project to read, and the
 /// installation's own revision is validated where an extension action runs.
 fn subject_watermark(app: &App, subject: &ConsoleSubject) -> Option<ReadModelWatermark> {
-    let workspace_id = subject.workspace_id.as_deref()?;
+    let workspace_id = subject.workspace_id()?;
     let entry = draft_core::project::registry::ProjectRegistry::global()
         .ok()?
         .resolve(workspace_id)
         .ok()?;
-    app.read_model_watermark(Path::new(&entry.project_path), subject.change_id.as_deref())
+    app.read_model_watermark(Path::new(&entry.project_path), subject.change_pack_id())
         .ok()
 }
 
@@ -2431,16 +2438,16 @@ fn projection_for(action_id: &str) -> Projection {
         // revision is validated separately against authoritative state.
         id if id.starts_with("extension.") => Projection::InstallationState,
         // A provider act depends on the binding store and on nothing else.
-        // Naming `ChangeEligibility` here would make every unbind stale the
-        // moment an unrelated Change sealed a revision — correct-by-accident
+        // Naming `ChangePackEligibility` here would make every unbind stale the
+        // moment an unrelated ChangePack sealed a revision — correct-by-accident
         // and wrong in the direction that annoys rather than the direction
         // that is unsafe, but wrong either way: the offer never read those
         // stores.
         id if id.starts_with("project.provider.") => Projection::ProviderCatalog,
         // Everything else in the graph is a step in the one chain, and every
-        // step's availability rests on the Change, the project, the evidence
+        // step's availability rests on the ChangePack, the project, the evidence
         // and the judgements made about it.
-        _ => Projection::ChangeEligibility,
+        _ => Projection::ChangePackEligibility,
     }
 }
 
@@ -2454,8 +2461,8 @@ fn issue_action_presentations(
     read_only: bool,
     dcg_availability: &[draft_core::app::workflow::ActionAvailability],
 ) -> Vec<ActionPresentation> {
-    let offered = match subject.scope {
-        ConsoleScope::Change => graph_actions(dcg_availability, read_only),
+    let offered = match subject.scope() {
+        ConsoleScope::ChangePack => graph_actions(dcg_availability, read_only),
         // Extension management belongs to the whole installation, not to one
         // project. Offering it here is what lets the TUI reach the same
         // workflows the CLI and the browser already have.
@@ -2466,7 +2473,7 @@ fn issue_action_presentations(
             offered
         }
         // A Baseline is an accepted historical node. Nothing about it is
-        // mutable, and the acts that produced it belong to the Change that was
+        // mutable, and the acts that produced it belong to the ChangePack that was
         // promoted — offering them here would imply a Baseline can be edited.
         ConsoleScope::Baseline => Vec::new(),
     };
@@ -2492,12 +2499,12 @@ fn issue_action_presentations(
                 sessions.issue_action(ActionBinding {
                     application_session_id: session.id.clone(),
                     principal: session.principal.clone(),
-                    workspace_id: subject.workspace_id.clone(),
-                    change_id: subject.change_id.clone(),
+                    workspace_id: subject.workspace_id().map(ToOwned::to_owned),
+                    change_pack_id: subject.change_pack_id().map(ToOwned::to_owned),
                     action_id: action.action_id.clone(),
                     target: action.target.clone(),
                     workspace_revision: revisions.workspace.clone(),
-                    change_revision: revisions.change.clone(),
+                    change_revision: revisions.change_pack.clone(),
                     registry_revision: Some(revisions.registry),
                     input_contract_digest: input_contract_digest.clone(),
                     precondition: RequestPrecondition {
@@ -2763,7 +2770,7 @@ fn invoke_extension_action(
     // `dispatch_inner`, not `dispatch`: `console.action.invoke` is itself a
     // mutation and was already recorded in the operation log under the
     // client's operation id, so this must not open a second operation under
-    // the same id. Change actions reach their App methods the same way.
+    // the same id. ChangePack actions reach their App methods the same way.
     let response = dispatch_inner(store, sessions, request);
     let result = match (response.result, response.error) {
         (Some(result), _) => result,
@@ -2778,7 +2785,7 @@ fn invoke_extension_action(
         revisions: CanonicalRevisions {
             registry: registry.envelope()?.revision,
             workspace: None,
-            change: None,
+            change_pack: None,
             policy: None,
         },
         result,
@@ -2816,24 +2823,24 @@ fn invoke_graph_action(
     };
 
     let result = match binding.action_id.as_str() {
-        "dcg.change.open" => {
+        "dcg.change_pack.open" => {
             let scope: Vec<String> = required("scope")?
                 .split_whitespace()
                 .map(ToOwned::to_owned)
                 .collect();
-            to_value(app.dcg_open_change(root, &required("intent")?, &scope)?)?
+            to_value(app.dcg_open_change_pack(root, &required("intent")?, &scope)?)?
         }
-        "dcg.change.seal" => to_value(app.dcg_seal(root, &required("change")?)?)?,
+        "dcg.revision_pack.seal" => to_value(app.dcg_seal(root, &required("change_pack_id")?)?)?,
         // Straight through the same application operation the CLI calls, which
         // commits via `commit_audited_mutation` — MutationJournal, AuditFact
         // and Activity, with no Console-specific path around any of them.
         "project.provider.unbind" => to_value(app.provider_unbind(root, &required("binding")?)?)?,
         "project.provider.rebind" => to_value(app.provider_rebind(root, &required("binding")?)?)?,
-        "dcg.evidence.record" => to_value(app.dcg_verify(root, &required("revision")?)?)?,
+        "dcg.evidence.record" => to_value(app.dcg_verify(root, &required("revision_pack_id")?)?)?,
         "dcg.assessment.record" => to_value(
             app.dcg_assess(
                 root,
-                &required("revision")?,
+                &required("revision_pack_id")?,
                 &required("risk")?,
                 argument("rationale")
                     .as_deref()
@@ -2841,26 +2848,26 @@ fn invoke_graph_action(
             )?,
         )?,
         "dcg.gate.evaluate" => {
-            to_value(app.dcg_evaluate_gate(root, &required("revision")?, &[])?)?
+            to_value(app.dcg_evaluate_gate(root, &required("revision_pack_id")?, &[])?)?
         }
         "dcg.decision.approve" => to_value(app.dcg_decide(
             root,
-            &required("revision")?,
+            &required("revision_pack_id")?,
             argument("gate").as_deref(),
             true,
             None,
         )?)?,
         "dcg.decision.reject" => to_value(app.dcg_decide(
             root,
-            &required("revision")?,
+            &required("revision_pack_id")?,
             None,
             false,
             Some(&required("reason")?),
         )?)?,
         "dcg.promote" => to_value(app.dcg_promote(
             root,
-            &required("change")?,
-            &required("revision")?,
+            &required("change_pack_id")?,
+            &required("revision_pack_id")?,
             &required("decision")?,
             &required("gate")?,
             Some(required("expected_baseline")?.as_str()),
@@ -2897,7 +2904,7 @@ fn invoke_graph_action(
             workspace: draft_core::dcg::source_view::WorkspaceRevision::derive(root)
                 .ok()
                 .map(|revision| revision.content_digest),
-            change: None,
+            change_pack: None,
             policy: None,
         },
         result,
@@ -2923,7 +2930,7 @@ fn revalidate_binding(app: &App, binding: &ActionBinding) -> DraftResult<()> {
     let entry = draft_core::project::registry::ProjectRegistry::global()?.resolve(workspace_id)?;
     let outcome = app.revalidate_precondition(
         Path::new(&entry.project_path),
-        binding.change_id.as_deref(),
+        binding.change_pack_id.as_deref(),
         &binding.precondition,
     )?;
     match outcome {
@@ -2990,7 +2997,7 @@ fn console_action_invoke(
         )
         .map_err(|message| DraftError::new(DraftErrorKind::ConflictDetected, message))?;
     if binding.workspace_revision != invocation.expected_revisions.workspace
-        || binding.change_revision != invocation.expected_revisions.change
+        || binding.change_revision != invocation.expected_revisions.change_pack
     {
         return Err(DraftError::new(
             DraftErrorKind::ConflictDetected,
@@ -3019,7 +3026,7 @@ fn console_action_invoke(
     }
     validate_arguments(&inputs, &invocation.arguments)?;
 
-    // Extension management is bound to an entity rather than a Change, and runs
+    // Extension management is bound to an entity rather than a ChangePack, and runs
     // through the same authoritative `extension.*` operations the CLI and the
     // browser already use.
     if binding.action_id.starts_with("extension.") {
@@ -3033,7 +3040,7 @@ fn console_action_invoke(
         .ok_or_else(|| DraftError::invalid_config("domain action is not bound to a workspace"))?;
 
     // Change Graph and provider actions are bound to a project, so they
-    // resolve before the `change_id` requirement below. Both run through the
+    // resolve before the `change_pack_id` requirement below. Both run through the
     // same invoker, which calls the authoritative application operation — the
     // one that journals, audits and appends.
     if binding.action_id.starts_with("dcg.") || binding.action_id.starts_with("project.provider.") {
@@ -3201,23 +3208,23 @@ fn console_project(app: &App, req: &Request) -> DraftResult<Value> {
     let entry = draft_core::project::registry::ProjectRegistry::global()?.resolve(&workspace_id)?;
     let root = Path::new(&entry.project_path);
     let revision = draft_core::dcg::source_view::WorkspaceRevision::derive(root)?;
-    let changes = console_change_summaries(app, root)?;
+    let changes = console_change_pack_summaries(app, root)?;
     Ok(json!({
         "project": entry,
         "revision": revision,
         "status": app.status(root)?,
         "tasks": app.task_list(root)?,
-        "changes": changes,
+        "change_packs": changes,
         "inbox": app.inbox(root)?,
     }))
 }
 
-fn console_change_summaries(app: &App, root: &Path) -> DraftResult<Vec<Value>> {
-    app.dcg_changes(root)?
+fn console_change_pack_summaries(app: &App, root: &Path) -> DraftResult<Vec<Value>> {
+    app.dcg_change_packs(root)?
         .into_iter()
         .map(|change| {
             Ok(json!({
-                "change_id": change.change,
+                "change_pack_id": change.change_pack,
                 "lifecycle": change.lifecycle,
                 "revisions": change.revisions.len(),
                 "latest_revision": change.revisions.first().map(|r| r.id.to_string()),
@@ -3311,22 +3318,22 @@ fn console_search(app: &App, req: &Request) -> DraftResult<Value> {
         if results.len() >= limit {
             continue;
         }
-        for change in app.dcg_changes(root)?.into_iter().take(100) {
-            // A Change has no name of its own; what it is for lives in its
+        for change in app.dcg_change_packs(root)?.into_iter().take(100) {
+            // A ChangePack has no name of its own; what it is for lives in its
             // definition, so its id and its revisions are what can be matched.
             let latest = change
                 .revisions
                 .first()
                 .map(|revision| revision.id.to_string())
                 .unwrap_or_default();
-            let searchable = format!("{} {latest}", change.change).to_lowercase();
+            let searchable = format!("{} {latest}", change.change_pack).to_lowercase();
             if searchable.contains(&query) {
-                results.push(json!({ "kind": "change", "workspace_id": workspace_id, "id": change.change, "title": change.change, "subtitle": format!("{:?}", change.lifecycle) }));
+                results.push(json!({ "kind": "change_pack", "workspace_id": workspace_id, "id": change.change_pack, "title": change.change_pack, "subtitle": format!("{:?}", change.lifecycle) }));
             }
-            // Actions are not searched per Change any more. What may legally
+            // Actions are not searched per ChangePack any more. What may legally
             // be done to a revision is the authorization view's answer, and it
             // depends on evidence, gates and decisions — computing it for every
-            // Change to match a substring would be doing the expensive thing
+            // ChangePack to match a substring would be doing the expensive thing
             // for a search box.
             if results.len() >= limit {
                 break;

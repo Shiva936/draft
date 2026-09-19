@@ -4,21 +4,21 @@ The Draft CLI is the primary interface. Core workflows are local-first and work 
 
 Human-readable output is the default CLI contract. Machine-readable output is available only where command help declares `--json` or `--raw`; v0.3.4 does not add those flags to every command.
 
-The v0.3.4 surface centers on `init`, `status`, `inbox`, `doctor`, `maintenance`, `config`, `daemon`, `project`, `task`, `change`, `resource`, `baseline`, `activity`, `authority`, `recover`, `export`, `import`, `extension` and `console`. Each stage of the Change Graph — evidence, assessment, gate, decision, promotion, publication — is a separate command because each is a separate act.
+The v0.3.4 surface centers on `init`, `status`, `inbox`, `doctor`, `maintenance`, `config`, `daemon`, `project`, `task`, `pack`, `resource`, `baseline`, `activity`, `authority`, `recover`, `extension`, `console`, `update` and `uninstall`. Each stage of the Change Graph — evidence, assessment, gate, decision, promotion, publication — is a separate command because each is a separate act.
 
 ## Workspace
 
 ### `draft init [-b <base-change-name>]`
 
-Initializes `.draft/`, creates the project event stores, writes default config files, creates the base Change, and selects it. The default base Change name is `base`.
+Initializes `.draft/`, creates the project event stores, writes default config files, creates the base ChangePack, and selects it. The default base ChangePack name is `base`.
 
 First-run output includes next actions: `draft task wizard`, `draft task list`, and `draft console tui`. If no command candidates are configured, Draft says so and points to `[candidates.<name>]` in `.draft/config.toml`; human/manual tasks still work without candidate setup.
 
-### `draft status [-p <chg-id>] [-c repo|tasks|candidates|changes|hooks] [--full]`
+### `draft status [-p <cpk-id>] [-c repo|tasks|candidates|changes|hooks] [--full]`
 
-Shows workspace or Change status. Component filters return focused status for repository metadata, task health, resolved candidates, workspace changes, or hooks. `--full` includes backing records; the default stays compact. `.draft/` is always hard-excluded.
+Shows workspace or ChangePack status. Component filters return focused status for repository metadata, task health, resolved candidates, workspace changes, or hooks. `--full` includes backing records; the default stays compact. `.draft/` is always hard-excluded.
 
-### `draft change checkpoint <message>`
+### `draft pack checkpoint <message>`
 
 Creates a checkpoint with a `chk_` ID and a receipt.
 
@@ -78,63 +78,63 @@ Manages `.draft/.ignore`. `.draft/` remains hard-excluded even if ignore rules a
 
 Renders a clean human-readable timeline derived from `.draft/events/events.log`, the sole authoritative Activity file. `--raw` prints each logical record as JSON for audit, debugging, replay, and tooling. Use `draft doctor` or `draft doctor receipts --all` to verify the Activity chain, the receipts, and the transparency chain. There is no `draft log`, and `draft activity list` accepts only long `--page` and `--limit` pagination flags.
 
-## Changes
+## Packs
 
-### `draft change list [--json]`
+### `draft pack list [--json]`
 
-Every Change and the revisions sealed against it. Change IDs use `chg_`.
+Every ChangePack and the revisions sealed against it. ChangePack IDs use `cpk_`.
 
-### `draft change show <chg-id> [--json]`
+### `draft pack show <cpk-id> [--json]`
 
-One Change: its lifecycle, what it is for, what it may touch, and every revision sealed against it.
+One ChangePack: its lifecycle, what it is for, what it may touch, and every revision sealed against it.
 
-### `draft change intent show <chg-id> [--json]`
+### `draft pack intent show <cpk-id> [--json]`
 
-What the Change is for, in the author's words. Opaque to Draft.
+What the ChangePack is for, in the author's words. Opaque to Draft.
 
-### `draft change intent set <chg-id> <intent> [--json]`
+### `draft pack intent set <cpk-id> <intent> [--json]`
 
-### `draft change intent amend <chg-id> <intent> [--json]`
+### `draft pack intent amend <cpk-id> <intent> [--json]`
 
-Restates what a Change is for. Both spellings are the same act, kept apart only because "state it for the first time" and "change what it says" read differently to the person doing it.
+Restates what a ChangePack is for. Both spellings are the same act, kept apart only because "state it for the first time" and "change what it says" read differently to the person doing it.
 
-An intent lives in the Change's definition, and a definition is an immutable fact — so this mints a new one and moves the Change's pointer at it rather than editing what a reviewer may already have read, recording `ChangeDefinitionAmended`. The declared scope is carried across unchanged: amending an intent is not a way to widen what the work may touch. Any scope already resolved against the old definition is left stale by construction, so a Change amended after resolution is re-resolved rather than silently sealed under a boundary nobody approved.
+An intent lives in the ChangePack's definition, and a definition is an immutable fact — so this mints a new one and moves the ChangePack's pointer at it rather than editing what a reviewer may already have read, recording `ChangePackDefinitionAmended`. The declared scope is carried across unchanged: amending an intent is not a way to widen what the work may touch. Any scope already resolved against the old definition is left stale by construction, so a ChangePack amended after resolution is re-resolved rather than silently sealed under a boundary nobody approved.
 
-### `draft change select <chg-id> [--json]`
+### `draft pack select <cpk-id> [--json]`
 
-Chooses the Change subsequent commands default to. A convenience, never an authority: every command that acts still names the exact revision it acts on, and selecting one cannot widen what any of them may do.
+Chooses the ChangePack subsequent commands default to. A convenience, never an authority: every command that acts still names the exact revision it acts on, and selecting one cannot widen what any of them may do.
 
-### `draft change inspect <chg-id> [--json]`
+### `draft pack inspect <cpk-id> [--json]`
 
-Everything recorded about a Change and its newest revision at once — every judgement, the explanation of its work, and what it currently interferes with. `show` answers what the Change _is_; this answers what has _happened_ to it, and is correspondingly more expensive.
+Everything recorded about a ChangePack and its newest revision at once — every judgement, the explanation of its work, and what it currently interferes with. `show` answers what the ChangePack _is_; this answers what has _happened_ to it, and is correspondingly more expensive.
 
-### `draft change depends <chg-id> [--json]`
+### `draft pack depends <cpk-id> [--json]`
 
-The accepted history a Change was worked from: the Baseline its newest revision was sealed against, that Baseline's lineage, and the promotion that produced each ancestor.
+The accepted history a ChangePack was worked from: the Baseline its newest revision was sealed against, that Baseline's lineage, and the promotion that produced each ancestor.
 
-Lineage, not proximity. Two Changes touching neighbouring Resources depend on nothing of each other; `draft change conflicts` is the question that asks about them.
+Lineage, not proximity. Two ChangePacks touching neighbouring Resources depend on nothing of each other; `draft pack conflicts` is the question that asks about them.
 
-### `draft change conflicts <chg-id> [--json]`
+### `draft pack conflicts <cpk-id> [--json]`
 
-Every other Change whose newest sealed revision interferes with this one's, and why. A Change with no sealed revision has touched nothing yet and is absent: reporting it as a conflict would make every open Change look like an obstacle.
+Every other ChangePack whose newest sealed revision interferes with this one's, and why. A ChangePack with no sealed revision has touched nothing yet and is absent: reporting it as a conflict would make every open ChangePack look like an obstacle.
 
-### `draft change compose <chg-id> <chg-id> [...] [--json]`
+### `draft pack compose <cpk-id> <cpk-id> [...] [--json]`
 
-### `draft change disperse <chg-id> <chg-id> [...] [--json]`
+### `draft pack disperse <cpk-id> <cpk-id> [...] [--json]`
 
 Asks whether several sealed revisions hold together against one Baseline. A composition is `verified` only when every pair is independent **and** every member was sealed from the same Baseline; anything else is `failed`, with each pair naming what stands in the way.
 
 `disperse` is the inverse, and is not a mutation: for each member it reports whether that member can be advanced on its own, and — when it cannot — the exact relations holding it. The answer says what to resolve rather than merely refusing.
 
-There is deliberately no dependency ordering. What a revision was built on is its base Baseline, which `draft change depends` reports exactly; ordering by a declared dependency list would be a second, weaker answer to a question accepted history already answers.
+There is deliberately no dependency ordering. What a revision was built on is its base Baseline, which `draft pack depends` reports exactly; ordering by a declared dependency list would be a second, weaker answer to a question accepted history already answers.
 
-### `draft change impact <rev-id> [--json]`
+### `draft pack impact <rpk-id> [--json]`
 
 What a revision reaches: every element an authorized extractor found inside the Resources it touched, and the Resources reachable from those elements through a contributed relation.
 
 Nothing is inferred. An element exists because an extractor said so and a relation exists because one said so; directory layout, dependency edges, graph proximity and name similarity produce no elements at all. Resources nothing installed can extract from are reported as `unextractable` — a real answer, since without it "no elements" would mean both "nothing is in there" and "nothing knows how to look".
 
-### `draft change coverage <rev-id> [--json]`
+### `draft pack coverage <rpk-id> [--json]`
 
 What the evidence about a revision actually speaks for, Resource by Resource: `direct`, `indirect`, or `uncovered`.
 
@@ -142,9 +142,9 @@ Deliberately hard to satisfy. **Direct** coverage means the evidence read an obs
 
 Indirect sources report their own availability. "No declared relationship asserts this" and "Draft has nowhere to record such an assertion" are different facts, and v1 records neither kind of assertion — so the answer says so rather than reporting their absence as though the project had been checked.
 
-### `draft change representation list [--json]`
+### `draft pack representation list [--json]`
 
-### `draft change representation show <rev-id> [--json]`
+### `draft pack representation show <rpk-id> [--json]`
 
 The derived explanation of what a revision did, recorded when the revision was sealed and bound to that exact revision.
 
@@ -152,53 +152,53 @@ Each touched Resource gets an entry naming the strategy that explains it — a c
 
 Representations are what let `compare`, `compose` and `conflicts` give a finer answer than whole-Resource overlap.
 
-### `draft change receipts <chg-id> [--json]`
+### `draft pack receipts <cpk-id> [--json]`
 
-The receipts issued for this Change's promotions.
+The receipts issued for this ChangePack's promotions.
 
-### `draft change scope <chg-id> [--json]`
+### `draft pack scope <cpk-id> [--json]`
 
-What the Change may touch — both the declaration and the resolution, because a reader given only the resolved set cannot tell whether a declaration was narrowed. Resolution may narrow a declaration but never widen it, and it is resolved once and verified again at seal, so a definition amended afterwards leaves the resolution stale rather than silently widening what the work reaches.
+What the ChangePack may touch — both the declaration and the resolution, because a reader given only the resolved set cannot tell whether a declaration was narrowed. Resolution may narrow a declaration but never widen it, and it is resolved once and verified again at seal, so a definition amended afterwards leaves the resolution stale rather than silently widening what the work reaches.
 
-### `draft change revision seal <chg-id> [--json]`
+### `draft pack revision seal <cpk-id> [--json]`
 
-Seals the workspace's current state as a revision of a Change. The state is observed, not asserted. Sealing the same state twice is the same revision, so a re-run after a dropped connection is not a second thing to review.
+Seals the workspace's current state as a revision of a ChangePack. The state is observed, not asserted. Sealing the same state twice is the same revision, so a re-run after a dropped connection is not a second thing to review.
 
 Sealing also records the revision's representation, derived from the same observations the revision was sealed over. Deriving it later would explain a workspace that has since moved.
 
-### `draft change revision list <chg-id> [--json]`
+### `draft pack revision list <cpk-id> [--json]`
 
-### `draft change revision show <chg-id> <rev-id> [--json]`
+### `draft pack revision show <cpk-id> <rpk-id> [--json]`
 
-The revisions sealed against a Change, newest first, and one of them in full: the exact definition and scope it was sealed against, the Baseline it was worked from, and the resources it touched.
+The revisions sealed against a ChangePack, newest first, and one of them in full: the exact definition and scope it was sealed against, the Baseline it was worked from, and the resources it touched.
 
-### `draft change abandon <chg-id> [--json]`
+### `draft pack abandon <cpk-id> [--json]`
 
-### `draft change reopen <chg-id> [--json]`
+### `draft pack reopen <cpk-id> [--json]`
 
-There is deliberately no delete. Abandoning is a statement about the _future_ — no more revisions, no more decisions — and says nothing about the past: every definition, revision, decision, receipt and event stays exactly where it was, and `draft change list` still shows it. The record of work that was done and then decided against is frequently the part worth keeping. `draft change reopen` resumes an abandoned Change. Both transitions appear in Activity as `ChangeAbandoned` and `ChangeReopened`.
+There is deliberately no delete. Abandoning is a statement about the _future_ — no more revisions, no more decisions — and says nothing about the past: every definition, revision, decision, receipt and event stays exactly where it was, and `draft pack list` still shows it. The record of work that was done and then decided against is frequently the part worth keeping. `draft pack reopen` resumes an abandoned ChangePack. Both transitions appear in Activity as `ChangePackAbandoned` and `ChangePackReopened`.
 
-`draft change reopen` answers a different question: it takes an abandoned Change and makes it active again. A Change whose work is already in an accepted Baseline cannot be reopened this way — create a successor Change instead. Nothing recorded about the Change is invalidated: Evidence, Assessments, Gates and Decisions each bind one exact revision and simply keep describing the revision they were made about.
+`draft pack reopen` answers a different question: it takes an abandoned ChangePack and makes it active again. A ChangePack whose work is already in an accepted Baseline cannot be reopened this way — create a successor ChangePack instead. Nothing recorded about the ChangePack is invalidated: Evidence, Assessments, Gates and Decisions each bind one exact revision and simply keep describing the revision they were made about.
 
-### `draft change compare <chg-id> <chg-id> [--json]`
+### `draft pack compare <cpk-id> <cpk-id> [--json]`
 
-Reports how two Changes interfere over the resources they both touch, resource by resource: `independent`, `conflicting`, or `indeterminate`.
+Reports how two ChangePacks interfere over the resources they both touch, resource by resource: `independent`, `conflicting`, or `indeterminate`.
 
 Resources only one side touches are absent from the result. Silence is the answer for them, and listing them as independent would bury the ones that actually interfere.
 
-The answer is computed from the two change sets as they are now rather than read from a stored verdict, because a Change that moves invalidates a composability claim made about it earlier — and a cached one would keep asserting it. Where neither side has derived a finer representation of what it changed, two Changes that both touch a resource cannot be shown separable, so they are reported as interfering rather than assumed composable.
+The answer is computed from the two change sets as they are now rather than read from a stored verdict, because a ChangePack that moves invalidates a composability claim made about it earlier — and a cached one would keep asserting it. Where neither side has derived a finer representation of what it changed, two ChangePacks that both touch a resource cannot be shown separable, so they are reported as interfering rather than assumed composable.
 
 ## Candidates And Tasks
 
-### `draft change candidate list|show|remove`
+### `draft pack candidate list|show|remove`
 
-### `draft change candidate add <name> [--kind command|chat|manual] -- <template>`
+### `draft pack candidate add <name> [--kind command|chat|manual] -- <template>`
 
-### `draft change candidate update <name> [--kind command|chat|manual] -- <template>`
+### `draft pack candidate update <name> [--kind command|chat|manual] -- <template>`
 
 Manages host-agnostic candidate execution profiles. Missing candidates referenced by task spawn are auto-registered.
 
-### `draft task spawn "<name>" [-p <chg-id>] [-c <candidate-name> ...] [--cron <expr>] -- <instruction>`
+### `draft task spawn "<name>" [-p <cpk-id>] [-c <candidate-name> ...] [--cron <expr>] -- <instruction>`
 
 ### `draft task create <name> --goal <goal> [--template <id>] [--candidate-preset <id>]`
 
@@ -220,11 +220,11 @@ Manages host-agnostic candidate execution profiles. Missing candidates reference
 
 Lists the task templates available — Draft ships none, because a template is domain vocabulary and arrives from an installed contribution — and moves a task definition between projects.
 
-Creates, inspects, spawns, and retires task definitions. `draft task create` validates template ids, candidate presets, success criteria, zones, protected paths, and schema round-trips before writing. Template ids are namespaced and contributed: Draft ships none, so `--template` resolves against installed `task_template` contributions and names what is available when it cannot. A template narrows what a task is about; a step scoped by anything a task zone cannot express is refused rather than silently unscoped. `draft task wizard` uses deterministic prompts for task name, template, goal, allowed/forbidden zones, success checks, risk, plan-first mode, and candidate preset; it prints a preview and only writes after confirmation. `task spawn` records task/candidate/Change provenance and supports stored tasks, inline instructions, candidate presets, and execution lifecycle flags (`--resume`, `--cancel`, `--retry`). `task drop` clears execution/runtime state while keeping the definition; `--hard` removes the task definition and journals the operation.
+Creates, inspects, spawns, and retires task definitions. `draft task create` validates template ids, candidate presets, success criteria, zones, protected paths, and schema round-trips before writing. Template ids are namespaced and contributed: Draft ships none, so `--template` resolves against installed `task_template` contributions and names what is available when it cannot. A template narrows what a task is about; a step scoped by anything a task zone cannot express is refused rather than silently unscoped. `draft task wizard` uses deterministic prompts for task name, template, goal, allowed/forbidden zones, success checks, risk, plan-first mode, and candidate preset; it prints a preview and only writes after confirmation. `task spawn` records task/candidate/ChangePack provenance and supports stored tasks, inline instructions, candidate presets, and execution lifecycle flags (`--resume`, `--cancel`, `--retry`). `task drop` clears execution/runtime state while keeping the definition; `--hard` removes the task definition and journals the operation.
 
 ### `draft inbox [--json]`
 
-Lists items requiring attention: Changes needing review, failed or resumable executions, owner review gaps, waiver renewals, doctor recovery warnings, and pending resource edits. Every item includes a next safe action.
+Lists items requiring attention: ChangePacks needing review, failed or resumable executions, owner review gaps, waiver renewals, doctor recovery warnings, and pending resource edits. Every item includes a next safe action.
 
 ## The Change Graph
 
@@ -258,11 +258,11 @@ The receipts this project has issued, or one of them in full. Receipt IDs use `r
 
 Every Publication and where each one is.
 
-### `draft change new <intent> --scope <res-id> [<res-id> ...] [--json]`
+### `draft pack new <intent> --scope <res-id> [<res-id> ...] [--json]`
 
-Opens a Change: what it is for, and exactly what it may touch. The declared scope is resolved against the accepted Baseline, which may narrow it but never widen it. Re-running with the same intent converges on the Change it opened.
+Opens a ChangePack: what it is for, and exactly what it may touch. The declared scope is resolved against the accepted Baseline, which may narrow it but never widen it. Re-running with the same intent converges on the ChangePack it opened.
 
-### `draft change evidence run <rev-id> [--json]`
+### `draft pack evidence run <rpk-id> [--json]`
 
 Runs every check that applies to the changed resources, aggregates the results into one of five states, derives the impact index from contributed extractors, and records immutable Evidence bound to the exact revision it was gathered about.
 
@@ -274,37 +274,37 @@ Runs the project's configured checks against a sealed revision and records the r
 
 The outcome is one of five — `passed`, `failed`, `unavailable`, `not_applicable`, `not_evaluated` — because "no checks ran" and "checks ran and passed" are different facts, and only one of them is a reason to proceed.
 
-### `draft change assess <rev-id> --risk low|medium|high|critical [--rationale <text>] [--json]`
+### `draft pack assess <rpk-id> --risk low|medium|high|critical [--rationale <text>] [--json]`
 
 Records a risk judgement over a revision's evidence. There is deliberately no way to record "unassessed": that is what Draft concludes when nobody has looked, not something to assert.
 
-### `draft change gates evaluate <rev-id> [--waiver <wvr-id> ...] [--json]`
+### `draft pack gates evaluate <rpk-id> [--waiver <wvr-id> ...] [--json]`
 
 Evaluates the project's gate over a revision. Every required condition is reported, satisfied or not. A waived condition is recorded as satisfied _and_ names the waiver that excused it — "somebody allowed this" never looks like "this passed".
 
-### `draft change gates list <chg-id> <rev-id> [--json]`
+### `draft pack gates list <cpk-id> <rpk-id> [--json]`
 
 Everything decided about a revision — evidence, assessments, gates, decisions, any promotion — and which actions are currently legal, with the reason for each that is not.
 
-### `draft change gates waive <rev-id> <condition> --reason <text> [--days <n>] [--json]`
+### `draft pack gates waive <rpk-id> <condition> --reason <text> [--days <n>] [--json]`
 
-Excuses one gate condition on one exact revision. Bound to the revision, not the Change: an exception accepted for the work as it stood is not an exception for whatever it becomes.
+Excuses one gate condition on one exact revision. Bound to the revision, not the ChangePack: an exception accepted for the work as it stood is not an exception for whatever it becomes.
 
-### `draft change review <rev-id> [--comment <text> ...] [--json]`
+### `draft pack review <rpk-id> [--comment <text> ...] [--json]`
 
 Records that you examined a revision. A review is the act of looking; a Decision is the conclusion. They come apart in both directions — a reviewer can read a revision and conclude nothing yet, and a decision with no recorded review behind it is precisely what an audit wants to notice.
 
 Re-recording the same review merges new comments into the existing record rather than accumulating one entry per invocation.
 
-### `draft change decide <rev-id> --approve [--gate <gate-id>] [--json]`
+### `draft pack decide <rpk-id> --approve [--gate <gate-id>] [--json]`
 
 Records an immutable approval, which authorizes a promotion. It does not perform one. An approval requires a satisfied gate over the same revision.
 
-### `draft change decide <rev-id> --reject --reason <text> [--json]`
+### `draft pack decide <rpk-id> --reject --reason <text> [--json]`
 
 Records an immutable rejection. Needs no gate: refusing work is legitimate whatever the checks say.
 
-### `draft promote <chg-id> <rev-id> [--decision <dec-id>] [--gate <gate-id>] [--expected-baseline <digest>] [--json]`
+### `draft promote <cpk-id> <rpk-id> [--decision <dec-id>] [--gate <gate-id>] [--expected-baseline <digest>] [--json]`
 
 Promotes an authorized revision, advancing the accepted Baseline. The only operation that changes what this project accepts.
 
@@ -388,11 +388,11 @@ Withdraws an attempt that stalled before it was sent.
 
 An attempt interrupted between its allocation and the moment it would have been delivered blocks its Publication, because the barrier cannot prove it caused no effect. This proves it — the journal never reached the dispatch boundary — and frees the Publication. An attempt that was already dispatched is refused, because withdrawing it would assert something Draft cannot know.
 
-### `draft recover plan <chk-id|chg-id|evt-id>`
+### `draft recover plan <chk-id|cpk-id|evt-id>`
 
-### `draft recover run <chk-id|chg-id|evt-id>`
+### `draft recover run <chk-id|cpk-id|evt-id>`
 
-### `draft recover dry-run <chk-id|chg-id|evt-id>`
+### `draft recover dry-run <chk-id|cpk-id|evt-id>`
 
 Restores a past state, inferring the target type from the ID prefix. `plan` resolves the target and reports what would be restored and what would be **removed**, without mutating anything; `run` performs it.
 
@@ -400,25 +400,23 @@ An `evt_` reference names the Activity event that recorded a checkpoint. The Act
 
 Removals are surfaced separately and by name, because recovery deletes. Recovery always protects `.draft/`.
 
-## Import And Export
+## Installation
 
-### `draft export [<bas-id>] [--output <path>] [--json]`
+These manage the Draft installation itself, never a project. They run anywhere, need no project, and never read or write a `.draft/` directory.
 
-Writes one accepted Baseline to a deterministic, uncompressed `.draftpack`. The accepted Baseline when the id is omitted. The same Baseline exported by the same producer produces the same bytes, so two people can compare artifacts rather than comparing descriptions of them.
+### `draft update [--check] [--version <semver>] [--channel stable|prerelease] [--allow-downgrade] [--json]`
 
-It carries the Baseline's manifest, the acceptance record that promoted it, its composition and its lineage. The composition travels because the evidence root is a digest: it proves the entries did not change and cannot say what they were, so without it a recipient could verify the Baseline and still not know which provider established any part of it.
+Updates an official installation to the newest release eligible on its channel (the highest SemVer, not the most recently published). Every artifact is verified against the signed release manifest before it replaces anything; both binaries are replaced as one recoverable transaction, validated by running them, and a running daemon is stopped and restarted. An interrupted update is completed or rolled back on the next run.
 
-The manifest lists every member with its exact digest and is signed, so a recipient checks the bytes it received against what the exporter said it was sending. Signing keys, local trust decisions and raw `.draft/` databases are never included.
+`--check` reports and changes nothing. `--version` installs exactly that release and never changes the channel; installing an older one needs `--allow-downgrade`. `--channel` switches the track; when the newest release on the new track is already installed, only the recorded channel changes. `--version` with `--channel`, and `--allow-downgrade` without `--version` or with `--check`, are rejected.
 
-### `draft import <path> [--dry-run] [--json]`
+Package-manager, source and unrecognized installations are reported, not modified.
 
-Validates an untrusted `.draftpack` and places it in quarantine.
+### `draft uninstall [--dry-run] [--purge] [--yes] [--json]`
 
-Import is the security boundary. Every archive is untrusted, so path traversal, absolute paths, `.draft/` writes, symlinks, hardlinks, device entries, invalid UTF-8 names, oversized artifacts and zip-bomb archives are rejected as the archive is read; then every member is checked against the signed manifest, and the manifest against every member, so a silently added or removed member is a mismatch rather than an unnoticed difference. `--dry-run` validates and reports without writing anything.
+Removes the executables, their PATH exposure (the Unix symlinks, or on Windows only the User PATH entry the installer added) and the installation's own metadata. `--dry-run` prints exactly the plan the real command runs. The global user store is kept unless `--purge` is given, and `--purge` deletes it only after proving it is a Draft-managed store; `--yes` skips the confirmation prompt and nothing else.
 
-**A valid archive is a well-formed set of claims, not a trusted one.** The checks establish that the bytes are unchanged and that whoever held the key produced them; they never establish that the key is trusted _here_. That is this project's own question, and answering it from inside the archive would let a sender vouch for itself — so the report says `locally_accepted: false` explicitly rather than by omission, and any receipts the archive carries are history that grants nothing. An imported Baseline becomes authoritative here only through this project's own promotion.
-
-Importing a second artifact claiming a Baseline already in quarantine is refused rather than merged: two archives claiming one identity are two different claims, and overwriting one with the other would destroy the evidence that they disagreed.
+`draft uninstall` does not remove Draft metadata from your projects. Your `.draft/` directories are never scanned and never deleted.
 
 ## Providers
 
@@ -554,14 +552,14 @@ One Resource's accepted state and what established it: the state digest the Base
 
 ### Capability gaps
 
-Draft ships no extension packages, so a new installation manages resources and knows nothing about what they are. Commands never disappear: `draft change evidence run` still runs, still honours the project's own `verify.toml`, still records evidence and still returns the same exit codes. What it adds is a capability gap naming the resources no installed extension could interpret, so the missing knowledge is visible rather than silently absent. Suggesting an installable package is best effort and never blocks: verification completes with no configured source, with a source disabled, offline, or with a refresh failing.
+Draft ships no extension packages, so a new installation manages resources and knows nothing about what they are. Commands never disappear: `draft pack evidence run` still runs, still honours the project's own `verify.toml`, still records evidence and still returns the same exit codes. What it adds is a capability gap naming the resources no installed extension could interpret, so the missing knowledge is visible rather than silently absent. Suggesting an installable package is best effort and never blocks: verification completes with no configured source, with a source disabled, offline, or with a refresh failing.
 
 ## Receipts And Storage
 
 ### `draft doctor receipts [<rcp-id>] [--all]`
 
-Verifies durable receipts. Reading one is part of working on a Change; _verifying_ one is a diagnosis, so it lives under `doctor`. Verification reports structure, canonical form, signature, historical trust at issuance and current trust separately — what cannot be determined reads `unknown`, never `valid`.
+Verifies durable receipts. Reading one is part of working on a ChangePack; _verifying_ one is a diagnosis, so it lives under `doctor`. Verification reports structure, canonical form, signature, historical trust at issuance and current trust separately — what cannot be determined reads `unknown`, never `valid`.
 
 ### `draft maintenance gc|compact|stats|index-rebuild|remove-project`
 
-Maintains `.draft/` storage. Indexes, caches, and temporary data are rebuildable, and `gc` never deletes canonical history: it validates the accepted Baseline, preserves active and recoverable Changes, removes safe temp and cache metadata, rebuilds indexes, and records maintenance events. `index-rebuild` is the transactional rebuild of the derived index from authoritative state. `remove-project` removes Draft metadata from the project without deleting project files, refusing pending unsafe state unless `--force` is given — and even then it leaves user files untouched. `draft doctor storage` reports without changing anything.
+Maintains `.draft/` storage. Indexes, caches, and temporary data are rebuildable, and `gc` never deletes canonical history: it validates the accepted Baseline, preserves active and recoverable ChangePacks, removes safe temp and cache metadata, rebuilds indexes, and records maintenance events. `index-rebuild` is the transactional rebuild of the derived index from authoritative state. `remove-project` removes Draft metadata from the project without deleting project files, refusing pending unsafe state unless `--force` is given — and even then it leaves user files untouched. `draft doctor storage` reports without changing anything.

@@ -39,7 +39,7 @@ export function ProjectOverview() {
         const recentEvents = events.data ?? [];
 
         const changeStates = new Map<string, number>();
-        for (const change of project.changes) changeStates.set(change.submit_state, (changeStates.get(change.submit_state) ?? 0) + 1);
+        for (const change of project.change_packs) changeStates.set(change.submit_state, (changeStates.get(change.submit_state) ?? 0) + 1);
 
         const taskSegments = [
           { label: "Blocked", value: blocked.length, color: chartColors.danger },
@@ -78,10 +78,10 @@ export function ProjectOverview() {
                 link={<PanelLink to="events">View events</PanelLink>}
               />
               <MetricCard
-                label="Changes"
+                label="ChangePacks"
                 icon="layers"
-                value={project.changes.length}
-                unit={project.changes.length === 1 ? "change" : "changes"}
+                value={project.change_packs.length}
+                unit={project.change_packs.length === 1 ? "change" : "changes"}
                 note={project.inbox.length > 0 ? `${project.inbox.length} need attention` : "No change needs attention"}
                 noteTone={project.inbox.length > 0 ? "warning" : "success"}
                 chart={
@@ -136,18 +136,18 @@ export function ProjectOverview() {
                   <PanelHeader
                     title="Active changes"
                     icon="layers"
-                    count={project.changes.length}
+                    count={project.change_packs.length}
                     action={<PanelLink to="changes">View all changes</PanelLink>}
                   />
-                  {project.changes.length === 0 ? (
+                  {project.change_packs.length === 0 ? (
                     <EmptyState inline icon="layers" label="No active change." detail="Create a change to group reviewable changes." />
                   ) : (
                     <div className="rows">
-                      {project.changes.slice(0, 6).map((change) => (
-                        <Link className="row-item" key={change.change_id} to="../graph">
+                      {project.change_packs.slice(0, 6).map((change) => (
+                        <Link className="row-item" key={change.change_pack_id} to="../graph">
                           <Icon name="layers" size={16} />
                           <div className="row-main">
-                            <strong className="mono">{change.change_id}</strong>
+                            <strong className="mono">{change.change_pack_id}</strong>
                             <small>{change.name}</small>
                           </div>
                           {changeRevisionLabel(change.revision) && (

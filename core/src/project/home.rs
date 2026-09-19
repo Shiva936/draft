@@ -5,7 +5,7 @@
 //! The global store holds identity, the private signing key, trusted public
 //! keys, default policies, adapter configuration, the candidate/actor registry,
 //! reusable caches/models, a global receipt index, and local trust metrics. It
-//! never stores project-local Change data. It is hidden like the project store.
+//! never stores project-local ChangePack data. It is hidden like the project store.
 //!
 //! The default location is `~/.draft/` (Unix/macOS) or `%USERPROFILE%\.draft\`
 //! (Windows). Tests and sandboxes may override it with `DRAFT_GLOBAL_HOME`
@@ -273,9 +273,60 @@ impl DraftGlobalStore {
         self.telemetry_dir().join("local-metrics.json")
     }
 
+    /// The store-identity marker. Present only in a root Draft itself
+    /// established, and the sole positive proof that the directory is a
+    /// Draft-managed store (`draft uninstall --purge` requires it).
+    pub fn home_marker(&self) -> PathBuf {
+        self.root.join("home.json")
+    }
+
+    /// The store's identity marker, when a valid one exists.
+    ///
+    /// A missing marker is `Ok(None)`: an unproven store is still usable, it
+    /// is only never purge-authorized. A malformed one is an error.
+    pub fn read_home_marker(&self) -> DraftResult<Option<DraftGlobalHome>> {
+        let path = self.home_marker();
+        if !path.exists() {
+            return Ok(None);
+        }
+        crate::contracts::read_persisted(&path).map(Some)
+    }
+
+    /// Establish the store root, minting its identity marker only if this call
+    /// created the root.
+    ///
+    /// "Draft created this root" is proven by one atomic `create_dir` of the
+    /// final component, never by an existence check: parents are created
+    /// normally and confer nothing, and `AlreadyExists` means someone else
+    /// established it — whatever it holds is never given a marker, so ordinary
+    /// use can never mint purge authority into a pre-existing directory.
+    fn establish_root(&self) -> DraftResult<()> {
+        if let Some(parent) = self.root.parent().filter(|p| !p.as_os_str().is_empty()) {
+            ensure_dir(parent)?;
+        }
+        match std::fs::create_dir(&self.root) {
+            Ok(()) => {
+                let marker = DraftGlobalHome {
+                    schema_version: crate::contracts::current_version(
+                        crate::contracts::ContractId::DraftGlobalHome,
+                    ),
+                    store_id: crate::support::common::GlobalStoreId::generate(),
+                    created_at: crate::support::common::now(),
+                };
+                crate::support::fsutil::write_json(&self.home_marker(), &marker)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(DraftError::storage(format!(
+                "failed to create {}: {error}",
+                self.root.display()
+            ))),
+        }
+    }
+
     /// Create the full global tree, mark it hidden, and lock down the key dir.
     /// Idempotent: re-running is safe and does not overwrite existing files.
     pub fn create_all(&self) -> DraftResult<HiddenStatus> {
+        self.establish_root()?;
         for dir in [
             self.root.clone(),
             self.identity_dir(),
@@ -311,6 +362,24 @@ impl DraftGlobalStore {
         let status = hidden::ensure_hidden(&self.root);
         Ok(status)
     }
+}
+
+/// `<global_store>/home.json`: the positive proof that a directory is a
+/// Draft-managed global store.
+///
+/// Written once, atomically, by the call that established the store root, and
+/// never overwritten or rotated. `store_id` lets a pending purge prove it still
+/// targets the same store it validated.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DraftGlobalHome {
+    pub schema_version: u32,
+    pub store_id: crate::support::common::GlobalStoreId,
+    pub created_at: crate::support::common::Timestamp,
+}
+
+impl crate::contracts::VersionedContract for DraftGlobalHome {
+    const CONTRACT: crate::contracts::ContractId = crate::contracts::ContractId::DraftGlobalHome;
 }
 
 /// Resolve the current user's home directory in a platform-appropriate way.
@@ -379,5 +448,89 @@ mod tests {
         let resolved = DraftGlobalStore::locate().unwrap();
         let real = user_home_dir().map(|home| home.join(".draft"));
         assert_ne!(Some(resolved.root().to_path_buf()), real);
+    }
+
+    #[test]
+    fn a_root_draft_establishes_is_marked_once_and_never_rotated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = DraftGlobalStore::at(tmp.path().join("nested/.draft"));
+        home.create_all().unwrap();
+        let first = home
+            .read_home_marker()
+            .unwrap()
+            .expect("a new root is marked");
+        assert!(first.store_id.as_str().starts_with("gst_"));
+        home.create_all().unwrap();
+        assert_eq!(home.read_home_marker().unwrap(), Some(first));
+    }
+
+    #[test]
+    fn a_pre_existing_directory_is_never_given_a_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let documents = tmp.path().join("Documents");
+        std::fs::create_dir(&documents).unwrap();
+        std::fs::write(documents.join("thesis.txt"), b"mine").unwrap();
+        let home = DraftGlobalStore::at(&documents);
+        home.create_all().unwrap();
+        home.create_all().unwrap();
+        assert!(home.read_home_marker().unwrap().is_none());
+        assert_eq!(
+            std::fs::read(documents.join("thesis.txt")).unwrap(),
+            b"mine"
+        );
+    }
+
+    #[test]
+    fn only_the_creator_that_wins_the_race_mints_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".draft");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let root = root.clone();
+                std::thread::spawn(move || DraftGlobalStore::at(root).create_all().unwrap())
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let marker = DraftGlobalStore::at(&root)
+            .read_home_marker()
+            .unwrap()
+            .unwrap();
+        // Exactly one marker file, no temp residue from a losing writer.
+        let residue: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.starts_with("home."))
+            .collect();
+        assert_eq!(residue, ["home.json"]);
+        assert!(marker.store_id.as_str().starts_with("gst_"));
+    }
+
+    #[test]
+    fn a_root_left_unmarked_by_a_crash_is_never_adopted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join(".draft");
+        // The crash window: the root exists, the marker was never written.
+        std::fs::create_dir(&root).unwrap();
+        DraftGlobalStore::at(&root).create_all().unwrap();
+        assert!(DraftGlobalStore::at(&root)
+            .read_home_marker()
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_malformed_or_unknown_marker_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = DraftGlobalStore::at(tmp.path().join(".draft"));
+        home.create_all().unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(home.home_marker()).unwrap()).unwrap();
+        value["unexpected"] = serde_json::json!(true);
+        std::fs::write(home.home_marker(), value.to_string()).unwrap();
+        assert!(home.read_home_marker().is_err());
+        std::fs::write(home.home_marker(), b"{").unwrap();
+        assert!(home.read_home_marker().is_err());
     }
 }

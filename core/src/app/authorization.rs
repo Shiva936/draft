@@ -33,12 +33,12 @@
 //! A revision is sealed content. An assessment, gate or decision that named
 //! only "the change" would silently transfer to work nobody looked at the
 //! moment a new revision was sealed. Each fact here binds a
-//! `ChangeRevisionId`, and the promotion path re-checks that binding rather
+//! `RevisionPackId`, and the promotion path re-checks that binding rather
 //! than trusting that it was right when written.
 
 use std::collections::BTreeSet;
 
-use draft_dcg_contract::ids::{ActorId, AssessmentId, ChangeRevisionId, DecisionId, EvidenceId};
+use draft_dcg_contract::ids::{ActorId, AssessmentId, DecisionId, EvidenceId, RevisionPackId};
 use draft_dcg_contract::security::SecurityFactRef;
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::Digest;
@@ -96,13 +96,13 @@ pub fn assess(stores: &AuthorizationStores, assessment: &Assessment) -> DraftRes
                 ),
             )
         })?;
-        if !evidence.covers(&assessment.revision) {
+        if !evidence.covers(&assessment.revision_pack) {
             return Err(DraftError::new(
                 DraftErrorKind::Validation,
                 format!(
                     "assessment '{}' judges revision '{}' using evidence '{evidence_id}' about \
                      '{}'; a judgement may not be carried across revisions",
-                    assessment.id, assessment.revision, evidence.revision
+                    assessment.id, assessment.revision_pack, evidence.revision_pack
                 ),
             ));
         }
@@ -127,7 +127,7 @@ pub struct GateRequirements {
 #[derive(Debug, Clone)]
 pub struct GateRequest {
     pub id: String,
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The exact definition and scope the revision was sealed against.
     pub definition: Digest,
     pub scope: Digest,
@@ -147,7 +147,7 @@ pub struct GateRequest {
 #[derive(Debug, Clone)]
 pub struct DecisionRequest {
     pub id: DecisionId,
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     pub outcome: DecisionOutcome,
     pub decided_by: ActorId,
     pub decided_at: Timestamp,
@@ -167,7 +167,7 @@ pub fn evaluate_gate(
 ) -> DraftResult<GateEvaluation> {
     let GateRequest {
         id,
-        revision,
+        revision_pack: revision,
         definition,
         scope,
         assessments,
@@ -210,7 +210,7 @@ pub fn evaluate_gate(
                 format!(
                     "gate '{id}' evaluates revision '{revision}' using assessment \
                      '{assessment_id}' about '{}'",
-                    assessment.revision
+                    assessment.revision_pack
                 ),
             ));
         }
@@ -310,7 +310,7 @@ pub fn evaluate_gate(
 
     let evaluation = GateEvaluation {
         id: id.clone(),
-        revision: revision.clone(),
+        revision_pack: revision.clone(),
         definition: definition.clone(),
         scope: scope.clone(),
         evidence,
@@ -339,7 +339,7 @@ pub fn decide(
 ) -> DraftResult<Decision> {
     let DecisionRequest {
         id,
-        revision,
+        revision_pack: revision,
         outcome,
         decided_by,
         decided_at,
@@ -360,7 +360,7 @@ pub fn decide(
                 DraftErrorKind::Validation,
                 format!(
                     "decision '{id}' approves revision '{revision}' citing a gate about '{}'",
-                    gate.revision
+                    gate.revision_pack
                 ),
             ));
         }
@@ -383,7 +383,7 @@ pub fn decide(
 
     let decision = Decision {
         id: id.clone(),
-        revision: revision.clone(),
+        revision_pack: revision.clone(),
         outcome: outcome.clone(),
         decided_by: decided_by.clone(),
         decided_at: *decided_at,
@@ -397,7 +397,7 @@ pub fn decide(
 /// The evidence a revision has, for a caller assembling an assessment.
 pub fn evidence_for(
     stores: &AuthorizationStores,
-    revision: &ChangeRevisionId,
+    revision: &RevisionPackId,
     ids: &BTreeSet<EvidenceId>,
 ) -> DraftResult<Vec<Evidence>> {
     let mut found = Vec::new();
@@ -420,7 +420,7 @@ pub fn evidence_for(
 /// current permission.
 fn in_force<'a>(
     offered: &'a [GateWaiver],
-    revision: &ChangeRevisionId,
+    revision: &RevisionPackId,
     condition: &str,
     now: Timestamp,
 ) -> Option<&'a GateWaiver> {

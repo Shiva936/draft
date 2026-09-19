@@ -175,7 +175,7 @@ pub fn classify_snapshot(
 /// Classify the resources one transition touches.
 ///
 /// Works from the change set's own state summaries rather than from a snapshot,
-/// which is what lets an imported Change be classified in a project that never
+/// which is what lets a ChangePack be classified in a project that never
 /// observed its states: a change set carries both sides, and that is all
 /// classification needs.
 pub fn classify_change_set(

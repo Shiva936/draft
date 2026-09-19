@@ -26,15 +26,15 @@ struct StoredFact {
 
 #[test]
 fn a_sealed_change_revision_cannot_be_altered_behind_its_id() {
-    use draft_core::dcg::revision::{ChangeRevision, RevisionStore};
-    use draft_dcg_contract::ids::{ActorId, ChangeId, ChangeRevisionId};
+    use draft_core::dcg::revision_pack::{RevisionPack, RevisionPackStore};
+    use draft_dcg_contract::ids::{ActorId, ChangePackId, RevisionPackId};
     use draft_dcg_contract::value::Timestamp;
     use draft_dcg_contract::{BaselineId, Digest, ProjectStateRoot};
 
-    fn revision(state_root: &[u8]) -> ChangeRevision {
-        ChangeRevision {
-            id: ChangeRevisionId::parse("rev_000000000001").unwrap(),
-            change: ChangeId::parse("chg_000000000001").unwrap(),
+    fn revision(state_root: &[u8]) -> RevisionPack {
+        RevisionPack {
+            id: RevisionPackId::parse("rpk_000000000001").unwrap(),
+            change_pack: ChangePackId::parse("cpk_000000000001").unwrap(),
             definition: Digest::of_bytes(b"definition"),
             scope: Digest::of_bytes(b"scope"),
             base_baseline: BaselineId::new(Digest::of_bytes(b"base")),
@@ -46,20 +46,20 @@ fn a_sealed_change_revision_cannot_be_altered_behind_its_id() {
     }
 
     let directory = tempfile::tempdir().unwrap();
-    let store = RevisionStore::new(directory.path());
+    let store = RevisionPackStore::new(directory.path());
     let sealed = revision(b"accepted-state");
     store.put(&sealed).unwrap();
     // Re-sealing identical content is idempotent.
     store.put(&sealed).unwrap();
     assert_eq!(
         store
-            .get(&ChangeRevisionId::parse("rev_000000000001").unwrap())
+            .get(&RevisionPackId::parse("rpk_000000000001").unwrap())
             .unwrap(),
         Some(sealed)
     );
 
     // The substitution that matters: the same revision id now claiming a
-    // different accepted state. Every judgement bound to `rev_…` would
+    // different accepted state. Every judgement bound to `rpk_…` would
     // silently transfer to work nobody reviewed.
     let error = store.put(&revision(b"substituted-state")).unwrap_err();
     assert!(
@@ -75,16 +75,16 @@ fn a_sealed_change_revision_cannot_be_altered_behind_its_id() {
 
 #[test]
 fn a_change_definition_and_its_scope_resolution_cannot_be_altered_behind_their_ids() {
-    use draft_core::dcg::definition::{ChangeDefinition, DefinitionStore, ScopeResolution};
-    use draft_dcg_contract::ids::{ActorId, ChangeId, ResourceId};
+    use draft_core::dcg::definition::{ChangePackDefinition, DefinitionStore, ScopeResolution};
+    use draft_dcg_contract::ids::{ActorId, ChangePackId, ResourceId};
     use draft_dcg_contract::value::Timestamp;
     use draft_dcg_contract::{BaselineId, Digest};
 
     let directory = tempfile::tempdir().unwrap();
     let store = DefinitionStore::new(directory.path().join("def"), directory.path().join("scope"));
 
-    let definition = ChangeDefinition {
-        change: ChangeId::parse("chg_000000000001").unwrap(),
+    let definition = ChangePackDefinition {
+        change_pack: ChangePackId::parse("cpk_000000000001").unwrap(),
         intent: "tighten the submit gate".into(),
         scope_declaration: [ResourceId::parse("res_000000000001").unwrap()]
             .into_iter()
@@ -99,7 +99,7 @@ fn a_change_definition_and_its_scope_resolution_cannot_be_altered_behind_their_i
     // A definition stored under its own digest cannot be substituted: widening
     // the declared scope is a different definition, so it gets a different id
     // rather than quietly replacing what was reviewed.
-    let widened = ChangeDefinition {
+    let widened = ChangePackDefinition {
         scope_declaration: [
             ResourceId::parse("res_000000000001").unwrap(),
             ResourceId::parse("res_000000000002").unwrap(),
@@ -120,7 +120,7 @@ fn a_change_definition_and_its_scope_resolution_cannot_be_altered_behind_their_i
     );
 
     let resolution = ScopeResolution {
-        change: ChangeId::parse("chg_000000000001").unwrap(),
+        change_pack: ChangePackId::parse("cpk_000000000001").unwrap(),
         definition: digest.clone(),
         base_baseline: BaselineId::new(Digest::of_bytes(b"base")),
         resources: [ResourceId::parse("res_000000000001").unwrap()]
@@ -195,7 +195,7 @@ fn evidence_cannot_be_altered_behind_its_id() {
     };
     use draft_core::evidence::{Evidence, EvidenceOutcome, EvidenceStore};
     use draft_dcg_contract::identifier::NamespacedId;
-    use draft_dcg_contract::ids::{ChangeRevisionId, EvidenceId, ObservationId};
+    use draft_dcg_contract::ids::{EvidenceId, ObservationId, RevisionPackId};
     use draft_dcg_contract::observation::{ObservationDigest, ObservationRef};
     use draft_dcg_contract::producer::ProducerIdentity;
     use draft_dcg_contract::security::PolicyDigest;
@@ -205,7 +205,7 @@ fn evidence_cannot_be_altered_behind_its_id() {
     fn evidence(outcome: EvidenceOutcome) -> Evidence {
         Evidence {
             id: EvidenceId::parse("evd_000000000001").unwrap(),
-            revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+            revision_pack: RevisionPackId::parse("rpk_000000000001").unwrap(),
             inputs: [ObservationRef {
                 id: ObservationId::parse("obs_000000000001").unwrap(),
                 digest: ObservationDigest::new(Digest::of_bytes(b"observed")),
@@ -254,7 +254,7 @@ fn evidence_cannot_be_altered_behind_its_id() {
 fn a_recorded_decision_cannot_be_altered_behind_its_id() {
     use draft_core::dcg::decision::{Decision, DecisionOutcome, DecisionStore};
     use draft_dcg_contract::identifier::ScopedId;
-    use draft_dcg_contract::ids::{ActorId, ChangeRevisionId, DecisionId};
+    use draft_dcg_contract::ids::{ActorId, DecisionId, RevisionPackId};
     use draft_dcg_contract::security::{SecurityControlKindId, SecurityFactRef};
     use draft_dcg_contract::value::Timestamp;
     use draft_dcg_contract::Digest;
@@ -263,7 +263,7 @@ fn a_recorded_decision_cannot_be_altered_behind_its_id() {
     let store = DecisionStore::new(directory.path());
     let rejected = Decision {
         id: DecisionId::parse("dec_000000000001").unwrap(),
-        revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+        revision_pack: RevisionPackId::parse("rpk_000000000001").unwrap(),
         outcome: DecisionOutcome::Rejected {
             reason: "not this approach".into(),
         },
@@ -301,7 +301,7 @@ fn a_gate_evaluation_cannot_be_altered_behind_its_id() {
     };
     use draft_core::gate::{GateCondition, GateEvaluation, GateEvaluationStore};
     use draft_dcg_contract::identifier::NamespacedId;
-    use draft_dcg_contract::ids::ChangeRevisionId;
+    use draft_dcg_contract::ids::RevisionPackId;
     use draft_dcg_contract::security::PolicyDigest;
     use draft_dcg_contract::value::Timestamp;
     use draft_dcg_contract::Digest;
@@ -309,7 +309,7 @@ fn a_gate_evaluation_cannot_be_altered_behind_its_id() {
     fn gate(satisfied: bool) -> GateEvaluation {
         GateEvaluation {
             id: "gate_000000000001".into(),
-            revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+            revision_pack: RevisionPackId::parse("rpk_000000000001").unwrap(),
             definition: Digest::of_bytes(b"definition"),
             scope: Digest::of_bytes(b"scope"),
             evidence: Default::default(),
@@ -352,7 +352,7 @@ fn a_substituted_fact_stays_unreadable_rather_than_silently_repaired() {
     let store: ImmutableFactStore<StoredFact> = ImmutableFactStore::new(directory.path());
     let original = StoredFact {
         id: "dec_000000000001".into(),
-        revision: "rev_000000000001".into(),
+        revision: "rpk_000000000001".into(),
         outcome: "rejected".into(),
     };
     store.put("dec_000000000001", &original).unwrap();

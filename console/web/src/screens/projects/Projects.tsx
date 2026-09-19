@@ -195,7 +195,7 @@ export function Projects() {
                     <tr>
                       <th>Project</th>
                       <th>Health</th>
-                      <th className="shrink">Changes</th>
+                      <th className="shrink">ChangePacks</th>
                       <th className="shrink">Location</th>
                       <th className="shrink">Version</th>
                       <th className="shrink">Last activity</th>
@@ -361,7 +361,7 @@ function ProjectDetail({
     >
       <QueryState query={query} empty={<EmptyState inline icon="package" label="Project state is unavailable." />}>
         {(project: ProjectSummary) => {
-          const activeChange = project.changes.find((change) => change.submit_state !== "submitted") ?? project.changes[0];
+          const activeChange = project.change_packs.find((change) => change.submit_state !== "submitted") ?? project.change_packs[0];
           const openTasks = project.tasks.filter((task) => !["completed", "cancelled"].includes(task.status ?? "open"));
           const changes = Array.isArray((project.status as any)?.changes) ? (project.status as any).changes.length : null;
 
@@ -372,9 +372,9 @@ function ProjectDetail({
                   <Icon name="list-checks" size={16} />
                   Tasks
                 </button>
-                <button className="button" onClick={() => navigate(`/projects/${encodeURIComponent(workspaceId)}/work/changes`)}>
+                <button className="button" onClick={() => navigate(`/projects/${encodeURIComponent(workspaceId)}/work/packs`)}>
                   <Icon name="layers" size={16} />
-                  Changes
+                  ChangePacks
                 </button>
               </div>
 
@@ -383,8 +383,8 @@ function ProjectDetail({
                 <Definitions rows>
                   <dt>Open tasks</dt>
                   <dd>{formatCount(openTasks.length)}</dd>
-                  <dt>Changes</dt>
-                  <dd>{formatCount(project.changes.length)}</dd>
+                  <dt>ChangePacks</dt>
+                  <dd>{formatCount(project.change_packs.length)}</dd>
                   <dt>Needs attention</dt>
                   <dd>{formatCount(project.inbox.length)}</dd>
                   <dt>Uncommitted changes</dt>
@@ -401,7 +401,7 @@ function ProjectDetail({
                   >
                     <Icon name="layers" size={16} />
                     <div className="row-main">
-                      <strong className="mono">{activeChange.change_id}</strong>
+                      <strong className="mono">{activeChange.change_pack_id}</strong>
                       <small>{activeChange.name}</small>
                     </div>
                     <StatusBadge value={activeChange.submit_state} />

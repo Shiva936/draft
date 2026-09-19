@@ -10,7 +10,7 @@
 //! passed", and a submission gate that cannot tell them apart approves changes
 //! nobody verified.
 
-use crate::dcg::change_store::RevisionRecord;
+use crate::dcg::change_pack_store::ChangePackContentRevisionRecord;
 use crate::extension::provenance::ProducerRef;
 use crate::provenance::derived::DerivationInputs;
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
@@ -149,7 +149,7 @@ impl VerificationCheckResult {
 
 /// Aggregate recorded summaries by the same lattice as live results.
 ///
-/// A Change's stored evidence must read back exactly as it was written: the same
+/// A ChangePack's stored evidence must read back exactly as it was written: the same
 /// order of tests, the same refusal to let an optional pass stand in for a
 /// required gap, and the same rule that no checks is not a pass.
 pub fn aggregate_summaries(
@@ -647,14 +647,14 @@ pub fn project_producer() -> ProducerRef {
     }
 }
 
-/// The verification evidence persisted alongside a Change.
+/// The verification evidence persisted alongside a ChangePack.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VerifyEvidence {
     pub schema_version: u32,
-    pub change_id: String,
-    pub revision_id: String,
-    pub revision_digest: String,
+    pub change_pack_id: String,
+    pub content_revision_id: String,
+    pub content_revision_digest: String,
     pub dependency_digests: Vec<String>,
     /// Exactly what this evidence was derived from.
     pub inputs: DerivationInputs,
@@ -677,7 +677,7 @@ impl crate::contracts::VersionedContract for VerifyEvidence {
 }
 
 impl VerifyEvidence {
-    pub fn validate_binding(&self, revision: &RevisionRecord) -> DraftResult<()> {
+    pub fn validate_binding(&self, revision: &ChangePackContentRevisionRecord) -> DraftResult<()> {
         if !crate::contracts::supports_version(
             crate::contracts::ContractId::VerificationEvidence,
             self.schema_version,
@@ -690,14 +690,14 @@ impl VerifyEvidence {
                 ),
             ));
         }
-        if self.change_id != revision.change_id
-            || self.revision_id != revision.revision_id
-            || self.revision_digest != revision.revision_digest
+        if self.change_pack_id != revision.change_pack_id
+            || self.content_revision_id != revision.content_revision_id
+            || self.content_revision_digest != revision.content_revision_digest
             || self.dependency_digests != revision.resolved_dependency_digests
         {
             return Err(DraftError::new(
                 DraftErrorKind::CorruptData,
-                "verification evidence is bound to a different Change revision or dependencies",
+                "verification evidence is bound to a different ChangePack revision or dependencies",
             ));
         }
         if self.result_hash != self.compute_result_hash() {
@@ -721,9 +721,9 @@ impl VerifyEvidence {
     pub fn compute_result_hash(&self) -> String {
         hashing::canonical_hash(&serde_json::json!({
             "schema_version": self.schema_version,
-            "change_id": self.change_id,
-            "revision_id": self.revision_id,
-            "revision_digest": self.revision_digest,
+            "change_pack_id": self.change_pack_id,
+            "content_revision_id": self.content_revision_id,
+            "content_revision_digest": self.content_revision_digest,
             "dependency_digests": self.dependency_digests,
             "inputs": self.inputs,
             "aggregator_revision": self.aggregator_revision,
@@ -967,9 +967,9 @@ mod tests {
             schema_version: crate::contracts::current_version(
                 crate::contracts::ContractId::VerificationEvidence,
             ),
-            change_id: "chg_1".into(),
-            revision_id: "rev_1".into(),
-            revision_digest: "sha256:rev".into(),
+            change_pack_id: "cpk_1".into(),
+            content_revision_id: "content_1".into(),
+            content_revision_digest: "sha256:rev".into(),
             dependency_digests: vec![],
             inputs: DerivationInputs::new(
                 crate::provenance::derived::SubjectRef::ChangeSet {
@@ -989,18 +989,18 @@ mod tests {
             verification_key: None,
         };
         evidence.result_hash = evidence.compute_result_hash();
-        let revision = RevisionRecord {
+        let revision = ChangePackContentRevisionRecord {
             schema_version: crate::contracts::current_version(
-                crate::contracts::ContractId::RevisionRecord,
+                crate::contracts::ContractId::ChangePackContentRevisionRecord,
             ),
-            change_id: "chg_1".into(),
+            change_pack_id: "cpk_1".into(),
             manifest_digest: "sha256:manifest".into(),
-            revision_id: "rev_1".into(),
-            revision_number: 1,
-            revision_digest: "sha256:rev".into(),
+            content_revision_id: "content_1".into(),
+            content_revision_number: 1,
+            content_revision_digest: "sha256:rev".into(),
             base_digest: String::new(),
             content_digest: String::new(),
-            change_digest: String::new(),
+            change_set_digest: String::new(),
             target_digest: String::new(),
             resolved_dependency_digests: vec![],
             created_at: String::new(),

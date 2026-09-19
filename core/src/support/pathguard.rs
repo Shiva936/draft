@@ -2,8 +2,8 @@
 //!
 //! See `docs/internals/security.md`.
 //!
-//! Every path that enters Draft from an untrusted source — Change content,
-//! representations, imported `.draftpack` entries, export selection, promotion
+//! Every path that enters Draft from an untrusted source — ChangePack content,
+//! representations, installation archive entries, export selection, promotion
 //! and recovery targets, risk/test source scanning — must pass through this
 //! module. There is exactly one implementation of "is this path safe?" so the
 //! invariant cannot drift between callers.
@@ -73,7 +73,7 @@ pub fn is_draft_path(rel: &str) -> bool {
 }
 
 /// Validate a workspace-relative path string for use as *content* (a file that
-/// belongs to a Change, representation, import payload, or promotion/recovery plan).
+/// belongs to a ChangePack, representation, import payload, or promotion/recovery plan).
 ///
 /// On success returns the slash-normalized relative path. On failure returns
 /// the specific [`PathViolation`].
@@ -115,11 +115,11 @@ pub fn from_bytes(name: &[u8]) -> Result<String, PathViolation> {
 }
 
 /// Resolve `entry` against extraction root `base`, guaranteeing the result stays
-/// inside `base` and does not traverse a symlink. Used by the import extractor.
+/// inside `base` and does not traverse a symlink. Used by extension package extraction.
 ///
 /// This performs the textual checks of [`check_relative`] and then, walking the
 /// concrete on-disk path, rejects any existing component that is a symlink so a
-/// malicious archive cannot redirect writes outside the quarantine via a
+/// malicious archive cannot redirect writes outside `base` via a
 /// pre-seeded or same-archive symlink.
 pub fn safe_join(base: &Path, entry: &str) -> Result<PathBuf, PathViolation> {
     let rel = check_relative(entry)?;

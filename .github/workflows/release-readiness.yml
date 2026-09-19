@@ -180,8 +180,26 @@ jobs:
             exit 1
           }
 
+      - name: Release manifest tooling self-test
+        shell: bash
+        run: python3 scripts/release-manifest.py self-test
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # `fuzz/` is excluded from the root workspace, so nothing else notices
+      # when it stops compiling.
+      - name: Fuzz workspace check
+        if: runner.os == 'Linux'
+        run: cd fuzz && cargo check --all-targets
+
+      # Hermetic: every test runs against a temporary installation root and
+      # never touches this runner's own Draft. On Windows this includes the
+      # PowerShell `-ieq` comparator conformance test.
+      - name: Installation lifecycle
+        run: |
+          cargo test -p draft-core --lib installation::
+          cargo test -p draft-cli --test installation_lifecycle
 
       - name: Tests
         run: cargo test --workspace --all-targets

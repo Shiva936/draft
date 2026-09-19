@@ -304,12 +304,12 @@ mod tests {
     use crate::support::record_guard::{RevisionedRecordStore, DEFAULT_LOCK_TIMEOUT};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-    struct Change {
+    struct ChangePack {
         generation: u64,
         lifecycle: String,
     }
 
-    impl RevisionedRecord for Change {
+    impl RevisionedRecord for ChangePack {
         fn generation(&self) -> u64 {
             self.generation
         }
@@ -317,7 +317,7 @@ mod tests {
 
     struct Harness {
         _directory: tempfile::TempDir,
-        records: RevisionedRecordStore<Change>,
+        records: RevisionedRecordStore<ChangePack>,
         journals: MutationJournalStore,
     }
 
@@ -332,8 +332,8 @@ mod tests {
         }
     }
 
-    fn change(generation: u64, lifecycle: &str) -> Change {
-        Change {
+    fn change(generation: u64, lifecycle: &str) -> ChangePack {
+        ChangePack {
             generation,
             lifecycle: lifecycle.to_string(),
         }
@@ -341,17 +341,17 @@ mod tests {
 
     fn journal(
         expected: &ExpectedRecordState,
-        replacement: &Change,
+        replacement: &ChangePack,
         state: MutationJournalState,
     ) -> MutationJournal {
         MutationJournal {
             transaction_id: "txn_1".into(),
-            record_key: "chg_a1".into(),
+            record_key: "cpk_a1".into(),
             expected: JournalRecordState::from(expected),
             replacement: JournalRecordState::from(&ExpectedRecordState::of(replacement).unwrap()),
             audit_fact: AuditFactEnvelope {
                 activity_event_id: "evt_0000000000000001".into(),
-                payload: serde_json::json!({"kind": "ChangeCreated"}),
+                payload: serde_json::json!({"kind": "ChangePackCreated"}),
             },
             state,
         }
@@ -361,7 +361,7 @@ mod tests {
     fn a_creation_and_an_update_use_the_same_transaction_shape() {
         let harness = harness();
         // `Absent` as an expected state is what removes the ad-hoc creation
-        // path; ChangeCreated needs no special case.
+        // path; ChangePackCreated needs no special case.
         let created = journal(
             &ExpectedRecordState::Absent,
             &change(0, "active"),
@@ -369,7 +369,7 @@ mod tests {
         );
         assert_eq!(created.expected, JournalRecordState::Absent);
         harness.journals.write(&created).unwrap();
-        assert_eq!(harness.journals.load("chg_a1").unwrap().unwrap(), created);
+        assert_eq!(harness.journals.load("cpk_a1").unwrap().unwrap(), created);
     }
 
     #[test]
@@ -386,7 +386,7 @@ mod tests {
 
         let drain = harness
             .records
-            .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+            .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                 assert_eq!(resolve(guard, &prepared)?, JournalResolution::DidNotCommit);
                 enforce_barrier(&harness.journals, guard)
             })
@@ -395,7 +395,7 @@ mod tests {
             drain.is_none(),
             "no event may be emitted for a write that never landed"
         );
-        assert!(harness.journals.load("chg_a1").unwrap().is_none());
+        assert!(harness.journals.load("cpk_a1").unwrap().is_none());
     }
 
     #[test]
@@ -412,20 +412,20 @@ mod tests {
         harness.journals.write(&prepared).unwrap();
         harness
             .records
-            .compare_exchange("chg_a1", &ExpectedRecordState::Absent, &change(0, "active"))
+            .compare_exchange("cpk_a1", &ExpectedRecordState::Absent, &change(0, "active"))
             .unwrap();
 
         let drain = harness
             .records
-            .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+            .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                 enforce_barrier(&harness.journals, guard)
             })
             .unwrap()
             .expect("a committed transaction owes its event");
         assert_eq!(drain.activity_event_id, "evt_0000000000000001");
 
-        finalize(&harness.journals, "chg_a1").unwrap();
-        assert!(harness.journals.load("chg_a1").unwrap().is_none());
+        finalize(&harness.journals, "cpk_a1").unwrap();
+        assert!(harness.journals.load("cpk_a1").unwrap().is_none());
     }
 
     #[test]
@@ -441,14 +441,14 @@ mod tests {
         harness.journals.write(&prepared).unwrap();
         harness
             .records
-            .compare_exchange("chg_a1", &ExpectedRecordState::Absent, &change(0, "active"))
+            .compare_exchange("cpk_a1", &ExpectedRecordState::Absent, &change(0, "active"))
             .unwrap();
 
         let mut ids = Vec::new();
         for _ in 0..3 {
             let drain = harness
                 .records
-                .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+                .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                     enforce_barrier(&harness.journals, guard)
                 })
                 .unwrap();
@@ -473,7 +473,7 @@ mod tests {
         harness
             .records
             .compare_exchange(
-                "chg_a1",
+                "cpk_a1",
                 &ExpectedRecordState::Absent,
                 &change(0, "something-else-entirely"),
             )
@@ -481,7 +481,7 @@ mod tests {
 
         let error = harness
             .records
-            .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+            .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                 resolve(guard, &prepared)
             })
             .unwrap_err();
@@ -529,12 +529,12 @@ mod tests {
         harness.journals.write(&prepared).unwrap();
         harness
             .records
-            .compare_exchange("chg_a1", &ExpectedRecordState::Absent, &change(0, "active"))
+            .compare_exchange("cpk_a1", &ExpectedRecordState::Absent, &change(0, "active"))
             .unwrap();
 
         let owed = harness
             .records
-            .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+            .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                 let owed = enforce_barrier(&harness.journals, guard)?;
                 // Only now may the next mutation be prepared.
                 let current = guard.current_state()?;
@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(
             harness
                 .records
-                .read_unlocked("chg_a1")
+                .read_unlocked("cpk_a1")
                 .unwrap()
                 .unwrap()
                 .lifecycle,
@@ -558,9 +558,9 @@ mod tests {
     fn a_corrupt_journal_is_reported_rather_than_ignored() {
         // Ignoring it would silently drop the barrier for that record.
         let harness = harness();
-        std::fs::create_dir_all(harness.journals.journal_path("chg_a1").parent().unwrap()).unwrap();
-        std::fs::write(harness.journals.journal_path("chg_a1"), b"{not json").unwrap();
-        let error = harness.journals.load("chg_a1").unwrap_err();
+        std::fs::create_dir_all(harness.journals.journal_path("cpk_a1").parent().unwrap()).unwrap();
+        std::fs::write(harness.journals.journal_path("cpk_a1"), b"{not json").unwrap();
+        let error = harness.journals.load("cpk_a1").unwrap_err();
         assert_eq!(error.kind, DraftErrorKind::CorruptData);
     }
 

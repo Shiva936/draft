@@ -75,7 +75,7 @@ fn proto_contract_files_are_present_and_parseable() {
         .to_path_buf();
     let proto = repo.join("proto");
     for rel in [
-        "specs/change.md",
+        "specs/change-pack.md",
         "specs/receipt.md",
         "specs/event-ledger.md",
         "specs/signing.md",
@@ -88,7 +88,6 @@ fn proto_contract_files_are_present_and_parseable() {
         "specs/recovery.md",
         "specs/close.md",
         "specs/gc.md",
-        "specs/import-export.md",
         "specs/path-safety.md",
         "specs/future-readiness.md",
     ] {
@@ -472,7 +471,7 @@ fn simple_pattern_matches(pattern: &str, text: &str) -> bool {
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         }),
         _ => {
-            // ^<prefix>[A-Za-z0-9_-]+$ shapes (chg_/rcp_/cmp_/evt_ ids).
+            // ^<prefix>[A-Za-z0-9_-]+$ shapes (cpk_/rcp_/cmp_/evt_ ids).
             let Some(body) = pattern
                 .strip_prefix('^')
                 .and_then(|p| p.strip_suffix("[A-Za-z0-9_-]+$"))

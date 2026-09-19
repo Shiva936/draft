@@ -29,15 +29,15 @@ pub enum PolicyDecision {
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub schema_version: u32,
-    /// A submission is blocked unless the Change is explicitly approved.
+    /// A submission is blocked unless the ChangePack is explicitly approved.
     pub require_approval_for_promotion: bool,
     /// An unresolved `critical` risk blocks promotion.
     pub block_on_critical_risk: bool,
-    /// A `high` risk Change requires approval before submission.
+    /// A `high` risk ChangePack requires approval before submission.
     pub require_approval_on_high_risk: bool,
     /// If the workspace hash changed since verification, re-verify before submission.
     pub require_reverify_on_workspace_change: bool,
-    /// Imported Changes must be locally re-verified before they can be promoted.
+    /// Imported ChangePacks must be locally re-verified before they can be promoted.
     pub require_local_verify_for_imports: bool,
     /// Intents requiring the full check set rather than the change-scoped
     /// selection. Namespaced intent ids, contributed or project-configured.

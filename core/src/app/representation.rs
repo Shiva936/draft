@@ -45,9 +45,9 @@ use crate::dcg::representation::{
     ConflictClaim, ConflictScope, RepresentationPayload, RepresentationSummary, ReviewUnit,
 };
 use crate::dcg::resource::ResourceId;
-use crate::dcg::revision::ChangeRevision;
+use crate::dcg::revision_pack::RevisionPack;
 use crate::evidence::representation::{
-    ChangeRepresentation, ChangeRepresentationBundle, RepresentationStore,
+    RepresentationStore, RevisionPackRepresentation, RevisionPackRepresentationBundle,
 };
 use crate::provenance::derived::DerivationProvenance;
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
@@ -64,7 +64,7 @@ pub const NEUTRAL_STRATEGY: &str = "draft.core/state-transition";
 
 /// What the producer needs told, as opposed to what it reads.
 pub struct RepresentationInputs<'a> {
-    pub revision: &'a ChangeRevision,
+    pub revision: &'a RevisionPack,
     /// The exact observations that established the state being explained.
     pub observations: BTreeSet<ObservationRef>,
     /// The state each touched Resource holds now. Absent means removed.
@@ -88,7 +88,7 @@ pub struct ResolvedStrategy {
 }
 
 /// Derive the bundle explaining one sealed revision.
-pub fn derive(inputs: RepresentationInputs<'_>) -> DraftResult<ChangeRepresentationBundle> {
+pub fn derive(inputs: RepresentationInputs<'_>) -> DraftResult<RevisionPackRepresentationBundle> {
     let revision = inputs.revision;
     let mut representations = Vec::new();
     // The rules the explanation ran under: which strategy each Resource
@@ -123,7 +123,7 @@ pub fn derive(inputs: RepresentationInputs<'_>) -> DraftResult<ChangeRepresentat
             }
         }
 
-        representations.push(ChangeRepresentation {
+        representations.push(RevisionPackRepresentation {
             representation_id: representation_id.clone(),
             resource_id: resource.clone(),
             strategy_id: parse_strategy(&strategy_id)?,
@@ -165,9 +165,9 @@ pub fn derive(inputs: RepresentationInputs<'_>) -> DraftResult<ChangeRepresentat
     }
 
     rules.sort();
-    let bundle = ChangeRepresentationBundle {
+    let bundle = RevisionPackRepresentationBundle {
         schema_version: 0,
-        revision: revision.id.clone(),
+        revision_pack: revision.id.clone(),
         inputs: inputs.observations,
         producer: inputs.producer,
         configuration: Digest::of_bytes(rules.join("\n").as_bytes()),
@@ -180,7 +180,10 @@ pub fn derive(inputs: RepresentationInputs<'_>) -> DraftResult<ChangeRepresentat
 }
 
 /// Record a bundle, converging when the same explanation is derived again.
-pub fn record(store: &RepresentationStore, bundle: &ChangeRepresentationBundle) -> DraftResult<()> {
+pub fn record(
+    store: &RepresentationStore,
+    bundle: &RevisionPackRepresentationBundle,
+) -> DraftResult<()> {
     // One revision has one explanation, and the first one stands.
     //
     // This matters because sealing the same state twice converges on the same
@@ -194,7 +197,7 @@ pub fn record(store: &RepresentationStore, bundle: &ChangeRepresentationBundle) 
     // Deliberately not last-writer-wins. The store still refuses a *different*
     // explanation written directly beneath the same revision; what this decides
     // is only that a re-seal does not re-explain.
-    if store.get(&bundle.revision)?.is_some() {
+    if store.get(&bundle.revision_pack)?.is_some() {
         return Ok(());
     }
     store.put(bundle)

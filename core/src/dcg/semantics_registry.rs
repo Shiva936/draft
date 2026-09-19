@@ -19,7 +19,7 @@
 //! # Retention is what makes history verifiable later
 //!
 //! Contracts are **retained**, not resolved on demand from whatever is
-//! installed. They are GC roots and travel in DraftPack exports, so verifying
+//! installed. They are GC roots, so verifying
 //! what a five-year-old Baseline meant never requires the extension that
 //! contributed it to still exist — or to still say the same thing.
 //!

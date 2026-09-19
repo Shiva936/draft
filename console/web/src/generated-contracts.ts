@@ -19,11 +19,11 @@ export type TaskDefinition = { schema_version: 1, id: string, name: string, goal
 
 export type TaskView = { task: TaskDefinition, health: string, review_status: string, recommended_action: string, execution_count: number, evidence_count: number, produced_changes: Array<string>, };
 
-export type ChangeSummary = { change_id: string, name: string, intent: string, submit_state: string, import_state: string | null, revision: number | string | null, valid_actions: Array<string>, };
+export type ChangePackSummary = { change_pack_id: string, name: string, intent: string, submit_state: string, revision: number | string | null, valid_actions: Array<string>, };
 
 export type InboxItem = { id: string | null, status: string, kind: string, subject_id: string, next_action: string, severity: string | null, };
 
-export type ProjectSummary = { project: RegistryProject, revision: WorkspaceRevision, status: Record<string, unknown>, tasks: Array<TaskDefinition>, changes: Array<ChangeSummary>, inbox: Array<InboxItem>, };
+export type ProjectSummary = { project: RegistryProject, revision: WorkspaceRevision, status: Record<string, unknown>, tasks: Array<TaskDefinition>, change_packs: Array<ChangePackSummary>, inbox: Array<InboxItem>, };
 
 export type ResourceLocator = { scheme: string, body: string, };
 
@@ -91,7 +91,7 @@ export type ReviewUnit = { unit_id: string, resource_id: string, label: string |
  */
 summary: Record<string, number>, };
 
-export type ChangeView = { change_set_digest: string, base_snapshot_digest: string, result_snapshot_digest: string, observation_context_digest: string, 
+export type ChangePackView = { change_set_digest: string, base_snapshot_digest: string, result_snapshot_digest: string, observation_context_digest: string, 
 /**
  * What changed, proved.
  */
@@ -132,7 +132,7 @@ uncertainties: Array<RollbackUncertainty>,
  */
 permanently_unverifiable_domains: Array<string>, };
 
-export type SearchResult = { kind: string, workspace_id: string | null, id: string | null, change_id: string | null, title: string, subtitle: string | null, };
+export type SearchResult = { kind: string, workspace_id: string | null, id: string | null, change_pack_id: string | null, title: string, subtitle: string | null, };
 
 export type ExtensionCatalogLocationDto = { "kind": "local_directory", path: string, } | { "kind": "https", url: string, };
 
@@ -162,20 +162,13 @@ export type ApiErrorBodyDto = { code: string, message: string, details: unknown,
 
 export type ApiFailure = { schema_version: 1, error: ApiErrorBodyDto, };
 
-export type CanonicalRevisions = { registry: number, workspace: string | null, change: string | null, policy: string | null, };
+export type CanonicalRevisions = { registry: number, workspace: string | null, change_pack: string | null, policy: string | null, };
 
 export type ModelFreshness = "loading" | "fresh" | "stale" | "partial" | "unavailable";
 
-export type ConsoleScope = "GLOBAL" | "PROJECT" | "CHANGE" | "BASELINE";
+export type ConsoleScope = "GLOBAL" | "PROJECT" | "CHANGE_PACK" | "BASELINE";
 
-export type ConsoleSubject = { scope: ConsoleScope, workspace_id: string | null, change_id: string | null, 
-/**
- * Required by, and only meaningful for, the `BASELINE` scope.
- *
- * Always serialized, like the sibling ids: a subject that sometimes
- * carries the field and sometimes omits it is two shapes on the wire.
- */
-baseline_id: string | null, };
+export type ConsoleSubject = { "scope": "GLOBAL", } | { "scope": "PROJECT", workspace_id: string, } | { "scope": "CHANGE_PACK", workspace_id: string, change_pack_id: string, } | { "scope": "BASELINE", workspace_id: string, baseline_id: string, };
 
 export type SelectOption = { value: string, label: string, };
 
@@ -236,7 +229,7 @@ export const CONSOLE_NAVIGATION = {
  ],
  PROJECT: [
   { label: "Overview", children: [] },
-  { label: "Work", children: ["Tasks", "Changes"] },
+  { label: "Work", children: ["Tasks", "Packs"] },
   { label: "Resources", children: ["Resources", "Observation"] },
   { label: "Baselines", children: ["Baselines", "Publications"] },
   { label: "Activity", children: [] },

@@ -62,7 +62,7 @@ const ROUTES: &[&str] = &[
     // client's operation id like every other mutation.
     "/api/v1/projects/:workspace_id/graph",
     "/api/v1/projects/:workspace_id/graph/baseline",
-    "/api/v1/projects/:workspace_id/graph/authorization/:change_id/:revision_id",
+    "/api/v1/projects/:workspace_id/graph/authorization/:change_pack_id/:revision_pack_id",
     "/api/v1/projects/:workspace_id/graph/publications",
     // §8.3's Providers and Baselines sections. Reads only; a binding changes
     // through the audited action path.
@@ -127,11 +127,19 @@ const ACTION_MAPPINGS: &[(&str, &str, &str)] = &[
     ),
     (
         "project_action",
-        "graph-change-abandon",
-        "dcg.change.abandon",
+        "graph-change-pack-abandon",
+        "dcg.change_pack.abandon",
     ),
-    ("project_action", "graph-change-open", "dcg.change.open"),
-    ("project_action", "graph-change-reopen", "dcg.change.reopen"),
+    (
+        "project_action",
+        "graph-change-pack-open",
+        "dcg.change_pack.open",
+    ),
+    (
+        "project_action",
+        "graph-change-pack-reopen",
+        "dcg.change_pack.reopen",
+    ),
     (
         "project_action",
         "graph-decision-record",
@@ -160,7 +168,11 @@ const ACTION_MAPPINGS: &[(&str, &str, &str)] = &[
         "dcg.publication.withdraw_attempt",
     ),
     ("project_action", "graph-review-record", "dcg.review.record"),
-    ("project_action", "graph-revision-seal", "dcg.revision.seal"),
+    (
+        "project_action",
+        "graph-revision-seal",
+        "dcg.revision_pack.seal",
+    ),
     ("project_action", "hook-run", "hook.run"),
     ("project_action", "hook-set", "hook.set"),
     ("project_action", "hook-unset", "hook.unset"),

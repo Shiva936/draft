@@ -1,7 +1,6 @@
 use draft_ipc::console_application::{
     CanonicalRevisions, ConsoleActionInvocation, ConsoleHandshakeRequest, ConsoleModelRequest,
-    ConsoleProtocolVersion, ConsoleScope, ConsoleSubject, ConsoleWatchRequest,
-    CONSOLE_CAPABILITIES,
+    ConsoleProtocolVersion, ConsoleSubject, ConsoleWatchRequest, CONSOLE_CAPABILITIES,
 };
 use draft_ipc::{socket_path, HandshakeRequest, Request, IPC_CAPABILITIES, IPC_PROTOCOL};
 use draft_sessions::{ManualClock, SessionManager};
@@ -154,7 +153,7 @@ fn daemon_dispatcher_covers_control_plane() {
         &store,
         &sessions,
         "9",
-        "dcg.change.open",
+        "dcg.change_pack.open",
         json!({
             "path": workspace.path().display().to_string(),
             "intent": "update app",
@@ -162,7 +161,7 @@ fn daemon_dispatcher_covers_control_plane() {
         }),
     );
     assert!(resp.ok, "{:?}", resp.error);
-    let change_id = resp.result.as_ref().unwrap()["id"]
+    let change_pack_id = resp.result.as_ref().unwrap()["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -173,10 +172,10 @@ fn daemon_dispatcher_covers_control_plane() {
         &store,
         &sessions,
         "10",
-        "dcg.revision.seal",
+        "dcg.revision_pack.seal",
         json!({
             "path": workspace.path().display().to_string(),
-            "change": change_id
+            "change_pack_id": change_pack_id
         }),
     );
     assert!(resp.ok, "{:?}", resp.error);
@@ -192,7 +191,7 @@ fn daemon_dispatcher_covers_control_plane() {
         "dcg.gate.evaluate",
         json!({
             "path": workspace.path().display().to_string(),
-            "revision": revision_id
+            "revision_pack_id": revision_id
         }),
     );
     assert!(resp.ok, "{:?}", resp.error);
@@ -204,21 +203,21 @@ fn daemon_dispatcher_covers_control_plane() {
     for (id, method, extra) in [
         ("12", "dcg.project", json!({})),
         ("13", "dcg.baseline", json!({})),
-        ("14", "dcg.change.list", json!({})),
+        ("14", "dcg.change_pack.list", json!({})),
         (
             "15",
             "dcg.evidence.record",
-            json!({ "revision": revision_id }),
+            json!({ "revision_pack_id": revision_id }),
         ),
         (
             "16",
             "dcg.assessment.record",
-            json!({ "revision": revision_id, "risk": "low", "rationale": "reviewed" }),
+            json!({ "revision_pack_id": revision_id, "risk": "low", "rationale": "reviewed" }),
         ),
         (
             "17",
             "dcg.authorization",
-            json!({ "change": change_id, "revision": revision_id }),
+            json!({ "change_pack_id": change_pack_id, "revision_pack_id": revision_id }),
         ),
         ("18", "receipt.list", json!({})),
         ("19", "events.list", json!({})),
@@ -239,7 +238,7 @@ fn daemon_dispatcher_covers_control_plane() {
         &store,
         &sessions,
         "change-views",
-        "dcg.change.list",
+        "dcg.change_pack.list",
         json!({ "path": workspace.path().display().to_string() }),
     );
     assert!(summaries.ok, "{:?}", summaries.error);
@@ -250,8 +249,8 @@ fn daemon_dispatcher_covers_control_plane() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|change| change["change"] == change_id)
-        .expect("the Change the daemon opened is listed");
+        .find(|change| change["change_pack"] == change_pack_id)
+        .expect("the ChangePack the daemon opened is listed");
     assert_eq!(opened["lifecycle"], "active");
     assert!(
         opened["revisions"]
@@ -259,7 +258,7 @@ fn daemon_dispatcher_covers_control_plane() {
             .unwrap()
             .iter()
             .any(|revision| revision["id"] == revision_id),
-        "the sealed revision is listed against its Change"
+        "the sealed revision is listed against its ChangePack"
     );
 
     let receipts = call(
@@ -594,12 +593,7 @@ fn console_global_snapshot_uses_fixed_navigation() {
             "console.snapshot",
             serde_json::to_value(ConsoleModelRequest {
                 application_session_id: session.clone(),
-                subject: ConsoleSubject {
-                    scope: ConsoleScope::Global,
-                    workspace_id: None,
-                    change_id: None,
-                    baseline_id: None,
-                },
+                subject: ConsoleSubject::global(),
             })
             .unwrap(),
         ),
@@ -681,19 +675,19 @@ fn console_actions_are_revision_bound_single_use_and_operation_idempotent() {
         &store,
         &sessions,
         "change",
-        "dcg.change.open",
+        "dcg.change_pack.open",
         json!({ "path": path, "intent": "console action", "scope": ["app.txt"] }),
     );
     assert!(change.ok, "{:?}", change.error);
-    let change_id = change.result.unwrap()["id"].as_str().unwrap().to_string();
+    let change_pack_id = change.result.unwrap()["id"].as_str().unwrap().to_string();
 
     std::fs::write(workspace.path().join("app.txt"), "changed\n").unwrap();
     let sealed = call(
         &store,
         &sessions,
         "seal",
-        "dcg.revision.seal",
-        json!({ "path": path, "change": change_id }),
+        "dcg.revision_pack.seal",
+        json!({ "path": path, "change_pack_id": change_pack_id }),
     );
     assert!(sealed.ok, "{:?}", sealed.error);
     let revision_id = sealed.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -726,11 +720,9 @@ fn console_actions_are_revision_bound_single_use_and_operation_idempotent() {
             "console.snapshot",
             serde_json::to_value(ConsoleModelRequest {
                 application_session_id: application_session_id.clone(),
-                subject: ConsoleSubject {
-                    scope: ConsoleScope::Change,
-                    workspace_id: Some(workspace_id.clone()),
-                    change_id: Some(change_id.clone()),
-                    baseline_id: None,
+                subject: ConsoleSubject::ChangePack {
+                    workspace_id: workspace_id.clone(),
+                    change_pack_id: change_pack_id.clone(),
                 },
             })
             .unwrap(),
@@ -767,11 +759,9 @@ fn console_actions_are_revision_bound_single_use_and_operation_idempotent() {
             "console.snapshot",
             serde_json::to_value(ConsoleModelRequest {
                 application_session_id: no_capability_session,
-                subject: ConsoleSubject {
-                    scope: ConsoleScope::Change,
-                    workspace_id: Some(workspace_id),
-                    change_id: Some(change_id),
-                    baseline_id: None,
+                subject: ConsoleSubject::ChangePack {
+                    workspace_id,
+                    change_pack_id,
                 },
             })
             .unwrap(),
@@ -811,7 +801,7 @@ fn console_actions_are_revision_bound_single_use_and_operation_idempotent() {
         // The action establishes evidence about one exact revision, and there
         // is no default for which — a Console that omitted it would be asking
         // Draft to pick what gets verified.
-        arguments: [("revision".to_string(), json!(revision_id))]
+        arguments: [("revision_pack_id".to_string(), json!(revision_id))]
             .into_iter()
             .collect(),
     };
@@ -1456,7 +1446,7 @@ fn source_actions_carry_their_authoritative_gates() {
 ///
 /// Both halves matter. The first proves an evidence fact landing invalidates a
 /// descriptor whose offer rested on it; the second proves the same for the
-/// Change's own lifecycle. A build that only compared descriptor to request
+/// ChangePack's own lifecycle. A build that only compared descriptor to request
 /// would accept both.
 #[test]
 fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
@@ -1505,18 +1495,18 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
         &store,
         &sessions,
         "change",
-        "dcg.change.open",
+        "dcg.change_pack.open",
         json!({ "path": path, "intent": "stale action", "scope": ["app.txt"] }),
     );
     assert!(change.ok, "{:?}", change.error);
-    let change_id = change.result.unwrap()["id"].as_str().unwrap().to_string();
+    let change_pack_id = change.result.unwrap()["id"].as_str().unwrap().to_string();
     std::fs::write(workspace.path().join("app.txt"), "changed\n").unwrap();
     let sealed = call(
         &store,
         &sessions,
         "seal",
-        "dcg.revision.seal",
-        json!({ "path": path, "change": change_id }),
+        "dcg.revision_pack.seal",
+        json!({ "path": path, "change_pack_id": change_pack_id }),
     );
     assert!(sealed.ok, "{:?}", sealed.error);
     let revision_id = sealed.result.unwrap()["id"].as_str().unwrap().to_string();
@@ -1553,11 +1543,9 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
                 "console.snapshot",
                 serde_json::to_value(ConsoleModelRequest {
                     application_session_id: session.to_string(),
-                    subject: ConsoleSubject {
-                        scope: ConsoleScope::Change,
-                        workspace_id: Some(workspace_id.clone()),
-                        change_id: Some(change_id.clone()),
-                        baseline_id: None,
+                    subject: ConsoleSubject::ChangePack {
+                        workspace_id: workspace_id.clone(),
+                        change_pack_id: change_pack_id.clone(),
                     },
                 })
                 .unwrap(),
@@ -1596,7 +1584,7 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
         &sessions,
         "record",
         "dcg.evidence.record",
-        json!({ "path": path, "revision": revision_id }),
+        json!({ "path": path, "revision_pack_id": revision_id }),
     );
     assert!(recorded.ok, "{:?}", recorded.error);
 
@@ -1614,7 +1602,7 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
                 // the descriptor-versus-request comparison passes and only the
                 // authoritative recheck can refuse this.
                 expected_revisions,
-                arguments: [("revision".to_string(), json!(revision_id))]
+                arguments: [("revision_pack_id".to_string(), json!(revision_id))]
                     .into_iter()
                     .collect(),
             })
@@ -1634,15 +1622,15 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
         error.message
     );
 
-    // --- the Change's own lifecycle moves between offer and invocation ------
+    // --- the ChangePack's own lifecycle moves between offer and invocation ------
     let session = open_session("stale-change");
     let (capability, expected_revisions) = descriptor(&snapshot(&session), "dcg.gate.evaluate");
     let abandoned = call(
         &store,
         &sessions,
         "abandon",
-        "dcg.change.abandon",
-        json!({ "path": path, "change": change_id }),
+        "dcg.change_pack.abandon",
+        json!({ "path": path, "change_pack_id": change_pack_id }),
     );
     assert!(abandoned.ok, "{:?}", abandoned.error);
 
@@ -1657,7 +1645,7 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
                 invocation_capability: capability,
                 operation_id: "op_stale_change".into(),
                 expected_revisions,
-                arguments: [("revision".to_string(), json!(revision_id))]
+                arguments: [("revision_pack_id".to_string(), json!(revision_id))]
                     .into_iter()
                     .collect(),
             })
@@ -1667,7 +1655,7 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
     );
     assert!(
         !refused.ok,
-        "a descriptor issued before the Change was abandoned must not act"
+        "a descriptor issued before the ChangePack was abandoned must not act"
     );
     let error = refused.error.unwrap();
     assert_eq!(error.code, "STALE_CONSOLE_ACTION");
@@ -1678,7 +1666,7 @@ fn a_descriptor_is_refused_after_authoritative_state_moves_beneath_it() {
     );
 }
 
-/// The Console's Change navigation names the acts the ontology distinguishes.
+/// The Console's ChangePack navigation names the acts the ontology distinguishes.
 ///
 /// `draftd` is the authority for what a frontend may render, so a stale entry
 /// here is a stale entry everywhere. The retired names are asserted absent
@@ -1732,11 +1720,11 @@ fn console_change_navigation_names_the_acts_and_not_the_retired_ones() {
         &store,
         &sessions,
         "change",
-        "dcg.change.open",
+        "dcg.change_pack.open",
         json!({ "path": path, "intent": "navigation", "scope": ["app.txt"] }),
     );
     assert!(change.ok, "{:?}", change.error);
-    let change_id = change.result.unwrap()["id"].as_str().unwrap().to_string();
+    let change_pack_id = change.result.unwrap()["id"].as_str().unwrap().to_string();
     // Seal one, so the per-revision views have something to be about. They are
     // deliberately absent rather than empty before a revision exists: an empty
     // impact report would claim a revision touches nothing.
@@ -1745,8 +1733,8 @@ fn console_change_navigation_names_the_acts_and_not_the_retired_ones() {
         &store,
         &sessions,
         "seal",
-        "dcg.revision.seal",
-        json!({ "path": path, "change": change_id }),
+        "dcg.revision_pack.seal",
+        json!({ "path": path, "change_pack_id": change_pack_id }),
     );
     assert!(sealed.ok, "{:?}", sealed.error);
 
@@ -1778,11 +1766,9 @@ fn console_change_navigation_names_the_acts_and_not_the_retired_ones() {
             "console.snapshot",
             serde_json::to_value(ConsoleModelRequest {
                 application_session_id: session,
-                subject: ConsoleSubject {
-                    scope: ConsoleScope::Change,
-                    workspace_id: Some(workspace_id),
-                    change_id: Some(change_id),
-                    baseline_id: None,
+                subject: ConsoleSubject::ChangePack {
+                    workspace_id,
+                    change_pack_id,
                 },
             })
             .unwrap(),
@@ -1790,7 +1776,7 @@ fn console_change_navigation_names_the_acts_and_not_the_retired_ones() {
     );
     assert!(snapshot.ok, "{:?}", snapshot.error);
     let model = snapshot.result.unwrap();
-    // §8.3's fourteen Change views, in the plan's order.
+    // §8.3's fourteen ChangePack views, in the plan's order.
     assert_eq!(
         model["navigation"],
         json!([
@@ -1814,7 +1800,7 @@ fn console_change_navigation_names_the_acts_and_not_the_retired_ones() {
     for retired in ["Submit", "Approvals", "Risk", "Rollback", "Verify"] {
         assert!(
             !labels.contains(retired),
-            "the Change scope still offers the retired '{retired}' view"
+            "the ChangePack scope still offers the retired '{retired}' view"
         );
     }
 
@@ -1836,17 +1822,17 @@ fn console_change_navigation_names_the_acts_and_not_the_retired_ones() {
     ] {
         assert!(
             !content[view].is_null(),
-            "the Change model carries nothing for '{view}': {content}"
+            "the ChangePack model carries nothing for '{view}': {content}"
         );
     }
     // Impact is the Stage 11 report, reached through the application API
     // rather than re-derived here; coverage rides with it because "evidence
     // exists" and "this Resource is proved" are different claims.
-    assert!(content["impact"]["revision"].is_string(), "{content}");
+    assert!(content["impact"]["revision_pack"].is_string(), "{content}");
     assert!(!content["coverage"].is_null(), "{content}");
     // The representation is the neutral rendering, recorded at seal.
     assert!(
-        content["representations"]["revision"].is_string(),
+        content["representations"]["revision_pack"].is_string(),
         "{content}"
     );
     // Authorization carries the gate/decision/evidence facts as their own
@@ -1950,12 +1936,7 @@ fn console_project_navigation_is_the_frozen_information_architecture() {
             "console.snapshot",
             serde_json::to_value(ConsoleModelRequest {
                 application_session_id: session,
-                subject: ConsoleSubject {
-                    scope: ConsoleScope::Project,
-                    workspace_id: Some(workspace_id),
-                    change_id: None,
-                    baseline_id: None,
-                },
+                subject: ConsoleSubject::Project { workspace_id },
             })
             .unwrap(),
         ),
@@ -1963,13 +1944,13 @@ fn console_project_navigation_is_the_frozen_information_architecture() {
     assert!(snapshot.ok, "{:?}", snapshot.error);
     let model = snapshot.result.unwrap();
 
-    // Work owns Tasks and Changes. Flattening them to the top level would make
+    // Work owns Tasks and ChangePacks. Flattening them to the top level would make
     // them look like peers of Baselines, which is the distinction §8.3 draws.
     assert_eq!(
         model["navigation"],
         json!([
             {"label": "Overview", "children": []},
-            {"label": "Work", "children": ["Tasks", "Changes"]},
+            {"label": "Work", "children": ["Tasks", "Packs"]},
             {"label": "Resources", "children": ["Resources", "Observation"]},
             {"label": "Baselines", "children": ["Baselines", "Publications"]},
             {"label": "Activity", "children": []},
@@ -1996,7 +1977,7 @@ fn console_project_navigation_is_the_frozen_information_architecture() {
         );
     }
     assert!(content["work"]["tasks"].is_array(), "{content}");
-    assert!(content["work"]["changes"].is_array(), "{content}");
+    assert!(content["work"]["packs"].is_array(), "{content}");
     assert!(content["resources"]["resources"].is_object(), "{content}");
     assert!(content["extensions"]["extensions"].is_array(), "{content}");
 
@@ -2118,11 +2099,9 @@ fn console_baseline_scope_separates_the_three_roots_and_offers_no_mutation() {
             "console.snapshot",
             serde_json::to_value(ConsoleModelRequest {
                 application_session_id: session,
-                subject: ConsoleSubject {
-                    scope: ConsoleScope::Baseline,
-                    workspace_id: Some(workspace_id),
-                    change_id: None,
-                    baseline_id: Some(baseline_id.clone()),
+                subject: ConsoleSubject::Baseline {
+                    workspace_id,
+                    baseline_id: baseline_id.clone(),
                 },
             })
             .unwrap(),
@@ -2181,7 +2160,7 @@ fn console_baseline_scope_separates_the_three_roots_and_offers_no_mutation() {
 /// The permissive direction of a freshness bug is dangerous and the
 /// restrictive direction is merely infuriating, but both are wrong. A provider
 /// offer reads the binding store and nothing else, so sealing a revision three
-/// Changes away must not invalidate it — that is exactly the "sibling Change
+/// ChangePacks away must not invalidate it — that is exactly the "sibling ChangePack
 /// moving" property the invalidation map exists to preserve.
 #[test]
 fn an_unrelated_mutation_does_not_stale_a_provider_action() {
@@ -2258,12 +2237,7 @@ fn an_unrelated_mutation_does_not_stale_a_provider_action() {
             "console.snapshot",
             serde_json::to_value(ConsoleModelRequest {
                 application_session_id: session.clone(),
-                subject: ConsoleSubject {
-                    scope: ConsoleScope::Project,
-                    workspace_id: Some(workspace_id),
-                    change_id: None,
-                    baseline_id: None,
-                },
+                subject: ConsoleSubject::Project { workspace_id },
             })
             .unwrap(),
         ),
@@ -2284,13 +2258,13 @@ fn an_unrelated_mutation_does_not_stale_a_provider_action() {
     let expected_revisions: CanonicalRevisions =
         serde_json::from_value(model["revisions"].clone()).unwrap();
 
-    // A Change lands, which moves the Change store. The provider offer read
+    // A ChangePack lands, which moves the ChangePack store. The provider offer read
     // neither that store nor anything derived from it.
     let change = call(
         &store,
         &sessions,
         "change",
-        "dcg.change.open",
+        "dcg.change_pack.open",
         json!({ "path": path, "intent": "unrelated", "scope": ["app.txt"] }),
     );
     assert!(change.ok, "{:?}", change.error);
@@ -2321,7 +2295,7 @@ fn an_unrelated_mutation_does_not_stale_a_provider_action() {
     let error = response.error.expect("no such binding exists");
     assert_ne!(
         error.code, "STALE_CONSOLE_ACTION",
-        "an unrelated Change invalidated a provider action: {:?}",
+        "an unrelated ChangePack invalidated a provider action: {:?}",
         error.message
     );
     assert!(

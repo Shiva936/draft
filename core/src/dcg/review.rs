@@ -11,7 +11,7 @@
 //! state between untouched and decided, and work in progress would look
 //! identical to work nobody had opened.
 
-use draft_dcg_contract::ids::{ActorId, ChangeRevisionId, ReviewId};
+use draft_dcg_contract::ids::{ActorId, ReviewId, RevisionPackId};
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::Digest;
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ use crate::support::immutable_store::ImmutableFactStore;
 pub struct Review {
     pub id: ReviewId,
     /// The exact revision examined.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     pub reviewer: ActorId,
     pub started_at: Timestamp,
     /// What the reviewer wrote. Opaque to Core.
@@ -62,8 +62,8 @@ impl Review {
         Ok(())
     }
 
-    pub fn covers(&self, revision: &ChangeRevisionId) -> bool {
-        &self.revision == revision
+    pub fn covers(&self, revision: &RevisionPackId) -> bool {
+        &self.revision_pack == revision
     }
 }
 

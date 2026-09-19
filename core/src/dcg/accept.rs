@@ -202,7 +202,7 @@ pub fn accept(
 mod tests {
     use super::*;
     use draft_dcg_contract::identifier::NamespacedId;
-    use draft_dcg_contract::ids::{ChangeRevisionId, PromotionId, ResourceId};
+    use draft_dcg_contract::ids::{PromotionId, ResourceId, RevisionPackId};
     use draft_dcg_contract::producer::ProducerIdentity;
     use draft_dcg_contract::ProviderSemanticDefinitionDigest;
 
@@ -322,7 +322,7 @@ mod tests {
                 &enumeration(&[("1", b"state-2")], true),
                 BaselineOrigin::Promotion {
                     promotion: PromotionId::parse("pro_000000000001").unwrap(),
-                    change_revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+                    change_revision: RevisionPackId::parse("rpk_000000000001").unwrap(),
                 },
                 Some(first.baseline_id().clone()),
             )

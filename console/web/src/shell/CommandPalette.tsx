@@ -11,7 +11,7 @@ import { systemLinks } from "./Shell";
 const resultIcons: Record<string, IconName> = {
   project: "package",
   task: "list-checks",
-  change: "layers",
+  change_pack: "layers",
   file: "file",
   action: "zap",
   setting: "settings",
@@ -36,7 +36,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       const base = `/projects/${encodeURIComponent(result.workspace_id)}`;
       if (result.kind === "project") navigate(base);
       else if (result.kind === "task") navigate(`${base}/tasks`);
-      else if (result.kind === "change" || result.kind === "action")
+      else if (result.kind === "change_pack" || result.kind === "action")
         navigate(`${base}/graph`);
       else if (result.kind === "file") navigate(`${base}/editor`);
       else navigate(`${base}/events`);

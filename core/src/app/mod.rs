@@ -3,13 +3,13 @@ pub mod authority;
 pub mod authorization;
 pub mod baseline;
 pub mod baseline_detail;
-pub mod change_detail;
 pub mod composition;
 pub mod doctor;
 pub mod gc;
 pub mod impact;
 pub mod maintenance;
 pub mod observation;
+pub mod pack_detail;
 pub mod promotion;
 pub mod provider;
 pub mod publish;
@@ -40,17 +40,17 @@ use crate::app::activity::ProjectActivity;
 use crate::dcg::change_set::{ChangeSet, ChangeSetId};
 use crate::dcg::observation::ObservationContext;
 use crate::dcg::resource::{RawResourceState, ResourceId, ResourceLocator};
-use crate::dcg::revision::RevisionState;
+use crate::dcg::revision_pack::ReviewProgressState;
 use crate::dcg::snapshot::{
     pattern_match, read_ignore_lines, relative_path as rel_path, walk_dir, IgnoreMatcher,
     Snapshotter,
 };
 use crate::dcg::state::{Snapshot, WorkspaceStatus};
-use crate::evidence::representation::{ChangeRepresentationBundle, ResourceInterference};
+use crate::evidence::representation::{ResourceInterference, RevisionPackRepresentationBundle};
 use crate::evidence::risk::RiskConfig;
 use crate::evidence::verification::VerificationConfig;
 use crate::execution::records::HookResult;
-use crate::execution::workspace::{ChangeWorkspace, Evidence};
+use crate::execution::workspace::{ChangePackWorkspace, Evidence};
 use crate::project::config::{DraftConfig, HookEntry, ResolvedConfig};
 use crate::project::object_store::{
     read_object_segment_index, write_object_segment_index, ObjectSegment, ObjectSegmentEntry,
@@ -61,8 +61,7 @@ use crate::read_model::activity::{ActivityEntry, ActivityReplay};
 use crate::recovery::rollback::{RollbackPlan, RollbackRecord};
 use crate::support::actor::{ActorKind, ActorRef};
 use crate::support::common::{
-    now, ActorId, ChangeId, EvidenceId, ReceiptId, RollbackPlanId, SnapshotId, TaskId,
-    WorkspacePath,
+    now, ActorId, EvidenceId, ReceiptId, RollbackPlanId, SnapshotId, TaskId, WorkspacePath,
 };
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 use crate::support::fsutil::{
@@ -171,12 +170,11 @@ pub struct DoctorReport {
     pub project: Option<DoctorScope>,
 }
 
-/// Report from `draft change inspect <chg_id>`.
+/// Report from `draft pack inspect <cpk_id>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct ChangeInspectReport {
-    pub manifest: crate::dcg::change_store::ChangeManifest,
-    pub lifecycle: RevisionState,
-    pub quarantine: Option<crate::dcg::change_store::ChangeQuarantineRecord>,
+pub struct ChangePackInspectReport {
+    pub manifest: crate::dcg::change_pack_store::ChangePackManifest,
+    pub lifecycle: ReviewProgressState,
     pub valid_actions: Vec<String>,
     /// The authoritative identity of the transition this change carries.
     pub change_set_digest: String,
@@ -211,14 +209,14 @@ pub struct ChangeInspectReport {
     /// The five-state verification result, not a boolean.
     pub verification_state: String,
     pub verified: bool,
-    pub revision_id: String,
+    pub content_revision_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ChangeReopenReport {
-    pub change_id: String,
-    pub lifecycle: RevisionState,
-    pub revision_id: String,
+pub struct ChangePackReopenReport {
+    pub change_pack_id: String,
+    pub progress: ReviewProgressState,
+    pub content_revision_id: String,
     pub operation_id: String,
 }
 
@@ -228,7 +226,7 @@ pub enum StatusComponent {
     Repo,
     Tasks,
     Candidates,
-    Changes,
+    ChangePacks,
     Hooks,
 }
 
@@ -238,7 +236,7 @@ impl StatusComponent {
             "repo" => Ok(StatusComponent::Repo),
             "tasks" => Ok(StatusComponent::Tasks),
             "candidates" => Ok(StatusComponent::Candidates),
-            "changes" => Ok(StatusComponent::Changes),
+            "changes" => Ok(StatusComponent::ChangePacks),
             "hooks" => Ok(StatusComponent::Hooks),
             other => Err(
                 DraftError::invalid_config(format!("unknown status component '{other}'"))
@@ -252,7 +250,7 @@ impl StatusComponent {
             StatusComponent::Repo => "repo",
             StatusComponent::Tasks => "tasks",
             StatusComponent::Candidates => "candidates",
-            StatusComponent::Changes => "changes",
+            StatusComponent::ChangePacks => "changes",
             StatusComponent::Hooks => "hooks",
         }
     }
@@ -260,7 +258,7 @@ impl StatusComponent {
 
 #[derive(Debug, Clone, Default)]
 pub struct StatusOptions {
-    pub change: Option<String>,
+    pub change_pack_id: Option<String>,
     pub component: Option<StatusComponent>,
     pub full: bool,
 }
@@ -269,15 +267,15 @@ pub struct StatusOptions {
 pub struct StatusReport {
     pub workspace: WorkspaceStatus,
     pub component: Option<String>,
-    pub change: Option<String>,
+    pub change_pack_id: Option<String>,
     pub full: bool,
     pub sections: BTreeMap<String, Value>,
 }
 
-/// Report from `draft change depends <chg_id>`.
+/// Report from `draft pack depends <cpk_id>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct ChangeDependsReport {
-    pub change_id: String,
+pub struct ChangePackDependsReport {
+    pub change_pack_id: String,
     pub base_snapshot_digest: String,
     pub changed_resources: Vec<String>,
     /// Other changes touching the same contributed elements → the shared element
@@ -298,19 +296,19 @@ pub struct ConflictFinding {
     pub blocking: bool,
 }
 
-/// Report from `draft change conflicts <a> <b>`.
+/// Report from `draft pack conflicts <a> <b>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct ChangeConflictsReport {
+pub struct ChangePackConflictsReport {
     pub change_a: String,
     pub change_b: String,
     pub conflicts: Vec<ConflictFinding>,
     pub blocking: bool,
 }
 
-/// Report from `draft change compose <a> <b> --name <name>`.
+/// Report from `draft pack compose <a> <b> --name <name>`.
 #[derive(Debug, Clone, Serialize)]
-pub struct ChangeComposeReport {
-    pub change_id: String,
+pub struct ChangePackComposeReport {
+    pub change_pack_id: String,
     pub name: String,
     pub dependencies: Vec<String>,
     pub requires_reverification: bool,
@@ -320,7 +318,7 @@ pub struct ChangeComposeReport {
 /// One observation, and the record of which observation it was.
 ///
 /// The two travel together because they are only unambiguously paired at the
-/// moment of observation. Anything that must later say "this Change relied on
+/// moment of observation. Anything that must later say "this ChangePack relied on
 /// *that* observation" needs both halves, and resolving the second from the
 /// store afterwards would mean choosing between records.
 #[derive(Debug, Clone)]
@@ -329,10 +327,10 @@ pub struct ObservedSnapshot {
     pub observation: crate::dcg::observation::SnapshotObservationRef,
 }
 
-/// Report from `draft change evidence run chg_<id>`.
+/// Report from `draft pack evidence run cpk_<id>`.
 #[derive(Debug, Clone, Serialize)]
 pub struct VerifyReport {
-    pub change_id: String,
+    pub change_pack_id: String,
     /// The aggregate, as one of the five states. Never a boolean: "nothing was
     /// checked" and "everything passed" are different answers.
     pub state: String,
@@ -367,26 +365,6 @@ pub struct VerifyReport {
 /// artifact to authorize — but the evidence still records *something*, so no
 /// result in the record is missing its permission story.
 const PROJECT_CONFIGURED_DECISION: &str = "project-configured";
-
-/// Report from `draft export`.
-#[derive(Debug, Clone, Serialize)]
-pub struct ChangeExportReport {
-    pub change_id: String,
-    pub name: String,
-    pub output: String,
-    pub bytes: u64,
-}
-
-/// Report from `draft import`.
-#[derive(Debug, Clone, Serialize)]
-pub struct ChangeImportReport {
-    pub change_id: String,
-    pub name: String,
-    pub quarantined: bool,
-    pub remapped: bool,
-    pub external_receipts: usize,
-    pub applied: bool,
-}
 
 /// Result of a `--dry-run` for promotion or recovery: what would happen and why.
 #[derive(Debug, Clone, Serialize)]
@@ -454,7 +432,7 @@ pub struct ResourceContentView {
 #[derive(Debug, Clone, Serialize)]
 pub struct ResourceSaveReport {
     pub locator: ResourceLocator,
-    pub change_id: String,
+    pub change_pack_id: String,
     pub backup_path: Option<String>,
     pub workspace_hash: String,
     pub protected: bool,
@@ -503,7 +481,7 @@ pub struct ResourceComparisonReport {
     /// Draft knows *that* the resource changed and says so, rather than
     /// inventing a rendering it cannot justify.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub representation: Option<crate::evidence::representation::ChangeRepresentation>,
+    pub representation: Option<crate::evidence::representation::RevisionPackRepresentation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<crate::extension::CapabilityGap>,
     pub workspace_hash: String,
@@ -529,72 +507,67 @@ impl DoctorReport {
 fn write_base_canonical_manifest(
     root: &Path,
     policy: &crate::dcg::source_view::CanonicalSourcePolicy,
-    change_id: &ChangeId,
+    change_pack_id: &draft_dcg_contract::ids::ChangePackId,
     name: &str,
     change_set: &ChangeSet,
 ) -> DraftResult<()> {
-    use crate::dcg::change_store::{ChangeContentStore, ChangeManifest, RevisionRecord};
+    use crate::dcg::change_pack_store::{
+        ChangePackContentRevisionRecord, ChangePackContentStore, ChangePackManifest,
+    };
     let workspace_hash = crate::dcg::source_view::workspace_hash(root, policy)?;
     let patch_bytes = to_pretty(change_set)?;
     // The revision binds the change set by its own canonical identity, so a
     // re-serialization cannot change what the revision points at.
-    let change_digest = change_set.change_set_digest.clone();
-    let mut manifest = ChangeManifest {
-        schema_version: current_version(ContractId::ChangeManifest),
-        change_id: change_id.to_string(),
+    let change_set_digest = change_set.change_set_digest.clone();
+    let mut manifest = ChangePackManifest {
+        schema_version: current_version(ContractId::ChangePackManifest),
+        change_pack_id: change_pack_id.to_string(),
         manifest_digest: String::new(),
         name: name.to_string(),
         description: "base change".to_string(),
-        intent: crate::dcg::change_store::unspecified_intent(),
+        intent: crate::dcg::change_pack_store::unspecified_intent(),
         provenance: serde_json::json!({"origin": "local"}),
         author_id: "actor_local".to_string(),
         candidate_id: None,
         declared_dependencies: Vec::new(),
         created_at: now().to_rfc3339(),
     };
-    let store = ChangeContentStore::new(crate::project::layout::DraftLayout::for_root(root));
+    let store = ChangePackContentStore::new(crate::project::layout::DraftLayout::for_root(root));
     manifest.refresh_manifest_digest();
     store.write_manifest(&manifest)?;
-    let mut revision = RevisionRecord {
-        schema_version: current_version(ContractId::RevisionRecord),
-        change_id: manifest.change_id.clone(),
+    let mut revision = ChangePackContentRevisionRecord {
+        schema_version: current_version(ContractId::ChangePackContentRevisionRecord),
+        change_pack_id: manifest.change_pack_id.clone(),
         manifest_digest: manifest.manifest_digest.clone(),
-        revision_id: "rev_initial".into(),
-        revision_number: 1,
-        revision_digest: String::new(),
+        content_revision_id: "content_initial".into(),
+        content_revision_number: 1,
+        content_revision_digest: String::new(),
         base_digest: workspace_hash.clone(),
         content_digest: workspace_hash.clone(),
-        change_digest,
+        change_set_digest,
         target_digest: workspace_hash.clone(),
         resolved_dependency_digests: Vec::new(),
         created_at: now().to_rfc3339(),
     };
-    revision.refresh_revision_digest();
+    revision.refresh_content_revision_digest();
     store.write_revision(&revision)?;
     write_atomic(
-        &store
-            .dir_for(
-                crate::dcg::change_store::ChangeLocation::Store,
-                change_id.as_str(),
-            )
-            .join("changes.json"),
+        &crate::project::layout::DraftLayout::for_root(root)
+            .change_pack_changes(change_pack_id.as_str()),
         &patch_bytes,
     )?;
-    store.write_lifecycle_in(
-        crate::dcg::change_store::ChangeLocation::Store,
-        &crate::dcg::revision::RevisionStateRecord {
-            schema_version: current_version(ContractId::RevisionState),
-            change_id: manifest.change_id.clone(),
-            revision_id: revision.revision_id.clone(),
-            revision_digest: revision.revision_digest.clone(),
-            lifecycle: crate::dcg::revision::RevisionState::Draft,
-            updated_at: now(),
-            last_operation_id: crate::support::common::OperationId::new("op_init"),
-        },
-    )?;
+    store.write_review_progress(&crate::dcg::revision_pack::ReviewProgressRecord {
+        schema_version: current_version(ContractId::ReviewProgressState),
+        change_pack_id: manifest.change_pack_id.clone(),
+        content_revision_id: revision.content_revision_id.clone(),
+        content_revision_digest: revision.content_revision_digest.clone(),
+        progress: crate::dcg::revision_pack::ReviewProgressState::Draft,
+        updated_at: now(),
+        last_operation_id: crate::support::common::OperationId::new("op_init"),
+    })?;
     // An empty lockfile, so conflict and dependency queries have a resource set
     // to read rather than a missing file to interpret.
-    let lock = empty_lockfile(change_id.as_str(), change_set);
+    let lock = empty_lockfile(change_pack_id.as_str(), change_set);
     store.write_lockfile(&lock)
 }
 
@@ -604,12 +577,12 @@ fn write_base_canonical_manifest(
 /// records the same authoritative digests and Core revisions as any other —
 /// there is no second, weaker shape for the empty case.
 fn empty_lockfile(
-    change_id: &str,
+    change_pack_id: &str,
     change_set: &ChangeSet,
-) -> crate::dcg::change_store::ChangeLockfile {
-    crate::dcg::change_store::ChangeLockfile {
-        schema_version: current_version(ContractId::ChangeLock),
-        change_id: change_id.to_string(),
+) -> crate::dcg::change_pack_store::ChangePackLockfile {
+    crate::dcg::change_pack_store::ChangePackLockfile {
+        schema_version: current_version(ContractId::ChangePackLock),
+        change_pack_id: change_pack_id.to_string(),
         base_snapshot_digest: change_set.base_snapshot_digest.clone(),
         result_snapshot_digest: change_set.result_snapshot_digest.clone(),
         // The base change's empty change set has no observation behind either
@@ -629,7 +602,7 @@ fn empty_lockfile(
         risk_aggregator_revision: crate::evidence::risk::RISK_AGGREGATOR_REVISION,
         impact_merge_revision: crate::dcg::impact::IMPACT_MERGE_REVISION,
         verification_commands: Vec::new(),
-        dependency_change_ids: Vec::new(),
+        dependency_change_pack_ids: Vec::new(),
         receipt_digests: Vec::new(),
     }
 }
@@ -749,7 +722,7 @@ impl App {
 
     /// Observe, and keep hold of exactly which observation this was.
     ///
-    /// Anything that must later say "this Change relied on *that* observation"
+    /// Anything that must later say "this ChangePack relied on *that* observation"
     /// takes this form, because the provenance record is only unambiguous at
     /// the moment it is written.
     fn observe_recorded(&self, ws: &Workspace) -> DraftResult<ObservedSnapshot> {
@@ -911,7 +884,7 @@ impl App {
                 layout: layout.clone(),
             };
             let observed = self.observe(&workspace)?;
-            let mut base = ChangeWorkspace::new(
+            let mut base = ChangePackWorkspace::new(
                 meta.workspace_id.clone(),
                 None,
                 None,
@@ -919,15 +892,15 @@ impl App {
                 observed.id.clone(),
                 Some(base_change_name.to_string()),
             );
-            let change_dir = layout.change_workspace_dir(&base.id);
+            let change_dir = layout.change_pack_workspace_dir(&base.id);
             ensure_dir(&change_dir)?;
             // No transition: the base change is the starting point, so its change
             // set is empty between one observation and itself.
             let patch = empty_change_set_between(&base, &observed, &observed)?;
             let evidence = Evidence {
-                schema_version: current_version(ContractId::ChangeEvidence),
+                schema_version: current_version(ContractId::RevisionPackEvidence),
                 id: EvidenceId::generate(),
-                change_id: base.id.clone(),
+                change_pack_id: base.id.clone(),
                 command_logs: Vec::new(),
                 resources_touched: Vec::new(),
                 representation_bundle_digest: None,
@@ -954,11 +927,11 @@ impl App {
                 &patch,
             )?;
             write_atomic(
-                layout.selected_change_file().as_path(),
+                layout.selected_change_pack_file().as_path(),
                 base.id.to_string().as_bytes(),
             )?;
             store.append(
-                EventKind::ChangeCreated,
+                EventKind::ChangePackCreated,
                 Some(base.id.to_string()),
                 serde_json::to_value(&base).expect("Draft-owned records must serialize"),
             )?;
@@ -1373,7 +1346,7 @@ impl App {
             description: String::new(),
             task_id: String::new(),
             execution_id: String::new(),
-            change_id: String::new(),
+            change_pack_id: String::new(),
             receipt_id: ReceiptId::generate().to_string(),
             actor_name: resolve_actor(&ws.layout.draft_dir)?.id.to_string(),
             timestamp: now().to_rfc3339(),
@@ -1481,7 +1454,7 @@ impl App {
                 }),
             );
         }
-        if options.component.is_none() || include(StatusComponent::Changes) {
+        if options.component.is_none() || include(StatusComponent::ChangePacks) {
             sections.insert(
                 "changes".to_string(),
                 serde_json::json!({
@@ -1532,19 +1505,19 @@ impl App {
                 }),
             );
         }
-        if let Some(change_ref) = &options.change {
-            // The Change as the graph holds it, and what may legally follow
+        if let Some(change_ref) = &options.change_pack_id {
+            // The ChangePack as the graph holds it, and what may legally follow
             // from its newest sealed revision. Readiness is not a separate
             // notion here: whether work can proceed is what the authorization
             // view answers, and it answers it with a reason.
             let change = self
-                .dcg_changes(cwd)?
+                .dcg_change_packs(cwd)?
                 .into_iter()
-                .find(|view| view.change.as_str() == change_ref)
+                .find(|view| view.change_pack.as_str() == change_ref)
                 .ok_or_else(|| {
                     DraftError::new(
                         DraftErrorKind::NotFound,
-                        format!("change '{change_ref}' is not in this project's graph"),
+                        format!("ChangePack '{change_ref}' is not in this project's graph"),
                     )
                 })?;
             let authorization = match change.revisions.first() {
@@ -1556,7 +1529,7 @@ impl App {
             sections.insert(
                 "change".to_string(),
                 serde_json::json!({
-                    "change_id": change.change,
+                    "change_pack_id": change.change_pack,
                     "lifecycle": change.lifecycle,
                     "revisions": change.revisions.len(),
                     "authorization": authorization,
@@ -1567,7 +1540,7 @@ impl App {
         Ok(StatusReport {
             workspace,
             component: options.component.map(|c| c.as_str().to_string()),
-            change: options.change,
+            change_pack_id: options.change_pack_id,
             full: options.full,
             sections,
         })
@@ -1612,15 +1585,15 @@ impl App {
         // second evidence-and-decision store to fold in beside it: two records
         // of one review state, with no rule for which is authoritative, is how
         // an inbox starts lying about what is outstanding.
-        for view in self.dcg_changes(&ws.root)? {
+        for view in self.dcg_change_packs(&ws.root)? {
             let Some(revision) = view.revisions.first() else {
                 continue;
             };
             let authorization =
-                self.dcg_authorization(&ws.root, view.change.as_str(), revision.id.as_str())?;
+                self.dcg_authorization(&ws.root, view.change_pack.as_str(), revision.id.as_str())?;
             let attention = crate::read_model::inbox::RevisionAttention {
-                change: view.change.as_str(),
-                revision: revision.id.as_str(),
+                change_pack_id: view.change_pack.as_str(),
+                revision_pack_id: revision.id.as_str(),
                 approved: authorization.approving_decision().is_some(),
                 changes_requested: authorization.decisions.iter().any(|decision| {
                     matches!(
@@ -1690,12 +1663,12 @@ impl App {
                     &mut by_id,
                     format!("inbox:waiver_renewal:{}", waiver.id),
                     "waiver_renewal",
-                    waiver.revision.to_string(),
+                    waiver.revision_pack.to_string(),
                     "expires_soon",
                     format!("waiver {} expires soon", waiver.id),
                     format!(
-                        "draft change gates waive {} {} --reason <reason> --expires 7d",
-                        waiver.revision, waiver.condition
+                        "draft pack gates waive {} {} --reason <reason> --expires 7d",
+                        waiver.revision_pack, waiver.condition
                     ),
                 );
             }
@@ -1798,11 +1771,11 @@ impl App {
             self.protections(&ws.root)?,
         );
         store.commit_with_validation(workspace_id, operation_id, |session, _revision| {
-            if let crate::execution::workspace::EditAttribution::Change { id }
+            if let crate::execution::workspace::EditAttribution::ChangePack { id }
             | crate::execution::workspace::EditAttribution::Review { id } = &session.attribution
             {
                 // Nothing to invalidate: Evidence, Assessments, Decisions and
-                // Gates each bind one exact ChangeRevisionId and never carry
+                // Gates each bind one exact RevisionPackId and never carry
                 // to another, so a commit that moves the subject digest simply
                 // leaves them describing the revision they were made about.
                 let _ = id;
@@ -2041,8 +2014,8 @@ impl App {
         self.enforce_execution_guards(ws, task, profile, execution, &changes)?;
 
         if changes.is_empty() {
-            // A run that changed nothing produces no Change. There is nothing
-            // to seal a revision of, and an empty Change would be a thing to
+            // A run that changed nothing produces no ChangePack. There is nothing
+            // to seal a revision of, and an empty ChangePack would be a thing to
             // review that says nothing happened.
             exec_store.mark_completed(exe_id)?;
             ws.events()?.append(
@@ -2069,9 +2042,9 @@ impl App {
         if isolated {
             apply_isolated_changes(&ws.root, &work_dir, &changes)?;
         }
-        let change_id = Some(self.seal_execution_revision(ws, task, profile, &changes)?);
+        let change_pack_id = Some(self.seal_execution_revision(ws, task, profile, &changes)?);
         exec_store.update(exe_id, |e| {
-            e.produced_change = change_id.clone();
+            e.produced_change = change_pack_id.clone();
         })?;
         exec_store.mark_completed(exe_id)?;
         ws.events()?.append(
@@ -2081,26 +2054,26 @@ impl App {
                 "task_id": task.id.to_string(),
                 "candidate": profile.name,
                 "changed_files": changes.len(),
-                "produced_change": change_id,
+                "produced_change": change_pack_id,
             }),
         )?;
         // Isolated work dir is no longer needed after a completed run.
         if isolated {
             let _ = fs::remove_dir_all(paths.execution_work_dir(exe_id));
         }
-        Ok(change_id)
+        Ok(change_pack_id)
     }
 
-    /// Open a Change for this execution and seal what it produced.
+    /// Open a ChangePack for this execution and seal what it produced.
     ///
     /// The identity is derived from the task and what actually changed, so a
-    /// re-run that produces the same output converges on the same Change and
+    /// re-run that produces the same output converges on the same ChangePack and
     /// the same revision rather than minting a second thing to review.
     ///
     /// The scope is the resources the run touched. Resolution narrows it to
     /// what the accepted Baseline holds — a file the run created is in the
     /// sealed state root but outside the reviewed boundary, because nobody has
-    /// yet agreed that the Change may reach it.
+    /// yet agreed that the ChangePack may reach it.
     fn seal_execution_revision(
         &self,
         ws: &Workspace,
@@ -2118,7 +2091,7 @@ impl App {
                 .to_string()
             })
             .collect();
-        let change = self.dcg_open_change(
+        let change = self.dcg_open_change_pack(
             &ws.root,
             &format!("{} via {}", task.name, profile.name),
             &scope,
@@ -2709,7 +2682,7 @@ impl App {
 
     /// Mutable work that belongs to a context other than the one given.
     ///
-    /// Changes and Change workspaces only. A promoted Change is
+    /// ChangePacks and ChangePack workspaces only. A promoted ChangePack is
     /// history and is never superseded — it recorded what was true under the
     /// semantics of its day, and still does.
     fn context_sensitive_work(
@@ -2719,14 +2692,16 @@ impl App {
     ) -> DraftResult<Vec<crate::dcg::observation_lifecycle::SupersededWork>> {
         use crate::dcg::observation_lifecycle::{SupersededKind, SupersededWork};
         let mut stranded = Vec::new();
-        for change in crate::dcg::change::ChangeStore::new(ws.layout.changes_dir()).list()? {
-            // A completed Change is history. It recorded what was true under
+        for change in
+            crate::dcg::change_pack::ChangePackStore::new(ws.layout.change_packs_dir()).list()?
+        {
+            // A completed ChangePack is history. It recorded what was true under
             // the semantics of its day and still does; only work that could
             // still change is stranded.
-            if change.lifecycle != crate::dcg::change::ChangeLifecycle::Active {
+            if change.lifecycle != crate::dcg::change_pack::ChangePackLifecycle::Active {
                 continue;
             }
-            // Any Change with sealed work is reported, not only one sealed
+            // Any ChangePack with sealed work is reported, not only one sealed
             // under this exact context.
             //
             // A revision records the state root it sealed, not the observation
@@ -2736,16 +2711,17 @@ impl App {
             // two available errors only one is safe: this warning exists to
             // stop somebody adopting new semantics and silently stranding
             // work, and a warning that misses work defeats it. Naming a
-            // Change that turns out to be unaffected costs a second look.
-            let sealed = crate::dcg::revision::RevisionStore::new(ws.layout.revisions_dir())
-                .list()?
-                .into_iter()
-                .any(|revision| revision.change == change.id);
+            // ChangePack that turns out to be unaffected costs a second look.
+            let sealed =
+                crate::dcg::revision_pack::RevisionPackStore::new(ws.layout.revision_packs_dir())
+                    .list()?
+                    .into_iter()
+                    .any(|revision| revision.change_pack == change.id);
             if !sealed {
                 continue;
             }
             stranded.push(SupersededWork {
-                kind: SupersededKind::Change,
+                kind: SupersededKind::ChangePack,
                 id: change.id.to_string(),
                 context_digest: context_digest.to_string(),
             });
@@ -2759,7 +2735,7 @@ impl App {
         let _ = self.open(cwd)?;
         let contributions = self.active_contributions();
         let mut out = vec![serde_json::json!({
-            "intent_id": crate::dcg::change_store::UNSPECIFIED_INTENT,
+            "intent_id": crate::dcg::change_pack_store::UNSPECIFIED_INTENT,
             "display_name": "Unspecified",
             "description": "No intent vocabulary is installed to name one.",
             "contributed_by": serde_json::Value::Null,
@@ -2777,11 +2753,11 @@ impl App {
         Ok(out)
     }
 
-    pub fn selected_change_id(&self, cwd: &Path) -> DraftResult<String> {
+    pub fn selected_change_pack_id(&self, cwd: &Path) -> DraftResult<String> {
         let ws = self.open(cwd)?;
-        let raw = fs::read_to_string(ws.layout.selected_change_file()).map_err(|e| {
+        let raw = fs::read_to_string(ws.layout.selected_change_pack_file()).map_err(|e| {
             DraftError::not_found(format!(
-                "no selected change: {e}; run `draft change select <chg-id/name>`"
+                "no selected change: {e}; run `draft pack select <cpk-id/name>`"
             ))
         })?;
         Ok(raw.trim().to_string())
@@ -2926,7 +2902,7 @@ impl App {
     pub fn rollback_dry_run(&self, cwd: &Path, reference: &str) -> DraftResult<DryRunReport> {
         let ws = self.open(cwd)?;
         let mut checks = Vec::new();
-        // Target id prefix must be chk_/chg_/rcp_ (validated by the resolver).
+        // Target id prefix must be chk_/cpk_/rcp_ (validated by the resolver).
         let plan = match self.rollback_plan(cwd, reference) {
             Ok(plan) => {
                 checks.push(DoctorCheck::ok("target", format!("resolved {reference}")));
@@ -3057,7 +3033,7 @@ impl App {
             draft_size_bytes: dir_size(&ws.layout.draft_dir)?,
             repo_size_bytes: dir_size_excluding_draft(&ws.root)?,
             objects_size_bytes: dir_size(&ws.layout.objects_dir())?,
-            changes_size_bytes: dir_size(&ws.layout.changes_content_dir())?,
+            changes_size_bytes: dir_size(&ws.layout.change_packs_content_dir())?,
             receipts_size_bytes: dir_size(&ws.layout.receipts_dir())?,
             events_size_bytes: fs::metadata(ws.layout.activity_log())
                 .map(|m| m.len())
@@ -3231,7 +3207,7 @@ impl App {
             receipts: crate::receipt::ReceiptEnvelopeStore::for_layout(&ws.layout)
                 .list_ids()?
                 .len(),
-            changes: self.dcg_changes(cwd)?.len(),
+            changes: self.dcg_change_packs(cwd)?.len(),
         })
     }
 
@@ -3294,115 +3270,24 @@ impl App {
     // accepts.
     // ---------------------------------------------------------------------
 
-    /// Open a Change: the record, its definition, and its resolved scope.
-    ///
-    /// All three, because a Change without a definition declares nothing and a
-    /// definition without a resolution has no exact boundary — and a reviewer
-    /// approving an unbounded scope would be approving something nobody stated.
-    ///
-    /// Idempotent: the Change id is derived from the intent and the accepted
-    /// Baseline, so a retried call converges on the Change it already opened.
-    /// Write an accepted Baseline to `out` as a signed DraftPack.
-    ///
-    /// A DraftPack carries a Baseline out of this installation so another can
-    /// verify it *without trusting the sender*: the signed manifest lists every
-    /// member with its exact digest, so a recipient checks the bytes it
-    /// actually received against what this project said it was sending.
-    pub fn export_baseline(
-        &self,
-        cwd: &Path,
-        baseline: Option<&str>,
-        out: Option<&Path>,
-    ) -> DraftResult<crate::draftpack::ExportReport> {
-        let workspace = self.open(cwd)?;
-        let baseline = match baseline {
-            Some(value) => parse_baseline_id(value)?,
-            None => {
-                crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
-                    DraftError::new(
-                        DraftErrorKind::NotFound,
-                        "this project accepts no Baseline, so there is nothing to export",
-                    )
-                })?
-            }
-        };
-
-        let members = crate::draftpack::members_for_baseline(&workspace.layout, &baseline)?;
-        let actor = crate::app::baseline::actor_id_of(&workspace.layout)?;
-        let home = crate::project::home::DraftGlobalStore::locate()?;
-        let (_, keypair) = crate::trust::identity::global::active_signer(&home)?;
-        let signer = draft_dcg_contract::receipt::ReceiptSignerBinding::new(
-            actor.clone(),
-            keypair.public_key_id(),
-            "ed25519",
-        )
-        .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?;
-        let producer = draft_dcg_contract::ProducerIdentity::new(
-            draft_dcg_contract::identifier::NamespacedId::parse("draft.core/draftpack")
-                .expect("a frozen literal is valid"),
-            crate::DRAFT_VERSION,
-        )
-        .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))?;
-
-        // Receipts travel embedded so a recipient can check the attestations
-        // without contacting us. They are evidence of what was attested, never
-        // a grant of local trust over there.
-        let receipts = crate::receipt::ReceiptEnvelopeStore::for_layout(&workspace.layout)
-            .read_all()
-            .unwrap_or_default();
-
-        let out = out.map(Path::to_path_buf).unwrap_or_else(|| {
-            workspace.layout.exports_dir().join(format!(
-                "{}.draftpack",
-                baseline.digest().to_string().replace(':', "-")
-            ))
-        });
-
-        crate::draftpack::export(
-            &baseline,
-            workspace.workspace_id.clone(),
-            members,
-            receipts,
-            actor,
-            crate::support::clock::Clock::now(&crate::support::clock::SystemClock),
-            producer,
-            signer,
-            &keypair,
-            &out,
-        )
-    }
-
-    /// Validate an untrusted `.draftpack` and place it in quarantine.
-    ///
-    /// A pack that verifies is a well-formed, authentically signed set of
-    /// claims. It is not an accepted Baseline here: whether the signing key is
-    /// trusted in *this* project is this project's question, and answering it
-    /// from inside the archive would let a sender vouch for itself.
-    pub fn import_baseline(
-        &self,
-        cwd: &Path,
-        artifact: &Path,
-        dry_run: bool,
-    ) -> DraftResult<crate::draftpack::ImportReport> {
-        let workspace = self.open(cwd)?;
-        crate::draftpack::import(&workspace.layout, artifact, dry_run)
-    }
-
-    /// One Change: its lifecycle, its current definition and scope, and every
+    /// One ChangePack: its lifecycle, its current definition and scope, and every
     /// revision sealed against it.
     ///
     /// The definition and the resolution are returned together because they
-    /// answer two different questions — what the Change is *for*, and what it
+    /// answer two different questions — what the ChangePack is *for*, and what it
     /// may *touch* — and a reader given only one of them cannot tell whether
     /// work was in bounds.
-    pub fn dcg_change(&self, cwd: &Path, change: &str) -> DraftResult<Value> {
+    pub fn dcg_change_pack(&self, cwd: &Path, change: &str) -> DraftResult<Value> {
         let workspace = self.open(cwd)?;
-        let change_id = parse_change_id(change)?;
-        let view = crate::app::workflow::change_views(&workspace)?
+        let change_pack_id = parse_change_pack_id(change)?;
+        let view = crate::app::workflow::change_pack_views(&workspace)?
             .into_iter()
-            .find(|view| view.change == change_id)
+            .find(|view| view.change_pack == change_pack_id)
             .ok_or_else(|| {
-                DraftError::new(DraftErrorKind::NotFound, format!("no Change '{change}'"))
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    format!("no ChangePack '{change}'"),
+                )
             })?;
 
         let definitions = crate::dcg::definition::DefinitionStore::new(
@@ -3411,7 +3296,7 @@ impl App {
         );
         let definition = definitions.definition(&view.current_definition)?;
         // The resolution of the *current* definition, if the revisions name
-        // one. A Change with no sealed revision has a declared scope but no
+        // one. A ChangePack with no sealed revision has a declared scope but no
         // resolved one yet, and saying so is more useful than an empty set.
         let scope = match view.revisions.first() {
             Some(revision) => definitions.resolution(&revision.scope)?,
@@ -3419,7 +3304,7 @@ impl App {
         };
 
         Ok(serde_json::json!({
-            "change": view.change.to_string(),
+            "change_pack_id": view.change_pack.to_string(),
             "lifecycle": view.lifecycle,
             "current_definition": view.current_definition,
             "definition": definition,
@@ -3428,28 +3313,30 @@ impl App {
         }))
     }
 
-    /// Stop work on a Change, keeping everything recorded about it.
+    /// Stop work on a ChangePack, keeping everything recorded about it.
     ///
     /// Deliberately not a delete. "We tried this and stopped" is frequently
-    /// the most useful thing in a project's history, and a Change whose work
+    /// the most useful thing in a project's history, and a ChangePack whose work
     /// is already in an accepted Baseline is refused rather than rewritten.
-    pub fn dcg_abandon_change(
+    pub fn dcg_abandon_change_pack(
         &self,
         cwd: &Path,
         change: &str,
-    ) -> DraftResult<crate::dcg::change::Change> {
+    ) -> DraftResult<crate::dcg::change_pack::ChangePack> {
         let workspace = self.open(cwd)?;
-        crate::app::promotion::change_store(&workspace.layout).abandon(&parse_change_id(change)?)
+        crate::app::promotion::change_pack_store(&workspace.layout)
+            .abandon(&parse_change_pack_id(change)?)
     }
 
-    /// Resume an abandoned Change.
-    pub fn dcg_reopen_change(
+    /// Resume an abandoned ChangePack.
+    pub fn dcg_reopen_change_pack(
         &self,
         cwd: &Path,
         change: &str,
-    ) -> DraftResult<crate::dcg::change::Change> {
+    ) -> DraftResult<crate::dcg::change_pack::ChangePack> {
         let workspace = self.open(cwd)?;
-        crate::app::promotion::change_store(&workspace.layout).reopen(&parse_change_id(change)?)
+        crate::app::promotion::change_pack_store(&workspace.layout)
+            .reopen(&parse_change_pack_id(change)?)
     }
 
     /// What the project's authoritative state looks like right now.
@@ -3465,7 +3352,7 @@ impl App {
         change: Option<&str>,
     ) -> DraftResult<crate::read_model::ReadModelWatermark> {
         let workspace = self.open(cwd)?;
-        let change = change.map(parse_change_id).transpose()?;
+        let change = change.map(parse_change_pack_id).transpose()?;
         crate::read_model::freshness::current_watermark(
             &workspace.layout,
             &workspace.workspace_id,
@@ -3564,12 +3451,12 @@ impl App {
         Ok(closed)
     }
 
-    /// How two Changes relate over the resources they both touch.
+    /// How two ChangePacks relate over the resources they both touch.
     ///
     /// Answered from the newest sealed revision on each side. A revision is
-    /// what a Change actually did — its `touched` set is checked against the
+    /// what a ChangePack actually did — its `touched` set is checked against the
     /// scope it was sealed within — whereas a declared scope is only what it
-    /// was allowed to do. Answering with the second would report every Change
+    /// was allowed to do. Answering with the second would report every ChangePack
     /// scoped to a shared directory as interfering.
     ///
     /// Computed rather than stored, because the answer is only true of the two
@@ -3580,35 +3467,40 @@ impl App {
     /// Resources only one side touched are absent from the result. Silence is
     /// the answer for them, and listing them would bury the ones that actually
     /// interfere.
-    pub fn dcg_compare_changes(&self, cwd: &Path, left: &str, right: &str) -> DraftResult<Value> {
+    pub fn dcg_compare_change_packs(
+        &self,
+        cwd: &Path,
+        left: &str,
+        right: &str,
+    ) -> DraftResult<Value> {
         let workspace = self.open(cwd)?;
-        let left_id = parse_change_id(left)?;
-        let right_id = parse_change_id(right)?;
+        let left_id = parse_change_pack_id(left)?;
+        let right_id = parse_change_pack_id(right)?;
         if left_id == right_id {
             return Err(DraftError::new(
                 DraftErrorKind::Validation,
-                "a Change does not interfere with itself",
+                "a ChangePack does not interfere with itself",
             ));
         }
 
-        let views = crate::app::workflow::change_views(&workspace)?;
-        let newest = |id: &draft_dcg_contract::ids::ChangeId| {
+        let views = crate::app::workflow::change_pack_views(&workspace)?;
+        let newest = |id: &draft_dcg_contract::ids::ChangePackId| {
             views
                 .iter()
-                .find(|view| &view.change == id)
+                .find(|view| &view.change_pack == id)
                 .ok_or_else(|| {
-                    DraftError::new(DraftErrorKind::NotFound, format!("no Change '{id}'"))
+                    DraftError::new(DraftErrorKind::NotFound, format!("no ChangePack '{id}'"))
                 })
                 .and_then(|view| {
                     view.revisions.first().cloned().ok_or_else(|| {
                         DraftError::new(
                             DraftErrorKind::NotFound,
                             format!(
-                                "Change {id} has sealed no revision, so what it touches is \
+                                "ChangePack {id} has sealed no revision, so what it touches is \
                                      not yet a fact"
                             ),
                         )
-                        .with_suggestion("Seal a revision on both Changes, then compare them.")
+                        .with_suggestion("Seal a revision on both ChangePacks, then compare them.")
                     })
                 })
         };
@@ -3649,13 +3541,13 @@ impl App {
 
         Ok(serde_json::json!({
             "left": {
-                "change": left_id.to_string(),
-                "revision": left_revision.id.to_string(),
+                "change_pack_id": left_id.to_string(),
+                "revision_pack_id": left_revision.id.to_string(),
                 "base_baseline": left_revision.base_baseline.to_string(),
             },
             "right": {
-                "change": right_id.to_string(),
-                "revision": right_revision.id.to_string(),
+                "change_pack_id": right_id.to_string(),
+                "revision_pack_id": right_revision.id.to_string(),
                 "base_baseline": right_revision.base_baseline.to_string(),
             },
             "relation": relation,
@@ -3665,12 +3557,12 @@ impl App {
         }))
     }
 
-    pub fn dcg_open_change(
+    pub fn dcg_open_change_pack(
         &self,
         cwd: &Path,
         intent: &str,
         scope: &[String],
-    ) -> DraftResult<crate::dcg::change::Change> {
+    ) -> DraftResult<crate::dcg::change_pack::ChangePack> {
         let workspace = self.open(cwd)?;
         let base = crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
             DraftError::new(
@@ -3684,23 +3576,22 @@ impl App {
             declared.insert(parse_scope_entry(value));
         }
 
-        let change_id = derived_id("chg_", &format!("{base}|{intent}"))
-            .and_then(|value| parse_change_id(&value))?;
+        let change_pack_id = change_pack_id_for(&base.to_string(), intent)?;
         let actor = crate::app::baseline::actor_id_of(&workspace.layout)?;
 
-        let definition = crate::dcg::definition::ChangeDefinition {
-            change: change_id.clone(),
+        let definition = crate::dcg::definition::ChangePackDefinition {
+            change_pack: change_pack_id.clone(),
             intent: intent.to_string(),
             scope_declaration: declared,
             created_by: actor.clone(),
             // Frozen at the epoch so the definition digest — and therefore the
-            // Change's identity — depends on what the change is, not on when
+            // ChangePack's identity — depends on what the change is, not on when
             // the command happened to run. Two identical requests are one
-            // Change; that is what makes the retry converge.
+            // ChangePack; that is what makes the retry converge.
             created_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
         };
 
-        // What the Change could legitimately land on: the accepted Baseline
+        // What the ChangePack could legitimately land on: the accepted Baseline
         // plus what the project holds now. Resolution narrows the declaration
         // to these and may never exceed it.
         let (_, observed) = self.dcg_observe_state(&workspace)?;
@@ -3719,22 +3610,23 @@ impl App {
         let definition_digest = definitions.put_definition(&definition)?;
         definitions.put_resolution(&resolution)?;
 
-        let store = crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir());
-        if let Some(existing) = store.read_unlocked(&change_id)? {
+        let store =
+            crate::dcg::change_pack::ChangePackStore::new(workspace.layout.change_packs_dir());
+        if let Some(existing) = store.read_unlocked(&change_pack_id)? {
             return Ok(existing);
         }
-        let change = crate::dcg::change::Change {
+        let change = crate::dcg::change_pack::ChangePack {
             generation: 0,
-            id: change_id,
+            id: change_pack_id,
             project: workspace.workspace_id.clone(),
             current_definition: definition_digest,
-            lifecycle: crate::dcg::change::ChangeLifecycle::Active,
+            lifecycle: crate::dcg::change_pack::ChangePackLifecycle::Active,
         };
         store.create(&change)?;
         Ok(change)
     }
 
-    /// Seal the workspace's current state as a revision of a Change.
+    /// Seal the workspace's current state as a revision of a ChangePack.
     ///
     /// The state root is observed rather than asserted, so a revision always
     /// says what the project actually looked like. Sealing the same state
@@ -3744,21 +3636,22 @@ impl App {
         &self,
         cwd: &Path,
         change: &str,
-    ) -> DraftResult<crate::dcg::revision::ChangeRevision> {
+    ) -> DraftResult<crate::dcg::revision_pack::RevisionPack> {
         let workspace = self.open(cwd)?;
-        let change_id = parse_change_id(change)?;
-        let store = crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir());
-        let record = store.read_unlocked(&change_id)?.ok_or_else(|| {
+        let change_pack_id = parse_change_pack_id(change)?;
+        let store =
+            crate::dcg::change_pack::ChangePackStore::new(workspace.layout.change_packs_dir());
+        let record = store.read_unlocked(&change_pack_id)?.ok_or_else(|| {
             DraftError::new(
                 DraftErrorKind::NotFound,
-                format!("change '{change_id}' does not exist"),
+                format!("ChangePack '{change_pack_id}' does not exist"),
             )
         })?;
         if !record.lifecycle.accepts_work() {
             return Err(DraftError::new(
                 DraftErrorKind::ConflictDetected,
                 format!(
-                    "change '{change_id}' is {:?}, so no further revision may be sealed against it",
+                    "ChangePack '{change_pack_id}' is {:?}, so no further revision may be sealed against it",
                     record.lifecycle
                 ),
             ));
@@ -3773,7 +3666,7 @@ impl App {
             .ok_or_else(|| {
                 DraftError::new(
                     DraftErrorKind::NotFound,
-                    format!("change '{change_id}' names a definition that is not stored"),
+                    format!("ChangePack '{change_pack_id}' names a definition that is not stored"),
                 )
             })?;
         let base = crate::dcg::baseline::current_baseline(&workspace.layout)?.ok_or_else(|| {
@@ -3782,7 +3675,7 @@ impl App {
                 "this project accepts no baseline to seal against",
             )
         })?;
-        // Observed before the scope is resolved, because a Change that adds a
+        // Observed before the scope is resolved, because a ChangePack that adds a
         // Resource can only be bounded by what the project holds now. The full
         // run rather than the state alone: the representation recorded below
         // names the exact observations it read, and re-observing to derive it
@@ -3835,19 +3728,18 @@ impl App {
             return Err(DraftError::new(
                 DraftErrorKind::Validation,
                 format!(
-                    "change '{change_id}' has nothing to seal: within its scope the workspace \
+                    "ChangePack '{change_pack_id}' has nothing to seal: within its scope the workspace \
                      holds exactly the state baseline '{base}' already accepts"
                 ),
             )
             .with_suggestion(
-                "Make the change this Change declares, or widen its scope to the Resources you \
+                "Make the change this ChangePack declares, or widen its scope to the Resources you \
                  actually edited.",
             ));
         }
 
-        let revision_id = derived_id("rev_", &format!("{change_id}|{}", state_root.digest()))
-            .and_then(|value| parse_revision_id(&value))?;
-        let revision = crate::dcg::revision::ChangeRevision::seal(
+        let revision_id = revision_pack_id_for(&change_pack_id, &state_root.digest().to_string())?;
+        let revision = crate::dcg::revision_pack::RevisionPack::seal(
             revision_id,
             &definition,
             &resolution,
@@ -3856,7 +3748,7 @@ impl App {
             crate::app::baseline::actor_id_of(&workspace.layout)?,
             draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
         )?;
-        crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir())
+        crate::dcg::revision_pack::RevisionPackStore::new(workspace.layout.revision_packs_dir())
             .put(&revision)?;
 
         // The explanation is derived from the same observations the revision
@@ -3872,7 +3764,7 @@ impl App {
     fn record_representation(
         &self,
         workspace: &Workspace,
-        revision: &crate::dcg::revision::ChangeRevision,
+        revision: &crate::dcg::revision_pack::RevisionPack,
         outcome: &crate::dcg::observe::ObservationOutcome,
         snapshot: &Snapshot,
         observed: &BTreeMap<
@@ -3959,7 +3851,7 @@ impl App {
         revision: &str,
     ) -> DraftResult<Vec<crate::evidence::Evidence>> {
         let workspace = self.open(cwd)?;
-        let revision = parse_revision_id(revision)?;
+        let revision = parse_revision_pack_id(revision)?;
         Ok(
             crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout)
                 .evidence
@@ -3984,29 +3876,33 @@ impl App {
             .get(&id)
     }
 
-    /// Restate what a Change is for.
+    /// Restate what a ChangePack is for.
     ///
-    /// An intent lives in the Change's definition, and a definition is an
-    /// immutable fact — so this mints a new one and moves the Change's pointer
+    /// An intent lives in the ChangePack's definition, and a definition is an
+    /// immutable fact — so this mints a new one and moves the ChangePack's pointer
     /// at it, rather than editing what a reviewer may already have read. The
     /// declared scope is carried across unchanged: amending an intent is not a
     /// way to widen what the work may touch.
     ///
     /// Any scope already resolved against the old definition is left stale by
     /// construction: sealing verifies the resolution against the definition in
-    /// force, so a Change amended after resolution is re-resolved rather than
+    /// force, so a ChangePack amended after resolution is re-resolved rather than
     /// silently sealed under a boundary nobody approved.
     pub fn dcg_amend_intent(
         &self,
         cwd: &Path,
         change: &str,
         intent: &str,
-    ) -> DraftResult<crate::dcg::definition::ChangeDefinition> {
+    ) -> DraftResult<crate::dcg::definition::ChangePackDefinition> {
         let workspace = self.open(cwd)?;
-        let change_id = parse_change_id(change)?;
-        let store = crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir());
-        let record = store.read_unlocked(&change_id)?.ok_or_else(|| {
-            DraftError::new(DraftErrorKind::NotFound, format!("no Change '{change}'"))
+        let change_pack_id = parse_change_pack_id(change)?;
+        let store =
+            crate::dcg::change_pack::ChangePackStore::new(workspace.layout.change_packs_dir());
+        let record = store.read_unlocked(&change_pack_id)?.ok_or_else(|| {
+            DraftError::new(
+                DraftErrorKind::NotFound,
+                format!("no ChangePack '{change}'"),
+            )
         })?;
         let definitions = crate::dcg::definition::DefinitionStore::new(
             workspace.layout.definitions_dir(),
@@ -4017,14 +3913,14 @@ impl App {
             .ok_or_else(|| {
                 DraftError::new(
                     DraftErrorKind::NotFound,
-                    format!("change '{change_id}' names a definition that is not stored"),
+                    format!("ChangePack '{change_pack_id}' names a definition that is not stored"),
                 )
             })?;
         if current.intent == intent {
             return Ok(current);
         }
-        let amended = crate::dcg::definition::ChangeDefinition {
-            change: change_id.clone(),
+        let amended = crate::dcg::definition::ChangePackDefinition {
+            change_pack: change_pack_id.clone(),
             intent: intent.to_string(),
             scope_declaration: current.scope_declaration.clone(),
             created_by: crate::app::baseline::actor_id_of(&workspace.layout)?,
@@ -4040,14 +3936,14 @@ impl App {
         );
         let actor = crate::trust::identity::resolve_actor(&workspace.layout.draft_dir)?;
         let fact = crate::app::activity::DomainAuditFact::new(
-            crate::activity::EventKind::ChangeDefinitionAmended,
+            crate::activity::EventKind::ChangePackDefinitionAmended,
             actor.id.to_string(),
             draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
         )
-        .about(change_id.to_string())
+        .about(change_pack_id.to_string())
         .with(serde_json::json!({ "definition": digest.to_string() }));
         let payload = crate::app::activity::payload_of(&fact);
-        let transaction_id = format!("change-definition-{change_id}-{}", next.generation);
+        let transaction_id = format!("change-definition-{change_pack_id}-{}", next.generation);
         let event_id = crate::activity::log::event_id_for(&format!(
             "{transaction_id}|{}",
             crate::support::hashing::canonical_json(&payload)
@@ -4060,7 +3956,7 @@ impl App {
                 ),
                 ledger: activity.log(),
             },
-            change_id.as_str(),
+            change_pack_id.as_str(),
             &transaction_id,
             &crate::support::record_guard::ExpectedRecordState::of(&record)?,
             &next,
@@ -4084,7 +3980,7 @@ impl App {
         revision: &str,
     ) -> DraftResult<crate::app::impact::ImpactReport> {
         let workspace = self.open(cwd)?;
-        crate::app::impact::index_revision(self, &workspace, &parse_revision_id(revision)?)
+        crate::app::impact::index_revision(self, &workspace, &parse_revision_pack_id(revision)?)
     }
 
     /// What the evidence about a revision actually speaks for.
@@ -4098,10 +3994,10 @@ impl App {
         revision: &str,
     ) -> DraftResult<crate::app::impact::CoverageReport> {
         let workspace = self.open(cwd)?;
-        crate::app::impact::coverage_of(&workspace, &parse_revision_id(revision)?)
+        crate::app::impact::coverage_of(&workspace, &parse_revision_pack_id(revision)?)
     }
 
-    /// Compose the newest sealed revisions of several Changes.
+    /// Compose the newest sealed revisions of several ChangePacks.
     pub fn dcg_compose(
         &self,
         cwd: &Path,
@@ -4110,7 +4006,7 @@ impl App {
         let workspace = self.open(cwd)?;
         let ids = changes
             .iter()
-            .map(|value| parse_change_id(value))
+            .map(|value| parse_change_pack_id(value))
             .collect::<DraftResult<Vec<_>>>()?;
         crate::app::composition::compose(&workspace, &ids)
     }
@@ -4124,31 +4020,31 @@ impl App {
         let workspace = self.open(cwd)?;
         let ids = changes
             .iter()
-            .map(|value| parse_change_id(value))
+            .map(|value| parse_change_pack_id(value))
             .collect::<DraftResult<Vec<_>>>()?;
         crate::app::composition::disperse(&workspace, &ids)
     }
 
-    /// Every other Change whose newest revision interferes with this one's.
+    /// Every other ChangePack whose newest revision interferes with this one's.
     pub fn dcg_conflicts(
         &self,
         cwd: &Path,
         change: &str,
     ) -> DraftResult<Vec<crate::dcg::compose::PairwiseRelation>> {
         let workspace = self.open(cwd)?;
-        crate::app::composition::conflicts(&workspace, &parse_change_id(change)?)
+        crate::app::composition::conflicts(&workspace, &parse_change_pack_id(change)?)
     }
 
-    /// What a Change was built on: the Baseline it was sealed from, and the
+    /// What a ChangePack was built on: the Baseline it was sealed from, and the
     /// promotions that produced that Baseline's lineage.
     ///
-    /// Lineage, not proximity. A Change depends on the accepted history it was
-    /// worked from; two Changes touching neighbouring Resources depend on
+    /// Lineage, not proximity. A ChangePack depends on the accepted history it was
+    /// worked from; two ChangePacks touching neighbouring Resources depend on
     /// nothing of each other, and `conflicts` is the question that asks about
     /// them.
     pub fn dcg_depends(&self, cwd: &Path, change: &str) -> DraftResult<Value> {
         let workspace = self.open(cwd)?;
-        let member = crate::app::composition::member(&workspace, &parse_change_id(change)?)?;
+        let member = crate::app::composition::member(&workspace, &parse_change_pack_id(change)?)?;
         let baselines = crate::dcg::baseline::BaselineStore::new(workspace.layout.baselines_dir());
         let lineage = baselines.lineage(&member.base_baseline)?;
         let mut ancestry = Vec::new();
@@ -4160,51 +4056,54 @@ impl App {
             }));
         }
         Ok(serde_json::json!({
-            "change": member.change.to_string(),
-            "revision": member.revision.to_string(),
+            "change_pack_id": member.change_pack.to_string(),
+            "revision_pack_id": member.revision_pack.to_string(),
             "base_baseline": member.base_baseline.to_string(),
             "lineage": ancestry,
         }))
     }
 
-    /// Select the Change subsequent commands default to.
+    /// Select the ChangePack subsequent commands default to.
     ///
     /// A convenience, never an authority: every command that acts still names
     /// the exact revision it acts on, and selecting one cannot widen what any
     /// of them may do.
-    pub fn dcg_select_change(&self, cwd: &Path, change: &str) -> DraftResult<String> {
+    pub fn dcg_select_change_pack(&self, cwd: &Path, change: &str) -> DraftResult<String> {
         let workspace = self.open(cwd)?;
-        let id = parse_change_id(change)?;
-        crate::dcg::change::ChangeStore::new(workspace.layout.changes_dir())
+        let id = parse_change_pack_id(change)?;
+        crate::dcg::change_pack::ChangePackStore::new(workspace.layout.change_packs_dir())
             .read_unlocked(&id)?
             .ok_or_else(|| {
-                DraftError::new(DraftErrorKind::NotFound, format!("no Change '{change}'"))
+                DraftError::new(
+                    DraftErrorKind::NotFound,
+                    format!("no ChangePack '{change}'"),
+                )
             })?;
         crate::support::fsutil::write_atomic(
-            &workspace.layout.selected_change_file(),
+            &workspace.layout.selected_change_pack_file(),
             id.as_str().as_bytes(),
         )?;
         Ok(id.to_string())
     }
 
-    /// Everything recorded about a Change and its newest revision at once.
+    /// Everything recorded about a ChangePack and its newest revision at once.
     ///
-    /// `show` answers what the Change is; this answers what has happened to
+    /// `show` answers what the ChangePack is; this answers what has happened to
     /// it. Kept separate because the first is cheap and the second reads every
     /// judgement, explanation and conflict in the project.
     pub fn dcg_inspect(&self, cwd: &Path, change: &str) -> DraftResult<Value> {
         let workspace = self.open(cwd)?;
-        let change_id = parse_change_id(change)?;
-        let summary = self.dcg_change(cwd, change)?;
-        let newest = crate::app::workflow::change_views(&workspace)?
+        let change_pack_id = parse_change_pack_id(change)?;
+        let summary = self.dcg_change_pack(cwd, change)?;
+        let newest = crate::app::workflow::change_pack_views(&workspace)?
             .into_iter()
-            .find(|view| view.change == change_id)
+            .find(|view| view.change_pack == change_pack_id)
             .and_then(|view| view.revisions.first().cloned());
         let (authorization, representation) = match &newest {
             Some(revision) => (
                 Some(crate::app::workflow::authorization_view(
                     &workspace,
-                    &change_id,
+                    &change_pack_id,
                     &revision.id,
                 )?),
                 representation_store(&workspace.layout).get(&revision.id)?,
@@ -4212,22 +4111,22 @@ impl App {
             None => (None, None),
         };
         Ok(serde_json::json!({
-            "change": summary,
-            "newest_revision": newest.as_ref().map(|revision| revision.id.to_string()),
+            "change_pack": summary,
+            "newest_revision_pack_id": newest.as_ref().map(|revision| revision.id.to_string()),
             "authorization": authorization,
             "representation": representation,
-            "conflicts": crate::app::composition::conflicts(&workspace, &change_id)
+            "conflicts": crate::app::composition::conflicts(&workspace, &change_pack_id)
                 .unwrap_or_default(),
         }))
     }
 
-    /// The receipts issued for a Change's promotions.
-    pub fn dcg_change_receipts(&self, cwd: &Path, change: &str) -> DraftResult<Vec<Value>> {
+    /// The receipts issued for a ChangePack's promotions.
+    pub fn dcg_change_pack_receipts(&self, cwd: &Path, change: &str) -> DraftResult<Vec<Value>> {
         let workspace = self.open(cwd)?;
-        let change_id = parse_change_id(change)?;
-        let revisions: BTreeSet<String> = crate::app::workflow::change_views(&workspace)?
+        let change_pack_id = parse_change_pack_id(change)?;
+        let revisions: BTreeSet<String> = crate::app::workflow::change_pack_views(&workspace)?
             .into_iter()
-            .find(|view| view.change == change_id)
+            .find(|view| view.change_pack == change_pack_id)
             .map(|view| {
                 view.revisions
                     .iter()
@@ -4235,10 +4134,10 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        // A promotion receipt names the revision it accepted, so the Change's
+        // A promotion receipt names the revision it accepted, so the ChangePack's
         // receipts are exactly those naming one of its revisions. Matching on
-        // the Change id instead would miss nothing today and quietly include
-        // another Change's work the moment a payload carried both.
+        // the ChangePack id instead would miss nothing today and quietly include
+        // another ChangePack's work the moment a payload carried both.
         Ok(self
             .receipts(cwd)?
             .into_iter()
@@ -4312,34 +4211,34 @@ impl App {
         Ok(out)
     }
 
-    /// What one Change is for, from the definition currently in force.
-    pub fn dcg_change_intent(
+    /// What one ChangePack is for, from the definition currently in force.
+    pub fn dcg_change_pack_intent(
         &self,
         cwd: &Path,
         change: &str,
-    ) -> DraftResult<crate::app::change_detail::ChangeIntentView> {
+    ) -> DraftResult<crate::app::pack_detail::ChangePackIntentView> {
         let workspace = self.open(cwd)?;
-        crate::app::change_detail::intent(&workspace, &parse_change_id(change)?)
+        crate::app::pack_detail::intent(&workspace, &parse_change_pack_id(change)?)
     }
 
-    /// What one Change may touch, declared and resolved.
-    pub fn dcg_change_scope(
+    /// What one ChangePack may touch, declared and resolved.
+    pub fn dcg_change_pack_scope(
         &self,
         cwd: &Path,
         change: &str,
-    ) -> DraftResult<crate::app::change_detail::ChangeScopeView> {
+    ) -> DraftResult<crate::app::pack_detail::ChangePackScopeView> {
         let workspace = self.open(cwd)?;
-        crate::app::change_detail::scope(&workspace, &parse_change_id(change)?)
+        crate::app::pack_detail::scope(&workspace, &parse_change_pack_id(change)?)
     }
 
-    /// Where an interrupted promotion of one Change stands.
-    pub fn dcg_change_recovery(
+    /// Where an interrupted promotion of one ChangePack stands.
+    pub fn dcg_change_pack_recovery(
         &self,
         cwd: &Path,
         change: &str,
-    ) -> DraftResult<crate::app::change_detail::ChangeRecoveryView> {
+    ) -> DraftResult<crate::app::pack_detail::ChangePackRecoveryView> {
         let workspace = self.open(cwd)?;
-        crate::app::change_detail::recovery(&workspace, &parse_change_id(change)?)
+        crate::app::pack_detail::recovery(&workspace, &parse_change_pack_id(change)?)
     }
 
     /// Every Baseline in the accepted lineage, newest first, in full.
@@ -4591,16 +4490,17 @@ impl App {
         &self,
         cwd: &Path,
         revision: &str,
-    ) -> DraftResult<Option<crate::evidence::representation::ChangeRepresentationBundle>> {
+    ) -> DraftResult<Option<crate::evidence::representation::RevisionPackRepresentationBundle>>
+    {
         let workspace = self.open(cwd)?;
-        representation_store(&workspace.layout).get(&parse_revision_id(revision)?)
+        representation_store(&workspace.layout).get(&parse_revision_pack_id(revision)?)
     }
 
     /// Every explanation this project has recorded.
     pub fn dcg_representations(
         &self,
         cwd: &Path,
-    ) -> DraftResult<Vec<crate::evidence::representation::ChangeRepresentationBundle>> {
+    ) -> DraftResult<Vec<crate::evidence::representation::RevisionPackRepresentationBundle>> {
         let workspace = self.open(cwd)?;
         representation_store(&workspace.layout).list()
     }
@@ -4614,15 +4514,17 @@ impl App {
     /// across an edit nobody reviewed.
     pub fn dcg_verify(&self, cwd: &Path, revision: &str) -> DraftResult<crate::evidence::Evidence> {
         let workspace = self.open(cwd)?;
-        let revision_id = parse_revision_id(revision)?;
-        let sealed = crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir())
-            .get(&revision_id)?
-            .ok_or_else(|| {
-                DraftError::new(
-                    DraftErrorKind::NotFound,
-                    format!("revision '{revision_id}' has not been sealed"),
-                )
-            })?;
+        let revision_id = parse_revision_pack_id(revision)?;
+        let sealed = crate::dcg::revision_pack::RevisionPackStore::new(
+            workspace.layout.revision_packs_dir(),
+        )
+        .get(&revision_id)?
+        .ok_or_else(|| {
+            DraftError::new(
+                DraftErrorKind::NotFound,
+                format!("RevisionPack '{revision_id}' has not been sealed"),
+            )
+        })?;
 
         let (observed, snapshot) = self.dcg_observe_run(&workspace)?;
         let (state_root, _) = observed.authoritative()?.build_roots()?;
@@ -4823,7 +4725,7 @@ impl App {
                 draft_dcg_contract::ids::EvidenceId::parse(&value)
                     .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
             })?,
-            revision: revision_id,
+            revision_pack: revision_id,
             inputs,
             producer,
             configuration,
@@ -4845,7 +4747,7 @@ impl App {
         rationale: &str,
     ) -> DraftResult<crate::evidence::assessment::Assessment> {
         let workspace = self.open(cwd)?;
-        let revision_id = parse_revision_id(revision)?;
+        let revision_id = parse_revision_pack_id(revision)?;
         let stores = crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout);
 
         let inputs: BTreeSet<_> = stores
@@ -4861,7 +4763,7 @@ impl App {
                 draft_dcg_contract::ids::AssessmentId::parse(&value)
                     .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
             })?,
-            revision: revision_id,
+            revision_pack: revision_id,
             inputs,
             risk: parse_risk(risk)?,
             rationale: rationale.to_string(),
@@ -4889,15 +4791,17 @@ impl App {
         waivers: &[String],
     ) -> DraftResult<crate::gate::GateEvaluation> {
         let workspace = self.open(cwd)?;
-        let revision_id = parse_revision_id(revision)?;
-        let sealed = crate::dcg::revision::RevisionStore::new(workspace.layout.revisions_dir())
-            .get(&revision_id)?
-            .ok_or_else(|| {
-                DraftError::new(
-                    DraftErrorKind::NotFound,
-                    format!("revision '{revision_id}' has not been sealed"),
-                )
-            })?;
+        let revision_id = parse_revision_pack_id(revision)?;
+        let sealed = crate::dcg::revision_pack::RevisionPackStore::new(
+            workspace.layout.revision_packs_dir(),
+        )
+        .get(&revision_id)?
+        .ok_or_else(|| {
+            DraftError::new(
+                DraftErrorKind::NotFound,
+                format!("RevisionPack '{revision_id}' has not been sealed"),
+            )
+        })?;
         let stores = crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout);
 
         let assessments: BTreeSet<_> = stores
@@ -4927,7 +4831,7 @@ impl App {
 
         let request = crate::app::authorization::GateRequest {
             id: derived_id("gate_", &identity)?,
-            revision: revision_id,
+            revision_pack: revision_id,
             // The exact definition and scope the revision was sealed against,
             // taken from the revision itself. A gate that named a different
             // pair would be evaluating a boundary nobody worked within.
@@ -5084,7 +4988,7 @@ impl App {
 
     /// Grant an exception to one gate condition on one exact revision.
     ///
-    /// Bound to the revision, not the Change: an exception accepted for the
+    /// Bound to the revision, not the ChangePack: an exception accepted for the
     /// work as it stood is not an exception for whatever it becomes. The gate
     /// records a waived condition as satisfied *and names the waiver*, so
     /// "somebody allowed this" never reads as "this passed".
@@ -5103,13 +5007,13 @@ impl App {
             ));
         }
         let workspace = self.open(cwd)?;
-        let revision_id = parse_revision_id(revision)?;
+        let revision_id = parse_revision_pack_id(revision)?;
         // Granted at the same instant every other DCG fact is evaluated at, so
         // a waiver and the gate that reads it agree about what "now" is.
         let waived_at = dcg_evaluation_context().evaluated_at;
         let waiver = crate::gate::waiver::GateWaiver {
             id: derived_id("wvr_", &format!("{revision_id}|{condition}"))?,
-            revision: revision_id,
+            revision_pack: revision_id,
             condition: condition.to_string(),
             reason: reason.to_string(),
             waived_by: crate::app::baseline::actor_id_of(&workspace.layout)?,
@@ -5127,7 +5031,7 @@ impl App {
     }
 
     /// The Resources the accepted Baseline holds.
-    /// Every Resource a Change opened now could legitimately be scoped to.
+    /// Every Resource a ChangePack opened now could legitimately be scoped to.
     ///
     /// The accepted Baseline and the observed project, together. A Resource in
     /// the Baseline may be edited or deleted; one only in the workspace may be
@@ -5225,9 +5129,12 @@ impl App {
         crate::app::workflow::baseline_view(&self.open(cwd)?)
     }
 
-    /// Every Change and the revisions sealed against it.
-    pub fn dcg_changes(&self, cwd: &Path) -> DraftResult<Vec<crate::app::workflow::ChangeView>> {
-        crate::app::workflow::change_views(&self.open(cwd)?)
+    /// Every ChangePack and the revisions sealed against it.
+    pub fn dcg_change_packs(
+        &self,
+        cwd: &Path,
+    ) -> DraftResult<Vec<crate::app::workflow::ChangePackView>> {
+        crate::app::workflow::change_pack_views(&self.open(cwd)?)
     }
 
     /// Everything decided about one revision, and what may legally follow.
@@ -5240,8 +5147,8 @@ impl App {
         let workspace = self.open(cwd)?;
         crate::app::workflow::authorization_view(
             &workspace,
-            &parse_change_id(change)?,
-            &parse_revision_id(revision)?,
+            &parse_change_pack_id(change)?,
+            &parse_revision_pack_id(revision)?,
         )
     }
 
@@ -5265,7 +5172,7 @@ impl App {
         comments: &[String],
     ) -> DraftResult<crate::dcg::review::Review> {
         let workspace = self.open(cwd)?;
-        let revision = parse_revision_id(revision)?;
+        let revision = parse_revision_pack_id(revision)?;
         let reviewer = crate::app::baseline::actor_id_of(&workspace.layout)?;
         let now = crate::support::clock::Clock::now(&crate::support::clock::SystemClock);
 
@@ -5295,7 +5202,7 @@ impl App {
 
         let review = crate::dcg::review::Review {
             id,
-            revision,
+            revision_pack: revision,
             reviewer,
             started_at,
             comments: all,
@@ -5313,7 +5220,7 @@ impl App {
         reason: Option<&str>,
     ) -> DraftResult<crate::dcg::decision::Decision> {
         let workspace = self.open(cwd)?;
-        let revision = parse_revision_id(revision)?;
+        let revision = parse_revision_pack_id(revision)?;
         let stores = crate::app::authorization::AuthorizationStores::for_layout(&workspace.layout);
 
         let evaluation = match gate {
@@ -5337,7 +5244,7 @@ impl App {
         };
         let request = crate::app::authorization::DecisionRequest {
             id: decision_id_for(&revision, approve)?,
-            revision,
+            revision_pack: revision,
             outcome,
             decided_by: crate::app::baseline::actor_id_of(&workspace.layout)?,
             decided_at: crate::support::clock::Clock::now(&crate::support::clock::SystemClock),
@@ -5373,8 +5280,8 @@ impl App {
             None => None,
         };
         let request = crate::app::promotion::PromotionRequest {
-            change: parse_change_id(change)?,
-            revision: parse_revision_id(revision)?,
+            change_pack: parse_change_pack_id(change)?,
+            revision_pack: parse_revision_pack_id(revision)?,
             decision: parse_decision_id(decision)?,
             gate: gate.to_string(),
             expected_parent,
@@ -5524,13 +5431,13 @@ impl App {
     }
 }
 
-fn parse_change_id(value: &str) -> DraftResult<draft_dcg_contract::ids::ChangeId> {
-    draft_dcg_contract::ids::ChangeId::parse(value)
+fn parse_change_pack_id(value: &str) -> DraftResult<draft_dcg_contract::ids::ChangePackId> {
+    draft_dcg_contract::ids::ChangePackId::parse(value)
         .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
 }
 
-fn parse_revision_id(value: &str) -> DraftResult<draft_dcg_contract::ids::ChangeRevisionId> {
-    draft_dcg_contract::ids::ChangeRevisionId::parse(value)
+fn parse_revision_pack_id(value: &str) -> DraftResult<draft_dcg_contract::ids::RevisionPackId> {
+    draft_dcg_contract::ids::RevisionPackId::parse(value)
         .map_err(|error| DraftError::new(DraftErrorKind::Validation, error.to_string()))
 }
 
@@ -5566,6 +5473,32 @@ fn parse_baseline_id(value: &str) -> DraftResult<draft_dcg_contract::baseline::B
 /// generated one would make a dropped connection produce a second immutable
 /// record of the same fact, which create-once storage would then be unable to
 /// tell from a genuine second fact.
+/// A ChangePack's identity: derived from the Baseline it was opened against and
+/// its intent, so re-running the same request converges on the same ChangePack.
+fn change_pack_id_for(
+    base_baseline: &str,
+    intent: &str,
+) -> DraftResult<draft_dcg_contract::ids::ChangePackId> {
+    derived_id(
+        draft_dcg_contract::ids::ChangePackId::PREFIX,
+        &format!("{base_baseline}|{intent}"),
+    )
+    .and_then(|value| parse_change_pack_id(&value))
+}
+
+/// A RevisionPack's identity: its ChangePack and the proposed state root, and
+/// nothing else — not the definition, scope, actor or time.
+fn revision_pack_id_for(
+    change_pack: &draft_dcg_contract::ids::ChangePackId,
+    project_state_root: &str,
+) -> DraftResult<draft_dcg_contract::ids::RevisionPackId> {
+    derived_id(
+        draft_dcg_contract::ids::RevisionPackId::PREFIX,
+        &format!("{change_pack}|{project_state_root}"),
+    )
+    .and_then(|value| parse_revision_pack_id(&value))
+}
+
 fn derived_id(prefix: &str, seed: &str) -> DraftResult<String> {
     let digest = draft_dcg_contract::Digest::of_bytes(seed.as_bytes());
     let short: String = digest
@@ -5597,12 +5530,12 @@ fn dcg_producer(name: &str) -> DraftResult<draft_dcg_contract::producer::Produce
 ///
 /// Waivers are the one thing that reads this as a real instant, and a waiver
 /// evaluated against the epoch has simply not expired yet.
-/// One entry of a declared Change scope.
+/// One entry of a declared ChangePack scope.
 ///
 /// A canonical Resource id when the caller has one, and otherwise a locator —
 /// `file:src/auth.rs`, or just `src/auth.rs` for the filesystem. The locator
 /// form is not a convenience: a Resource the project does not hold yet has no
-/// id to look up, so a Change that introduces one could not be declared at all
+/// id to look up, so a ChangePack that introduces one could not be declared at all
 /// without it. Both forms derive the same id for the same locator.
 fn parse_scope_entry(value: &str) -> draft_dcg_contract::ids::ResourceId {
     if let Ok(resource) = draft_dcg_contract::ids::ResourceId::parse(value) {
@@ -5678,7 +5611,7 @@ fn project_decision_authority(
 /// decision store converges, rather than a dropped connection producing a
 /// second immutable record of the same judgement.
 fn decision_id_for(
-    revision: &draft_dcg_contract::ids::ChangeRevisionId,
+    revision: &draft_dcg_contract::ids::RevisionPackId,
     approve: bool,
 ) -> DraftResult<draft_dcg_contract::ids::DecisionId> {
     let verdict = if approve { "approved" } else { "rejected" };
@@ -5885,23 +5818,23 @@ pub struct TaskViewOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CandidateChangeAssignment {
-    pub change_id: String,
+pub struct CandidateChangePackAssignment {
+    pub change_pack_id: String,
     pub candidate: String,
     pub task_id: Option<String>,
     pub execution_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangeReport {
-    pub lifecycle: RevisionState,
-    pub change: ChangeWorkspace,
+pub struct ChangePackReport {
+    pub lifecycle: ReviewProgressState,
+    pub change: ChangePackWorkspace,
     /// The authoritative transition. Always present, whatever is installed.
     pub change_set: ChangeSet,
     /// The derived explanation of it, when a comparison capability produced
     /// one. `None` is a real answer: Draft knows *that* the resources changed
     /// and between which states, without being able to say how.
-    pub representations: Option<ChangeRepresentationBundle>,
+    pub representations: Option<RevisionPackRepresentationBundle>,
     pub evidence: Option<Evidence>,
 }
 
@@ -5910,9 +5843,9 @@ pub struct CompareReport {
     pub id: String,
     pub left_change: String,
     pub right_change: String,
-    /// Resources both Changes touch.
+    /// Resources both ChangePacks touch.
     pub overlapping_resources: Vec<ResourceId>,
-    /// How the two Changes relate on each shared resource, where they do not
+    /// How the two ChangePacks relate on each shared resource, where they do not
     /// simply compose.
     ///
     /// `Indeterminate` appears here as itself rather than as a conflict or a
@@ -5947,7 +5880,7 @@ pub struct ComposeResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisperseResult {
-    pub source_change_id: String,
+    pub source_change_pack_id: String,
     pub output_pack_ids: Vec<String>,
     pub receipt_id: String,
     #[serde(default)]
@@ -6293,10 +6226,10 @@ fn load_json_dir<T: serde::de::DeserializeOwned + crate::contracts::VersionedCon
     Ok(out)
 }
 
-fn load_change(ws: &Workspace, id: &str) -> DraftResult<ChangeWorkspace> {
-    let change: ChangeWorkspace = crate::contracts::read_persisted(
+fn load_change(ws: &Workspace, id: &str) -> DraftResult<ChangePackWorkspace> {
+    let change: ChangePackWorkspace = crate::contracts::read_persisted(
         &ws.layout
-            .change_workspaces_dir()
+            .change_pack_workspaces_dir()
             .join(id)
             .join("staging.json"),
     )?;
@@ -6306,13 +6239,13 @@ fn load_change(ws: &Workspace, id: &str) -> DraftResult<ChangeWorkspace> {
 
 /// Work that removing the project would destroy.
 ///
-/// Every Change still open. A Change stays open until a promotion carries one
+/// Every ChangePack still open. A ChangePack stays open until a promotion carries one
 /// of its revisions onto the accepted Baseline, so an open one is unfinished
 /// work by definition — and this is the only thing standing between a person
 /// and deleting it, which is why counting the wrong records here is worse than
 /// not counting at all: the refusal still prints, and it always says zero.
 fn unsafe_pending_change_count(paths: &crate::project::layout::DraftLayout) -> DraftResult<usize> {
-    let store = crate::dcg::change::ChangeStore::new(paths.changes_dir());
+    let store = crate::dcg::change_pack::ChangePackStore::new(paths.change_packs_dir());
     Ok(store
         .list()?
         .into_iter()
@@ -6320,14 +6253,14 @@ fn unsafe_pending_change_count(paths: &crate::project::layout::DraftLayout) -> D
         .count())
 }
 
-/// The authoritative transition a Change carries.
+/// The authoritative transition a ChangePack carries.
 ///
 /// Validated on load: a change set names its base and result by digest, and a
 /// substituted or corrupted record is refused rather than silently trusted.
-fn load_change_set(ws: &Workspace, change: &ChangeWorkspace) -> DraftResult<ChangeSet> {
+fn load_change_set(ws: &Workspace, change: &ChangePackWorkspace) -> DraftResult<ChangeSet> {
     let change_set: ChangeSet = crate::contracts::read_persisted(
         &ws.layout
-            .change_workspace_dir(&change.id)
+            .change_pack_workspace_dir(&change.id)
             .join("changes.json"),
     )?;
     // Validated by recomputing the canonical identity, not by hashing the
@@ -6336,7 +6269,7 @@ fn load_change_set(ws: &Workspace, change: &ChangeWorkspace) -> DraftResult<Chan
     if change_set.change_set_digest != change_set.compute_digest() {
         return Err(DraftError::new(
             DraftErrorKind::CorruptData,
-            format!("change {} change set digest mismatch", change.id),
+            format!("ChangePack {} change set digest mismatch", change.id),
         ));
     }
     Ok(change_set)
@@ -6508,10 +6441,10 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
         .map_err(sql_err)?;
     }
 
-    // The graph's Changes. A Change has no name of its own — what it is for
+    // The graph's ChangePacks. A ChangePack has no name of its own — what it is for
     // lives in its definition — so the newest sealed revision stands in, which
     // is what a searcher is actually looking for.
-    for change in App::new().dcg_changes(&ws.root)? {
+    for change in App::new().dcg_change_packs(&ws.root)? {
         let revision = change
             .revisions
             .first()
@@ -6520,7 +6453,7 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
         conn.execute(
             "INSERT INTO changes (id, name, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                change.change.to_string(),
+                change.change_pack.to_string(),
                 revision,
                 format!("{:?}", change.lifecycle),
                 String::new(),
@@ -6576,7 +6509,7 @@ fn rebuild_index(ws: &Workspace) -> DraftResult<IndexReport> {
         events: events.len(),
         tasks: tasks.len(),
         executions: executions.len(),
-        changes: App::new().dcg_changes(&ws.root)?.len(),
+        changes: App::new().dcg_change_packs(&ws.root)?.len(),
         receipts: receipts.len(),
         snapshots: snapshots.len(),
     })
@@ -6683,11 +6616,11 @@ fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Sn
         validate_checkpoint_id(reference)?;
         return load_snapshot(ws, &SnapshotId::new(reference));
     }
-    if reference.starts_with("chg_") {
-        validate_change_id(reference)?;
-        let staging = ws.layout.change_workspace_dir(ChangeId::new(reference));
+    if reference.starts_with("cpk_") {
+        validate_change_pack_id(reference)?;
+        let staging = ws.layout.change_pack_workspace_dir(reference);
         if !staging.join("staging.json").exists()
-            && crate::dcg::change_store::ChangeContentStore::new(ws.layout.clone())
+            && crate::dcg::change_pack_store::ChangePackContentStore::new(ws.layout.clone())
                 .exists(reference)
         {
             return Err(DraftError::invalid_config(format!(
@@ -6703,7 +6636,7 @@ fn resolve_snapshot_reference(ws: &Workspace, reference: &str) -> DraftResult<Sn
         return resolve_activity_target(ws, reference);
     }
     Err(DraftError::invalid_config(format!(
-        "recovery reference '{reference}' must start with chk_, chg_, or evt_"
+        "recovery reference '{reference}' must start with chk_, cpk_, or evt_"
     )))
 }
 
@@ -6738,8 +6671,8 @@ fn validate_checkpoint_id(id: &str) -> DraftResult<()> {
     validate_prefixed_id(id, "chk_", "checkpoint")
 }
 
-fn validate_change_id(id: &str) -> DraftResult<()> {
-    validate_prefixed_id(id, "chg_", "change")
+fn validate_change_pack_id(id: &str) -> DraftResult<()> {
+    validate_prefixed_id(id, "cpk_", "change")
 }
 
 fn validate_receipt_id(id: &str) -> DraftResult<()> {
@@ -6889,11 +6822,11 @@ fn compact_loose_objects(ws: &Workspace) -> DraftResult<usize> {
         return Ok(0);
     }
     ensure_dir(&ws.layout.object_segments_dir())?;
-    let change_id = format!("opk_{}", uuid::Uuid::new_v4().simple());
-    let change_name = format!("{change_id}.json.zst");
+    let change_pack_id = format!("opk_{}", uuid::Uuid::new_v4().simple());
+    let change_name = format!("{change_pack_id}.json.zst");
     let change = ObjectSegment {
         schema_version: current_version(ContractId::ObjectSegment),
-        id: change_id,
+        id: change_pack_id,
         created_at: now(),
         entries,
     };
@@ -6950,15 +6883,15 @@ fn verify_receipts(ws: &Workspace) -> DraftResult<Vec<String>> {
 
 fn verify_draft_hard_exclusion(ws: &Workspace) -> DraftResult<Vec<String>> {
     let mut errors = Vec::new();
-    if !ws.layout.change_workspaces_dir().exists() {
+    if !ws.layout.change_pack_workspaces_dir().exists() {
         return Ok(errors);
     }
-    for entry in fs::read_dir(ws.layout.change_workspaces_dir())? {
+    for entry in fs::read_dir(ws.layout.change_pack_workspaces_dir())? {
         let manifest = entry?.path().join("staging.json");
         if !manifest.exists() {
             continue;
         }
-        let change: ChangeWorkspace = crate::contracts::read_persisted(&manifest)?;
+        let change: ChangePackWorkspace = crate::contracts::read_persisted(&manifest)?;
         change.validate()?;
         let patch = load_change_set(ws, &change)?;
         // Both sides: `.draft/**` must not enter project state through either a
@@ -7121,13 +7054,13 @@ fn prune_empty_dirs(dir: &Path) -> DraftResult<bool> {
     }
 }
 
-/// The change set for a Change that touches nothing.
+/// The change set for a ChangePack that touches nothing.
 ///
 /// A real change set with real snapshot digests, so it carries the same
 /// identity and the same validation as any other. Its emptiness is a fact about
 /// the transition, not a weaker shape.
 fn empty_change_set_between(
-    change: &ChangeWorkspace,
+    change: &ChangePackWorkspace,
     base: &Snapshot,
     result: &Snapshot,
 ) -> DraftResult<ChangeSet> {
@@ -7455,7 +7388,7 @@ struct HookContext {
     description: String,
     task_id: String,
     execution_id: String,
-    change_id: String,
+    change_pack_id: String,
     receipt_id: String,
     actor_name: String,
     timestamp: String,
@@ -7568,7 +7501,7 @@ fn hook_values(ctx: &HookContext) -> BTreeMap<String, String> {
         ("description".to_string(), ctx.description.clone()),
         ("task_id".to_string(), ctx.task_id.clone()),
         ("execution_id".to_string(), ctx.execution_id.clone()),
-        ("change_id".to_string(), ctx.change_id.clone()),
+        ("change_pack_id".to_string(), ctx.change_pack_id.clone()),
         ("receipt_id".to_string(), ctx.receipt_id.clone()),
         ("actor_name".to_string(), ctx.actor_name.clone()),
         ("timestamp".to_string(), ctx.timestamp.clone()),
@@ -7590,7 +7523,7 @@ fn hook_env(ctx: &HookContext) -> BTreeMap<String, String> {
         ctx.workspace_root.clone(),
     );
     env.insert("DRAFT_RECEIPT_ID".to_string(), ctx.receipt_id.clone());
-    env.insert("DRAFT_PACK_ID".to_string(), ctx.change_id.clone());
+    env.insert("DRAFT_PACK_ID".to_string(), ctx.change_pack_id.clone());
     env.insert("DRAFT_ACTOR_NAME".to_string(), ctx.actor_name.clone());
     for (k, v) in &ctx.vars {
         env.insert(format!("DRAFT_VAR_{}", k.to_ascii_uppercase()), v.clone());
@@ -7640,7 +7573,7 @@ fn builtin_placeholder_names() -> BTreeSet<&'static str> {
         "description",
         "task_id",
         "execution_id",
-        "change_id",
+        "change_pack_id",
         "receipt_id",
         "actor_name",
         "timestamp",
@@ -7812,20 +7745,20 @@ impl From<serde_json::Error> for DraftError {
 }
 
 // ---------------------------------------------------------------------------
-// The authoritative Change lifecycle
+// The authoritative ChangePack lifecycle
 //
-// A Change's lifecycle record answers "how far through review is this revision".
-// A Change record answers "is this work still open". Those were one value, and
-// separating them is what lets a change be abandoned — a decision the Change
+// A ChangePack's lifecycle record answers "how far through review is this revision".
+// A ChangePack record answers "is this work still open". Those were one value, and
+// separating them is what lets a change be abandoned — a decision the ChangePack
 // model had no way to express, since leaving it in Draft claims it is still
 // being worked on and moving it to Rejected claims a reviewer turned it down.
 //
-// While both exist, the Change record still drives the review surfaces and the
-// Change record is authoritative for the work lifecycle. Readers move over
-// before the Change record is retired.
+// While both exist, the ChangePack record still drives the review surfaces and the
+// ChangePack record is authoritative for the work lifecycle. Readers move over
+// before the ChangePack record is retired.
 // ---------------------------------------------------------------------------
 
-/// The Change store for a project.
+/// The ChangePack store for a project.
 /// Protections contributed by installed extensions, reduced to project rules.
 ///
 /// `project` cannot reach the extension layer to gather these, so the
@@ -7855,6 +7788,59 @@ fn contributed_protections(
 
 #[cfg(test)]
 mod app_tests {
+    #[test]
+    fn pack_identities_are_derived_from_their_frozen_seeds() {
+        let seed_digest = |seed: &str| {
+            draft_dcg_contract::Digest::of_bytes(seed.as_bytes())
+                .as_str()
+                .rsplit(':')
+                .next()
+                .unwrap()[..24]
+                .to_string()
+        };
+        let base = "bas_000000000001";
+        let change_pack = super::change_pack_id_for(base, "tidy the docs").unwrap();
+        assert_eq!(
+            change_pack.as_str(),
+            format!("cpk_{}", seed_digest("bas_000000000001|tidy the docs"))
+        );
+        // The same request converges on the same ChangePack.
+        assert_eq!(
+            super::change_pack_id_for(base, "tidy the docs").unwrap(),
+            change_pack
+        );
+
+        let root = "sha256:0011";
+        let revision = super::revision_pack_id_for(&change_pack, root).unwrap();
+        assert_eq!(
+            revision.as_str(),
+            format!("rpk_{}", seed_digest(&format!("{change_pack}|{root}")))
+        );
+        // The same state under a different ChangePack is a different RevisionPack.
+        let other = super::change_pack_id_for(base, "something else").unwrap();
+        assert_ne!(super::revision_pack_id_for(&other, root).unwrap(), revision);
+        // retired-architecture-ok: the retired family must not parse as a RevisionPack.
+        assert!(draft_dcg_contract::ids::RevisionPackId::parse(
+            revision.as_str().replacen("rpk_", "rev_", 1)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn no_production_derivation_uses_a_retired_prefix() {
+        let source = include_str!("mod.rs");
+        let code: String = source
+            .lines()
+            .filter(|line| !line.contains("retired-architecture-ok"))
+            .collect();
+        for retired in ["\"chg_\"", "\"rev_\""] {
+            assert!(
+                !code.contains(&format!("derived_id({retired}")),
+                "{retired}"
+            );
+        }
+    }
+
     /// Accept an initial Baseline for a test project.
     ///
     /// The same path production takes, so a test fixture cannot drift into a
@@ -7889,15 +7875,15 @@ mod app_tests {
 
     fn manifest_for(
         candidate: Option<&str>,
-        change_id: &str,
-    ) -> crate::dcg::change_store::ChangeManifest {
-        crate::dcg::change_store::ChangeManifest {
-            schema_version: current_version(ContractId::ChangeManifest),
-            change_id: change_id.to_string(),
+        change_pack_id: &str,
+    ) -> crate::dcg::change_pack_store::ChangePackManifest {
+        crate::dcg::change_pack_store::ChangePackManifest {
+            schema_version: current_version(ContractId::ChangePackManifest),
+            change_pack_id: change_pack_id.to_string(),
             manifest_digest: String::new(),
-            name: change_id.to_string(),
+            name: change_pack_id.to_string(),
             description: String::new(),
-            intent: crate::dcg::change_store::unspecified_intent(),
+            intent: crate::dcg::change_pack_store::unspecified_intent(),
             provenance: serde_json::json!({"origin": "test"}),
             author_id: "act_t".into(),
             candidate_id: candidate.map(|c| c.to_string()),
@@ -8199,12 +8185,12 @@ mod app_tests {
         .unwrap();
 
         let workspace = app.open(&root).unwrap();
-        let mut manifest = manifest_for(Some(&candidate.candidate_id), "chg_profile_invariance");
+        let mut manifest = manifest_for(Some(&candidate.candidate_id), "cpk_profile_invariance");
         manifest.author_id = actor.actor_id.clone();
         manifest.refresh_manifest_digest();
-        let change_store =
-            crate::dcg::change_store::ChangeContentStore::new(workspace.layout.clone());
-        change_store.write_manifest(&manifest).unwrap();
+        let change_pack_store =
+            crate::dcg::change_pack_store::ChangePackContentStore::new(workspace.layout.clone());
+        change_pack_store.write_manifest(&manifest).unwrap();
         crate::support::fsutil::write_json(
             &home.revoked_keys_json(),
             &serde_json::json!({
@@ -8240,7 +8226,7 @@ mod app_tests {
         let trust_digest = tree_digest(&home.trust_dir());
         let candidate_registry_bytes = std::fs::read(home.candidates_json()).unwrap();
         let manifest_bytes =
-            std::fs::read(layout.change_manifest(manifest.change_id.as_str())).unwrap();
+            std::fs::read(layout.change_pack_manifest(manifest.change_pack_id.as_str())).unwrap();
         let events_before = app.events(&root).unwrap();
         let event_log_before = std::fs::read(layout.activity_log()).unwrap();
         let receipts_before = crate::receipt::ReceiptEnvelopeStore::for_layout(&layout)
@@ -8290,7 +8276,7 @@ mod app_tests {
             candidate_registry_bytes
         );
         assert_eq!(
-            std::fs::read(layout.change_manifest(manifest.change_id.as_str())).unwrap(),
+            std::fs::read(layout.change_pack_manifest(manifest.change_pack_id.as_str())).unwrap(),
             manifest_bytes
         );
         assert_eq!(

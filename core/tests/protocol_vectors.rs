@@ -623,7 +623,7 @@ fn vectors() -> Vec<Vector> {
                  own Publication",
     });
 
-    // --- Change composition ------------------------------------------------
+    // --- ChangePack composition ------------------------------------------------
     //
     // Regenerated from real compositions rather than transcribed, for the same
     // reason as the Publication family: a change to the algebra has to show up
@@ -632,8 +632,8 @@ fn vectors() -> Vec<Vector> {
     let other_baseline = BaselineId::new(digest_of(b"compose-other-base"));
     let member = |change: &str, revision: &str, base: &BaselineId, touched: &[&str]| {
         draft_core::dcg::compose::ComposedRevision {
-            change: ids::ChangeId::parse(change).unwrap(),
-            revision: ids::ChangeRevisionId::parse(revision).unwrap(),
+            change_pack: ids::ChangePackId::parse(change).unwrap(),
+            revision_pack: ids::RevisionPackId::parse(revision).unwrap(),
             base_baseline: base.clone(),
             touched: touched
                 .iter()
@@ -649,14 +649,14 @@ fn vectors() -> Vec<Vector> {
     let independent = compose(
         &[
             member(
-                "chg_000000000001",
-                "rev_000000000001",
+                "cpk_000000000001",
+                "rpk_000000000001",
                 &baseline,
                 &["res_000000000001"],
             ),
             member(
-                "chg_000000000002",
-                "rev_000000000002",
+                "cpk_000000000002",
+                "rpk_000000000002",
                 &baseline,
                 &["res_000000000002"],
             ),
@@ -664,7 +664,7 @@ fn vectors() -> Vec<Vector> {
         &baseline,
     );
     all.push(Vector {
-        name: "independent-changes",
+        name: "independent-change-packs",
         schema: "composition.schema.json",
         payload: to_value(&independent),
         violation: None,
@@ -674,14 +674,14 @@ fn vectors() -> Vec<Vector> {
     let conflicting = compose(
         &[
             member(
-                "chg_000000000001",
-                "rev_000000000001",
+                "cpk_000000000001",
+                "rpk_000000000001",
                 &baseline,
                 &["res_000000000001"],
             ),
             member(
-                "chg_000000000003",
-                "rev_000000000003",
+                "cpk_000000000003",
+                "rpk_000000000003",
                 &baseline,
                 &["res_000000000001"],
             ),
@@ -689,7 +689,7 @@ fn vectors() -> Vec<Vector> {
         &baseline,
     );
     all.push(Vector {
-        name: "conflicting-changes",
+        name: "conflicting-change-packs",
         schema: "composition.schema.json",
         payload: to_value(&conflicting),
         violation: None,
@@ -699,14 +699,14 @@ fn vectors() -> Vec<Vector> {
     let indeterminate = compose(
         &[
             member(
-                "chg_000000000001",
-                "rev_000000000001",
+                "cpk_000000000001",
+                "rpk_000000000001",
                 &baseline,
                 &["res_000000000001"],
             ),
             member(
-                "chg_000000000004",
-                "rev_000000000004",
+                "cpk_000000000004",
+                "rpk_000000000004",
                 &other_baseline,
                 &["res_000000000002"],
             ),
@@ -714,7 +714,7 @@ fn vectors() -> Vec<Vector> {
         &baseline,
     );
     all.push(Vector {
-        name: "indeterminate-changes",
+        name: "indeterminate-change-packs",
         schema: "composition.schema.json",
         payload: to_value(&indeterminate),
         violation: None,

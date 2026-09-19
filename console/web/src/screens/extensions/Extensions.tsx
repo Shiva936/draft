@@ -85,7 +85,7 @@ export function Extensions() {
   const extensions = content.extensions?.installed ?? [];
   const sourceRecords = content.extensions?.sources ?? [];
   const revisions: CanonicalRevisions =
-    model.data?.revisions ?? { registry: 0, workspace: null, change: null, policy: null };
+    model.data?.revisions ?? { registry: 0, workspace: null, change_pack: null, policy: null };
   // Indexed by stable machine identity, never by label or list position.
   const actions = useMemo(() => new ActionIndex(model.data?.actions ?? []), [model.data]);
 

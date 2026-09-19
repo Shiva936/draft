@@ -48,7 +48,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StoreKey {
     ProjectControl,
-    Change,
+    ChangePack,
     ProviderBinding,
     Evidence,
     Gate,
@@ -74,7 +74,7 @@ impl ReadModelWatermark {
     /// Whether `current` has moved past this watermark in any way this view
     /// depended on.
     ///
-    /// A store the view never read cannot make it stale: a view of Changes is
+    /// A store the view never read cannot make it stale: a view of ChangePacks is
     /// not invalidated by a Task write, and treating it as though it were is
     /// the global-counter mistake in a smaller form.
     pub fn is_stale_against(&self, current: &ReadModelWatermark) -> bool {
@@ -151,12 +151,12 @@ pub enum Projection {
     HistoricalBaselineComposition,
     /// Whether the current configuration can route to a target.
     CurrentRoutability,
-    /// A Change's summary, scope and planning state.
-    ChangeSummary,
+    /// A ChangePack's summary, scope and planning state.
+    ChangePackSummary,
     /// A sealed revision's projection. Sealed content does not move.
-    SealedRevision,
-    /// Whether a Change may currently advance.
-    ChangeEligibility,
+    SealedRevisionPack,
+    /// Whether a ChangePack may currently advance.
+    ChangePackEligibility,
     /// A historical gate evaluation or decision, as it was made.
     HistoricalEvaluation,
     /// Per-target publication status.
@@ -197,10 +197,10 @@ impl Projection {
     pub fn depends_on(&self) -> &'static [StoreKey] {
         match self {
             Self::CurrentBaseline => &[StoreKey::ProjectControl],
-            Self::ChangeSummary => &[StoreKey::Change],
+            Self::ChangePackSummary => &[StoreKey::ChangePack],
             Self::CurrentRoutability => &[StoreKey::ProviderBinding, StoreKey::ProjectControl],
-            Self::ChangeEligibility => &[
-                StoreKey::Change,
+            Self::ChangePackEligibility => &[
+                StoreKey::ChangePack,
                 StoreKey::ProjectControl,
                 StoreKey::ProviderBinding,
                 StoreKey::Evidence,
@@ -218,7 +218,7 @@ impl Projection {
             // reprofile changes where new work goes; it cannot change what an
             // accepted Baseline was composed from.
             Self::HistoricalBaselineComposition
-            | Self::SealedRevision
+            | Self::SealedRevisionPack
             | Self::HistoricalEvaluation
             | Self::PublicationHistory
             | Self::InstallationState => &[],
@@ -337,7 +337,7 @@ pub fn check(precondition: &RequestPrecondition, current: &ReadModelWatermark) -
 ///
 /// # Why some stores report a fold rather than a counter
 ///
-/// `ProjectControl` and a single `Change` have their own generation. Evidence,
+/// `ProjectControl` and a single `ChangePack` have their own generation. Evidence,
 /// gate evaluations and decisions are create-once immutable facts with no
 /// generation at all — but they are never deleted, so their count is
 /// monotonic and moves exactly when a new one lands, which is precisely when
@@ -347,14 +347,14 @@ pub fn check(precondition: &RequestPrecondition, current: &ReadModelWatermark) -
 pub fn current_watermark(
     layout: &crate::project::layout::DraftLayout,
     project: &draft_dcg_contract::ids::ProjectId,
-    change: Option<&draft_dcg_contract::ids::ChangeId>,
+    change: Option<&draft_dcg_contract::ids::ChangePackId>,
 ) -> crate::support::error::DraftResult<ReadModelWatermark> {
     let control = crate::project::control::ProjectControlStore::new(layout.project_control_dir())
         .read_unlocked()?;
 
-    let changes = crate::dcg::change::ChangeStore::new(layout.changes_dir());
+    let changes = crate::dcg::change_pack::ChangePackStore::new(layout.change_packs_dir());
     let change_generation = match change {
-        // The exact Change the action is about. A sibling Change moving is not
+        // The exact ChangePack the action is about. A sibling ChangePack moving is not
         // this action going stale.
         Some(id) => changes
             .read_unlocked(id)?
@@ -391,7 +391,7 @@ pub fn current_watermark(
         project_control_generation: control.map(|state| state.generation).unwrap_or_default(),
         activity_tail_hash: log.tail_hash()?,
         store_generations: [
-            (StoreKey::Change, change_generation),
+            (StoreKey::ChangePack, change_generation),
             (StoreKey::ProviderBinding, binding_generation),
             (StoreKey::PublicationControl, publication_generation),
             (StoreKey::Task, task_generation),
@@ -436,10 +436,10 @@ mod tests {
 
     #[test]
     fn an_unchanged_world_lets_the_action_proceed() {
-        let seen = watermark(3, "tail-a", &[(StoreKey::Change, 7)]);
+        let seen = watermark(3, "tail-a", &[(StoreKey::ChangePack, 7)]);
         assert_eq!(
             check(
-                &precondition(Projection::ChangeSummary, seen.clone()),
+                &precondition(Projection::ChangePackSummary, seen.clone()),
                 &seen
             ),
             ActionOutcome::Proceed
@@ -467,10 +467,14 @@ mod tests {
         // The global-counter mistake, in miniature. If every write invalidated
         // every view, people would learn to retry blindly until something
         // stuck — which is worse than no check at all.
-        let seen = watermark(3, "tail-a", &[(StoreKey::Change, 7)]);
-        let now = watermark(3, "tail-a", &[(StoreKey::Change, 7), (StoreKey::Task, 99)]);
+        let seen = watermark(3, "tail-a", &[(StoreKey::ChangePack, 7)]);
+        let now = watermark(
+            3,
+            "tail-a",
+            &[(StoreKey::ChangePack, 7), (StoreKey::Task, 99)],
+        );
         assert_eq!(
-            check(&precondition(Projection::ChangeSummary, seen), &now),
+            check(&precondition(Projection::ChangePackSummary, seen), &now),
             ActionOutcome::Proceed
         );
     }
@@ -485,13 +489,13 @@ mod tests {
         let seen = watermark(
             3,
             "tail-a",
-            &[(StoreKey::ProviderBinding, 1), (StoreKey::Change, 4)],
+            &[(StoreKey::ProviderBinding, 1), (StoreKey::ChangePack, 4)],
         );
 
         let rebound = watermark(
             3,
             "tail-a",
-            &[(StoreKey::ProviderBinding, 2), (StoreKey::Change, 4)],
+            &[(StoreKey::ProviderBinding, 2), (StoreKey::ChangePack, 4)],
         );
         assert!(!check(
             &precondition(Projection::ProviderCatalog, seen.clone()),
@@ -502,7 +506,7 @@ mod tests {
         let sealed = watermark(
             3,
             "tail-a",
-            &[(StoreKey::ProviderBinding, 1), (StoreKey::Change, 5)],
+            &[(StoreKey::ProviderBinding, 1), (StoreKey::ChangePack, 5)],
         );
         assert_eq!(
             check(
@@ -517,7 +521,7 @@ mod tests {
         let appended = watermark(
             3,
             "tail-b",
-            &[(StoreKey::ProviderBinding, 1), (StoreKey::Change, 4)],
+            &[(StoreKey::ProviderBinding, 1), (StoreKey::ChangePack, 4)],
         );
         assert_eq!(
             check(&precondition(Projection::ProviderCatalog, seen), &appended),
@@ -554,11 +558,11 @@ mod tests {
     fn historical_projections_are_never_stale() {
         // Asking whether a sealed revision or a past decision is fresh is
         // asking whether the past has changed.
-        let seen = watermark(3, "tail-a", &[(StoreKey::Change, 7)]);
-        let moved = watermark(99, "tail-z", &[(StoreKey::Change, 4242)]);
+        let seen = watermark(3, "tail-a", &[(StoreKey::ChangePack, 7)]);
+        let moved = watermark(99, "tail-z", &[(StoreKey::ChangePack, 4242)]);
         for projection in [
             Projection::HistoricalBaselineComposition,
-            Projection::SealedRevision,
+            Projection::SealedRevisionPack,
             Projection::HistoricalEvaluation,
             Projection::PublicationHistory,
         ] {
@@ -575,13 +579,13 @@ mod tests {
     fn a_store_that_stops_reporting_is_movement_not_agreement() {
         // An absent generation is an unanswered question. Reading it as
         // "unchanged" is how a stale action gets through.
-        let seen = watermark(3, "tail-a", &[(StoreKey::Change, 7)]);
+        let seen = watermark(3, "tail-a", &[(StoreKey::ChangePack, 7)]);
         let silent = watermark(3, "tail-a", &[]);
-        match check(&precondition(Projection::ChangeSummary, seen), &silent) {
+        match check(&precondition(Projection::ChangePackSummary, seen), &silent) {
             ActionOutcome::Stale { moved } => assert_eq!(
                 moved,
                 vec![StaleReason::StoreUnknown {
-                    store: StoreKey::Change
+                    store: StoreKey::ChangePack
                 }]
             ),
             other => panic!("expected Stale, got {other:?}"),
@@ -590,8 +594,8 @@ mod tests {
 
     #[test]
     fn activity_advancement_touches_only_activity_derived_views() {
-        let seen = watermark(3, "tail-a", &[(StoreKey::Change, 7)]);
-        let appended = watermark(3, "tail-b", &[(StoreKey::Change, 7)]);
+        let seen = watermark(3, "tail-a", &[(StoreKey::ChangePack, 7)]);
+        let appended = watermark(3, "tail-b", &[(StoreKey::ChangePack, 7)]);
 
         assert_eq!(
             check(
@@ -603,7 +607,10 @@ mod tests {
             }
         );
         assert_eq!(
-            check(&precondition(Projection::ChangeSummary, seen), &appended),
+            check(
+                &precondition(Projection::ChangePackSummary, seen),
+                &appended
+            ),
             ActionOutcome::Proceed
         );
     }
@@ -617,7 +624,7 @@ mod tests {
             1,
             "tail-a",
             &[
-                (StoreKey::Change, 1),
+                (StoreKey::ChangePack, 1),
                 (StoreKey::ProviderBinding, 1),
                 (StoreKey::Evidence, 1),
                 (StoreKey::Gate, 1),
@@ -625,7 +632,7 @@ mod tests {
             ],
         );
         for store in [
-            StoreKey::Change,
+            StoreKey::ChangePack,
             StoreKey::ProviderBinding,
             StoreKey::Evidence,
             StoreKey::Gate,
@@ -635,7 +642,7 @@ mod tests {
             now.store_generations.insert(store, 2);
             assert!(
                 !check(
-                    &precondition(Projection::ChangeEligibility, seen.clone()),
+                    &precondition(Projection::ChangePackEligibility, seen.clone()),
                     &now
                 )
                 .may_proceed(),
@@ -645,7 +652,7 @@ mod tests {
         let mut control_moved = seen.clone();
         control_moved.project_control_generation = 2;
         assert!(!check(
-            &precondition(Projection::ChangeEligibility, seen),
+            &precondition(Projection::ChangePackEligibility, seen),
             &control_moved
         )
         .may_proceed());
@@ -656,7 +663,7 @@ mod tests {
         // "Refresh and retry" is the right advice for one and destroys the
         // other person's work for the other.
         let conflict = ActionOutcome::Conflict {
-            subject: "chg_000000000001".into(),
+            subject: "cpk_000000000001".into(),
             detail: "another decision was recorded for this revision".into(),
         };
         assert!(!conflict.may_proceed());

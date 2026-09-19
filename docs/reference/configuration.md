@@ -39,7 +39,7 @@ Both values are trimmed, bounded, non-empty, and reject control data. Email is i
 
 Resolution is project `user.name`, then global `user.name`, then the built-in `unknown` fallback. The fallback is in-memory only and is never written to a configuration file. Email resolves project then global, with no built-in value.
 
-These values are strictly non-authoritative. They do not affect actor IDs, signing or public keys, authorization, trust, receipt identity or verification, candidate attribution, workspace/source/Change digests, event hashes, or ownership. A newly rendered presentation may include a non-authoritative display snapshot beside the stable actor ID.
+These values are strictly non-authoritative. They do not affect actor IDs, signing or public keys, authorization, trust, receipt identity or verification, candidate attribution, workspace/source/ChangePack digests, event hashes, or ownership. A newly rendered presentation may include a non-authoritative display snapshot beside the stable actor ID.
 
 Profile/config audit events record the stable actor ID, scope, changed key names, operation/correlation metadata when applicable, and resulting config digest. They do not copy profile values into immutable global/system logs.
 
@@ -93,7 +93,7 @@ Built-in placeholders are:
 {{description}}
 {{task_id}}
 {{execution_id}}
-{{change_id}}
+{{change_pack_id}}
 {{receipt_id}}
 {{actor_name}}
 {{timestamp}}
@@ -197,7 +197,7 @@ draft config ignore list
 
 Rules are stored as plain lines. Blank lines and comments are ignored. Draft supports path-prefix and file-pattern matching, and negated rules can re-include a path unless it is below `.draft/`, which can never be re-included. Use forward slashes; Draft normalizes platform path separators before matching.
 
-Keep ignore rules narrow. Broad rules can hide files from Changes, verification, and rollback planning. When in doubt, leave files visible for review or policy to decide.
+Keep ignore rules narrow. Broad rules can hide files from ChangePacks, verification, and rollback planning. When in doubt, leave files visible for review or policy to decide.
 
 ## Extension state
 

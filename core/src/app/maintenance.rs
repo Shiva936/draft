@@ -1,8 +1,8 @@
 //! Safe local maintenance for canonical Draft state.
 
 use crate::activity::ActivityLog;
-use crate::dcg::change_store::ChangeContentStore;
-use crate::dcg::revision::RevisionState;
+use crate::dcg::change_pack_store::ChangePackContentStore;
+use crate::dcg::revision_pack::ReviewProgressState;
 use crate::project::layout::DraftLayout;
 use crate::project::WorkspaceMetadata;
 use crate::support::error::DraftResult;
@@ -51,7 +51,7 @@ pub fn run(paths: &DraftLayout) -> DraftResult<GcReport> {
     let activity_chain_valid = true;
     let active_changes_preserved = active_change_count(paths)?;
     let mut removed_entries = 0;
-    // Immutable Change manifests, revisions, evidence, and history are
+    // Immutable ChangePack manifests, revisions, evidence, and history are
     // authoritative and are never garbage-collected.
     let disposed_changes_pruned = 0;
     let orphaned_change_dirs_pruned = 0;
@@ -78,15 +78,15 @@ pub fn run(paths: &DraftLayout) -> DraftResult<GcReport> {
     // artifacts a new domain adds.
     let reachability = summarize(&crate::app::gc::classify(&crate::app::roots::build(paths)?));
 
-    // Rebuild the affected-path index from the Changes that survived pruning
+    // Rebuild the affected-path index from the ChangePacks that survived pruning
     // Collection rebuilds the performance indexes as it goes, so a pruned
     // store never leaves a stale index behind.
     let affected_path_index_changes = crate::read_model::index::AffectedPathIndex::rebuild(paths)?;
 
     fsutil::write_json(
-        &paths.change_graph_index(),
+        &paths.change_pack_graph_index(),
         &serde_json::json!({
-            "schema_version": crate::contracts::current_version(crate::contracts::ContractId::ChangeGraphIndex),
+            "schema_version": crate::contracts::current_version(crate::contracts::ContractId::ChangePackGraphIndex),
             "accepted_baseline_valid": accepted_baseline_valid,
             "activity_chain_valid": activity_chain_valid,
             "active_changes": active_changes_preserved,
@@ -132,16 +132,13 @@ fn summarize(
 }
 
 fn active_change_count(paths: &DraftLayout) -> DraftResult<usize> {
-    let store = ChangeContentStore::new(paths.clone());
+    let store = ChangePackContentStore::new(paths.clone());
     let mut count = 0;
     for manifest in store.list()? {
         if store
-            .read_lifecycle_in(
-                crate::dcg::change_store::ChangeLocation::Store,
-                &manifest.change_id,
-            )?
-            .lifecycle
-            != RevisionState::Submitted
+            .read_review_progress(&manifest.change_pack_id)?
+            .progress
+            != ReviewProgressState::Submitted
         {
             count += 1;
         }

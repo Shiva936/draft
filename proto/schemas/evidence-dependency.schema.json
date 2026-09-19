@@ -6,8 +6,8 @@
   "required": [
     "schema_version",
     "evidence_id",
-    "subject_change_id",
-    "subject_revision",
+    "subject_change_pack_id",
+    "subject_content_revision",
     "subject_digest",
     "dependencies",
     "valid"
@@ -20,10 +20,10 @@
     "evidence_id": {
       "type": "string"
     },
-    "subject_change_id": {
+    "subject_change_pack_id": {
       "type": "string"
     },
-    "subject_revision": {
+    "subject_content_revision": {
       "type": "integer",
       "minimum": 1
     },

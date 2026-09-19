@@ -602,14 +602,14 @@ mod tests {
     fn nothing_is_indexed_without_a_contributed_extractor() {
         let index = ImpactIndex::open_memory().unwrap();
         let indexed = index
-            .index_revision("rev_000000000001", &MergedElements::default())
+            .index_revision("rpk_000000000001", &MergedElements::default())
             .unwrap();
         assert_eq!(
             indexed, 0,
             "with no contributed extraction Draft finds nothing rather than guessing"
         );
         assert!(index
-            .elements_touched_by("rev_000000000001")
+            .elements_touched_by("rpk_000000000001")
             .unwrap()
             .is_empty());
     }
@@ -632,9 +632,9 @@ mod tests {
             }],
             producer: producer("ex.pub"),
         }]);
-        index.index_revision("rev_left", &merged).unwrap();
+        index.index_revision("rpk_left", &merged).unwrap();
 
-        let touched = index.elements_touched_by("rev_left").unwrap();
+        let touched = index.elements_touched_by("rpk_left").unwrap();
         assert_eq!(touched, vec!["el_a".to_string(), "el_b".to_string()]);
 
         // `el_b` relates to `el_a`, so a change to `el_a` reaches res_2.
@@ -643,8 +643,8 @@ mod tests {
             .unwrap();
         assert!(related.contains(&ResourceId::parse("res_2").unwrap()));
 
-        index.index_revision("rev_right", &merged).unwrap();
-        let shared = index.shared_elements("rev_left", "rev_right").unwrap();
+        index.index_revision("rpk_right", &merged).unwrap();
+        let shared = index.shared_elements("rpk_left", "rpk_right").unwrap();
         assert_eq!(shared, vec!["el_a".to_string(), "el_b".to_string()]);
     }
 

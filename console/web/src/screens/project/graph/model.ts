@@ -48,8 +48,8 @@ export type PublicationView = {
   detail: string;
 };
 
-export type ChangeView = {
-  change: string;
+export type ChangePackView = {
+  change_pack: string;
   lifecycle: string;
   revisions: { id: string; sealed_at: number }[];
 };
@@ -69,13 +69,13 @@ export type GateView = {
 };
 
 export type RepresentationView = {
-  revision: string;
+  revision_pack: string;
   representations: { resource_id: string; strategy_id: string }[];
 };
 
 export type AuthorizationView = {
-  change: string;
-  revision: string;
+  change_pack: string;
+  revision_pack: string;
   evidence: { id: string; outcome: string }[];
   assessments: { id: string; risk: string }[];
   representation?: RepresentationView | null;
@@ -88,7 +88,7 @@ export type AuthorizationView = {
 export type GraphView = {
   project: string;
   baseline?: BaselineView | null;
-  changes: ChangeView[];
+  change_packs: ChangePackView[];
   publications: PublicationView[];
   actions: ActionAvailability[];
   next_action?: string | null;

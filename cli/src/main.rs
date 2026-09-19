@@ -1,3 +1,4 @@
+mod installation;
 mod output;
 mod service;
 
@@ -18,6 +19,69 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Update this Draft installation to a newer signed release.
+    ///
+    /// Only official standalone installations update themselves. Every
+    /// artifact is verified against the signed release manifest before it
+    /// replaces anything, and a running daemon is stopped and restarted.
+    Update {
+        /// Report the latest eligible release and change nothing.
+        #[arg(long)]
+        check: bool,
+        /// Install exactly this release, whatever the channel.
+        #[arg(long, conflicts_with = "channel")]
+        version: Option<String>,
+        /// Follow this release track: stable or prerelease.
+        #[arg(long)]
+        channel: Option<String>,
+        /// Permit installing a version older than the installed one.
+        #[arg(long, requires = "version", conflicts_with = "check")]
+        allow_downgrade: bool,
+        /// Trust-bridge hops already taken (set when re-executing).
+        #[arg(long, hide = true, default_value_t = 0)]
+        trust_hop: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove this Draft installation.
+    ///
+    /// Removes the executables, their PATH exposure and the installation's own
+    /// metadata. Projects are never scanned or touched, and the global user
+    /// store is kept unless `--purge` is given.
+    Uninstall {
+        /// Print exactly what would be removed and preserved; change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Also delete the global user store, once it is proven Draft's.
+        #[arg(long)]
+        purge: bool,
+        /// Confirm `--purge` without prompting. Waives no safety check.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(name = "__lifecycle-helper", hide = true)]
+    LifecycleHelper {
+        #[arg(long)]
+        installation_id: String,
+        #[arg(long)]
+        operation_id: String,
+        #[arg(long, conflicts_with = "bootstrap_recovery")]
+        parent_pid: Option<u32>,
+        #[arg(long)]
+        bootstrap_recovery: bool,
+    },
+    #[command(name = "release-trust-set", hide = true)]
+    ReleaseTrustSet {
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(name = "__installer", hide = true)]
+    Installer {
+        #[command(subcommand)]
+        action: InstallerAction,
+    },
     /// Manage the long-lived local Draft daemon.
     Daemon {
         #[command(subcommand)]
@@ -28,17 +92,17 @@ enum Command {
         #[command(subcommand)]
         action: ProjectAction,
     },
-    /// Open and seal Changes.
+    /// Open and seal ChangePacks.
     ///
-    /// A Change is the unit of proposed work: what it is for, and exactly what
+    /// A ChangePack is the unit of proposed work: what it is for, and exactly what
     /// it may touch. Sealing captures the workspace as a revision of it.
     ///
     /// What happens to a sealed revision is the rest of the chain — `evidence`,
     /// `assessment`, `gate`, `decision`, `promote` — each its own command,
     /// because each is its own act.
-    Change {
+    Pack {
         #[command(subcommand)]
-        action: ChangeAction,
+        action: PackAction,
     },
     /// Inspect resources and how they are observed.
     Resource {
@@ -94,10 +158,10 @@ enum Command {
     ///
     /// The only operation that changes what this project accepts.
     Promote {
-        /// The Change whose work is being accepted.
-        change: String,
+        /// The ChangePack whose work is being accepted.
+        change_pack_id: String,
         /// The exact revision being promoted.
-        revision: String,
+        revision_pack_id: String,
         /// The approving Decision. Defaults to the one on record for this
         /// revision citing a satisfied gate.
         #[arg(long)]
@@ -132,32 +196,25 @@ enum Command {
         #[command(subcommand)]
         action: AuthorityAction,
     },
-    /// Write an accepted Baseline to a portable `.draftpack`.
-    ///
-    /// The archive is deterministic and its manifest is signed, so two people
-    /// can compare artifacts rather than descriptions of them. Signing keys,
-    /// local trust decisions and raw `.draft/` databases never travel.
-    Export {
-        /// The Baseline to export. The accepted one when omitted.
-        baseline: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum InstallerAction {
+    Install {
         #[arg(long)]
-        output: Option<PathBuf>,
+        install_root: PathBuf,
+        #[arg(long)]
+        path_bin: Option<PathBuf>,
+        #[arg(long)]
+        update_path: bool,
+        #[arg(long)]
+        migrate_legacy: bool,
         #[arg(long)]
         json: bool,
     },
-    /// Validate an untrusted `.draftpack` and place it in quarantine.
-    ///
-    /// Verifying a pack establishes that its bytes are unchanged and that
-    /// whoever held the signing key produced them. It never establishes that
-    /// the key is trusted here — that is this project's own question, and an
-    /// archive that could answer it would be vouching for itself.
-    Import {
-        path: PathBuf,
-        /// Validate and report without writing anything.
+    Recover {
         #[arg(long)]
-        dry_run: bool,
-        #[arg(long)]
-        json: bool,
+        install_root: Option<PathBuf>,
     },
 }
 
@@ -457,13 +514,13 @@ enum ExecutorAuthorityAction {
 enum EvidenceAction {
     /// Run the project's checks against a revision and record the result.
     Run {
-        revision: String,
+        revision_pack_id: String,
         #[arg(long)]
         json: bool,
     },
     /// Every piece of Evidence recorded about a revision.
     List {
-        revision: String,
+        revision_pack_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -479,7 +536,7 @@ enum EvidenceAction {
 enum AssessmentAction {
     /// Record a risk judgement over a revision's evidence.
     Record {
-        revision: String,
+        revision_pack_id: String,
         /// low, medium, high or critical.
         ///
         /// There is deliberately no way to record "unassessed": that is what
@@ -497,7 +554,7 @@ enum AssessmentAction {
 enum GateAction {
     /// Evaluate the project's gate over a revision.
     Evaluate {
-        revision: String,
+        revision_pack_id: String,
         /// Waivers to offer. A waiver excuses a condition and is always named
         /// in the result — "somebody allowed this" never looks like "this
         /// passed".
@@ -508,17 +565,17 @@ enum GateAction {
     },
     /// Everything decided about a revision, and what may legally follow.
     List {
-        change: String,
-        revision: String,
+        change_pack_id: String,
+        revision_pack_id: String,
         #[arg(long)]
         json: bool,
     },
     /// Excuse one gate condition on one exact revision.
     ///
-    /// Bound to the revision, not the Change: an exception accepted for the
+    /// Bound to the revision, not the ChangePack: an exception accepted for the
     /// work as it stood is not an exception for whatever it becomes.
     Waive {
-        revision: String,
+        revision_pack_id: String,
         /// The condition being excused, e.g. `draft.gate/verified`.
         condition: String,
         #[arg(long)]
@@ -535,7 +592,7 @@ enum GateAction {
 enum DecisionAction {
     /// Approve a revision, authorizing its promotion.
     Approve {
-        revision: String,
+        revision_pack_id: String,
         /// The gate this approval is made over. Defaults to a satisfied gate
         /// on record for this revision.
         #[arg(long)]
@@ -547,7 +604,7 @@ enum DecisionAction {
     ///
     /// Needs no gate: refusing work is legitimate whatever the checks say.
     Reject {
-        revision: String,
+        revision_pack_id: String,
         #[arg(long)]
         reason: String,
         #[arg(long)]
@@ -555,16 +612,16 @@ enum DecisionAction {
     },
 }
 
-/// Everything done to or about a Change.
+/// Everything done to or about a ChangePack.
 #[derive(Subcommand)]
-enum ChangeAction {
-    /// Create a Change: what it is for, and exactly what it may touch.
+enum PackAction {
+    /// Create a ChangePack: what it is for, and exactly what it may touch.
     ///
     /// A declaration without a boundary is not a scope, so both are stated
     /// here and resolved against the accepted Baseline. Re-running with the
-    /// same intent converges on the Change it already created.
+    /// same intent converges on the ChangePack it already created.
     New {
-        /// What the Change is for, in your words.
+        /// What the ChangePack is for, in your words.
         intent: String,
         /// The Resources it may touch, as paths or Resource ids.
         ///
@@ -577,66 +634,66 @@ enum ChangeAction {
         #[arg(long)]
         json: bool,
     },
-    /// List Changes and the revisions sealed against them.
+    /// List ChangePacks and the revisions sealed against them.
     List {
         #[arg(long)]
         json: bool,
     },
-    /// One Change: its lifecycle, what it is for, what it may touch, and every
+    /// One ChangePack: its lifecycle, what it is for, what it may touch, and every
     /// revision sealed against it.
     Show {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// What a Change is for, in the author's words.
+    /// What a ChangePack is for, in the author's words.
     Intent {
         #[command(subcommand)]
         action: IntentAction,
     },
-    /// Choose the Change subsequent commands default to.
+    /// Choose the ChangePack subsequent commands default to.
     ///
     /// A convenience, never an authority: every command that acts still names
     /// the exact revision it acts on.
     Select {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Everything recorded about a Change and its newest revision at once.
+    /// Everything recorded about a ChangePack and its newest revision at once.
     ///
-    /// `show` answers what the Change is; this answers what has happened to
+    /// `show` answers what the ChangePack is; this answers what has happened to
     /// it — every judgement, the explanation of its work, and what it
     /// currently interferes with.
     Inspect {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// The accepted history a Change was worked from.
+    /// The accepted history a ChangePack was worked from.
     ///
-    /// Lineage, not proximity. Two Changes touching neighbouring Resources
+    /// Lineage, not proximity. Two ChangePacks touching neighbouring Resources
     /// depend on nothing of each other; `conflicts` is the question that asks
     /// about them.
     Depends {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Every other Change whose newest revision interferes with this one's.
+    /// Every other ChangePack whose newest revision interferes with this one's.
     Conflicts {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Check whether several Changes hold together against one Baseline.
+    /// Check whether several ChangePacks hold together against one Baseline.
     ///
     /// Composes only when every pair is independent and every member was
     /// sealed from the same Baseline. A pair Draft cannot show separable is
     /// reported as interfering rather than assumed composable.
     Compose {
         #[arg(num_args = 2..)]
-        changes: Vec<String>,
+        change_pack_ids: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -647,7 +704,7 @@ enum ChangeAction {
     /// resolve rather than merely refusing.
     Disperse {
         #[arg(num_args = 2..)]
-        changes: Vec<String>,
+        change_pack_ids: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -657,7 +714,7 @@ enum ChangeAction {
     /// said so; directory layout, dependency edges and name similarity produce
     /// no elements at all.
     Impact {
-        revision: String,
+        revision_pack_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -666,7 +723,7 @@ enum ChangeAction {
     /// Deliberately hard to satisfy: a Resource is covered only where evidence
     /// read an observation of that exact Resource.
     Coverage {
-        revision: String,
+        revision_pack_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -675,13 +732,13 @@ enum ChangeAction {
         #[command(subcommand)]
         action: RepresentationAction,
     },
-    /// The receipts issued for this Change's promotions.
+    /// The receipts issued for this ChangePack's promotions.
     Receipts {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// What a Change may touch, as resolved against the Baseline it was opened
+    /// What a ChangePack may touch, as resolved against the Baseline it was opened
     /// from.
     ///
     /// Resolution may narrow a declaration but never widen it, and it is
@@ -689,11 +746,11 @@ enum ChangeAction {
     /// afterwards leaves the resolution stale rather than silently widening
     /// what the work may reach.
     Scope {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// The revisions sealed against a Change.
+    /// The revisions sealed against a ChangePack.
     Revision {
         #[command(subcommand)]
         action: RevisionAction,
@@ -709,22 +766,22 @@ enum ChangeAction {
         #[command(subcommand)]
         action: CandidateAction,
     },
-    /// Stop work on a Change, keeping everything recorded about it.
+    /// Stop work on a ChangePack, keeping everything recorded about it.
     ///
     /// "We tried this and stopped" is frequently the most useful thing in a
     /// project's history, so nothing is deleted. There is no `delete`.
     Abandon {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Resume an abandoned Change.
+    /// Resume an abandoned ChangePack.
     Reopen {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Report how two Changes interfere over the resources they both touch.
+    /// Report how two ChangePacks interfere over the resources they both touch.
     ///
     /// Resources only one side touches are left out: silence is the answer for
     /// them, and listing them would bury the ones that actually interfere.
@@ -746,7 +803,7 @@ enum ChangeAction {
     ///
     /// An assessment is a judgement about risk. It does not authorize anything.
     Assess {
-        revision: String,
+        revision_pack_id: String,
         #[arg(long)]
         risk: String,
         #[arg(long, default_value = "")]
@@ -761,7 +818,7 @@ enum ChangeAction {
     /// nothing yet, and a decision with no recorded review behind it is
     /// precisely what an audit wants to notice.
     Review {
-        revision: String,
+        revision_pack_id: String,
         /// What you want recorded. Repeatable.
         #[arg(long = "comment")]
         comments: Vec<String>,
@@ -772,7 +829,7 @@ enum ChangeAction {
     ///
     /// Approving authorizes a promotion. It does not perform one.
     Decide {
-        revision: String,
+        revision_pack_id: String,
         /// Approve, citing the gate the judgement was made over.
         #[arg(long, conflicts_with = "reject")]
         approve: bool,
@@ -801,27 +858,27 @@ enum ChangeAction {
 
 #[derive(Subcommand)]
 enum IntentAction {
-    /// What a Change is for, as declared.
+    /// What a ChangePack is for, as declared.
     Show {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Declare what a Change is for.
+    /// Declare what a ChangePack is for.
     ///
-    /// The same act as amending: a Change's intent lives in its definition, and
+    /// The same act as amending: a ChangePack's intent lives in its definition, and
     /// changing it mints a new definition rather than editing the old one. Kept
     /// as two spellings because "state it for the first time" and "change what
     /// it says" read differently to the person doing it.
     Set {
-        change: String,
+        change_pack_id: String,
         intent: String,
         #[arg(long)]
         json: bool,
     },
-    /// Amend what a Change is for.
+    /// Amend what a ChangePack is for.
     Amend {
-        change: String,
+        change_pack_id: String,
         intent: String,
         #[arg(long)]
         json: bool,
@@ -837,7 +894,7 @@ enum RepresentationAction {
     },
     /// The explanation of one sealed revision.
     Show {
-        revision: String,
+        revision_pack_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -845,26 +902,26 @@ enum RepresentationAction {
 
 #[derive(Subcommand)]
 enum RevisionAction {
-    /// Seal the workspace's current state as a revision of a Change.
+    /// Seal the workspace's current state as a revision of a ChangePack.
     ///
     /// The state is observed, not asserted. Sealing the same state twice is
     /// the same revision, so a re-run is not a second thing to review.
     Seal {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Every revision sealed against a Change, newest first.
+    /// Every revision sealed against a ChangePack, newest first.
     List {
-        change: String,
+        change_pack_id: String,
         #[arg(long)]
         json: bool,
     },
     /// One sealed revision: the exact definition and scope it was sealed
     /// against, the Baseline it was worked from, and what it touched.
     Show {
-        change: String,
-        revision: String,
+        change_pack_id: String,
+        revision_pack_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -1858,6 +1915,67 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), DraftError> {
+    // Installation lifecycle runs before, and without, any project discovery.
+    match cli.command {
+        Command::Update {
+            check,
+            version,
+            channel,
+            allow_downgrade,
+            trust_hop,
+            json,
+        } => {
+            return installation::run_update(
+                check,
+                version,
+                channel,
+                allow_downgrade,
+                trust_hop,
+                json,
+            )
+        }
+        Command::Uninstall {
+            dry_run,
+            purge,
+            yes,
+            json,
+        } => return installation::run_uninstall(dry_run, purge, yes, json),
+        Command::LifecycleHelper {
+            installation_id,
+            operation_id,
+            parent_pid,
+            bootstrap_recovery,
+        } => {
+            return installation::run_helper(
+                installation_id,
+                operation_id,
+                parent_pid,
+                bootstrap_recovery,
+            )
+        }
+        Command::ReleaseTrustSet { json } => return installation::run_release_trust_set(json),
+        Command::Installer { action } => {
+            return match action {
+                InstallerAction::Install {
+                    install_root,
+                    path_bin,
+                    update_path,
+                    migrate_legacy,
+                    json,
+                } => installation::run_installer_install(
+                    install_root,
+                    path_bin,
+                    update_path,
+                    migrate_legacy,
+                    json,
+                ),
+                InstallerAction::Recover { install_root } => {
+                    installation::run_installer_recover(install_root)
+                }
+            }
+        }
+        _ => {}
+    }
     let cwd = std::env::current_dir().map_err(DraftError::from)?;
     ensure_project_scope(&cli.command, cwd.as_path())?;
     let app = app();
@@ -1866,19 +1984,24 @@ fn run(cli: Cli) -> Result<(), DraftError> {
     // translation is a mapping between them rather than a second user-facing
     // vocabulary — there is exactly one way to spell each command.
     match cli.command {
+        Command::Update { .. }
+        | Command::Uninstall { .. }
+        | Command::LifecycleHelper { .. }
+        | Command::ReleaseTrustSet { .. }
+        | Command::Installer { .. } => unreachable!("dispatched before project discovery"),
         Command::Daemon { action } => service::handle(action, cwd.as_path()),
         Command::Project { action } => run_project(&app, cwd.as_path(), action),
         Command::Workspace(command) => run_workspace(&app, cwd.as_path(), command),
         Command::Tasks(command) => run_tasks(&app, cwd.as_path(), command),
-        Command::Change { action } => run_change(&app, cwd.as_path(), action),
+        Command::Pack { action } => run_pack(&app, cwd.as_path(), action),
         Command::Baseline { action } => run_baseline(
             &app,
             cwd.as_path(),
             action.unwrap_or(BaselineAction::Show { json: false }),
         ),
         Command::Promote {
-            change,
-            revision,
+            change_pack_id: change,
+            revision_pack_id: revision,
             decision,
             gate,
             expected_baseline,
@@ -1913,28 +2036,6 @@ fn run(cli: Cli) -> Result<(), DraftError> {
                 "Resource state",
             ),
         },
-        Command::Export {
-            baseline,
-            output,
-            json,
-        } => render_json_or_text(
-            app.export_baseline(cwd.as_path(), baseline.as_deref(), output.as_deref())?,
-            json,
-            "Baseline exported",
-        ),
-        Command::Import {
-            path,
-            dry_run,
-            json,
-        } => render_json_or_text(
-            app.import_baseline(cwd.as_path(), &path, dry_run)?,
-            json,
-            if dry_run {
-                "DraftPack verified"
-            } else {
-                "DraftPack quarantined"
-            },
-        ),
         Command::Inbox { json } => render_json_or_text(app.inbox(cwd.as_path())?, json, "Inbox"),
         Command::Activity { action } => match action {
             ActivityAction::List {
@@ -2473,7 +2574,7 @@ fn run_workspace(app: &App, cwd: &Path, command: WorkspaceCommand) -> Result<(),
                     app.status_with_options(
                         cwd,
                         draft_core::app::StatusOptions {
-                            change,
+                            change_pack_id: change,
                             component,
                             full,
                         },
@@ -2921,9 +3022,9 @@ fn run_tasks(app: &App, cwd: &Path, command: TaskCommand) -> Result<(), DraftErr
     }
 }
 
-/// `draft change ...` — everything done to or about a Change.
+/// `draft pack ...` — everything done to or about a ChangePack.
 ///
-/// A Change's identity and its work are still carried by the record
+/// A ChangePack's identity and its work are still carried by the record
 /// underneath; this is the surface §8.1 specifies over it, not a second
 /// vocabulary for the same commands.
 fn run_baseline(app: &App, cwd: &Path, action: BaselineAction) -> Result<(), DraftError> {
@@ -3310,31 +3411,37 @@ fn run_publish(app: &App, cwd: &Path, action: PublishAction) -> Result<(), Draft
     }
 }
 
-fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftError> {
+fn run_pack(app: &App, cwd: &Path, action: PackAction) -> Result<(), DraftError> {
     match action {
-        ChangeAction::New {
+        PackAction::New {
             intent,
             scope,
             json,
         } => render_json_or_text(
-            app.dcg_open_change(cwd, &intent, &scope)?,
+            app.dcg_open_change_pack(cwd, &intent, &scope)?,
             json,
-            "Change created",
+            "ChangePack created",
         ),
-        ChangeAction::List { json } => render_json_or_text(app.dcg_changes(cwd)?, json, "Changes"),
-        ChangeAction::Checkpoint { message, json } => {
+        PackAction::List { json } => {
+            render_json_or_text(app.dcg_change_packs(cwd)?, json, "ChangePacks")
+        }
+        PackAction::Checkpoint { message, json } => {
             render_json_or_text(app.checkpoint(cwd, &message)?, json, "Checkpoint created")
         }
-        ChangeAction::Candidate { action } => run_candidate(app, cwd, action),
-        ChangeAction::Show { change, json } => {
-            render_json_or_text(app.dcg_change(cwd, &change)?, json, "Change")
-        }
-        ChangeAction::Intent { action } => match action {
-            IntentAction::Show { change, json } => {
-                let view = app.dcg_change(cwd, &change)?;
+        PackAction::Candidate { action } => run_candidate(app, cwd, action),
+        PackAction::Show {
+            change_pack_id: change,
+            json,
+        } => render_json_or_text(app.dcg_change_pack(cwd, &change)?, json, "ChangePack"),
+        PackAction::Intent { action } => match action {
+            IntentAction::Show {
+                change_pack_id: change,
+                json,
+            } => {
+                let view = app.dcg_change_pack(cwd, &change)?;
                 render_json_or_text(
                     serde_json::json!({
-                        "change": view["change"],
+                        "change_pack_id": view["change_pack_id"],
                         "intent": view["definition"]["intent"],
                     }),
                     json,
@@ -3342,12 +3449,12 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 )
             }
             IntentAction::Set {
-                change,
+                change_pack_id: change,
                 intent,
                 json,
             }
             | IntentAction::Amend {
-                change,
+                change_pack_id: change,
                 intent,
                 json,
             } => render_json_or_text(
@@ -3356,41 +3463,56 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 "Intent recorded — the scope it declared is unchanged",
             ),
         },
-        ChangeAction::Select { change, json } => render_json_or_text(
-            serde_json::json!({ "selected_change": app.dcg_select_change(cwd, &change)? }),
+        PackAction::Select {
+            change_pack_id: change,
             json,
-            "Change selected",
+        } => render_json_or_text(
+            serde_json::json!({ "selected_change": app.dcg_select_change_pack(cwd, &change)? }),
+            json,
+            "ChangePack selected",
         ),
-        ChangeAction::Inspect { change, json } => {
-            render_json_or_text(app.dcg_inspect(cwd, &change)?, json, "Change")
-        }
-        ChangeAction::Depends { change, json } => {
-            render_json_or_text(app.dcg_depends(cwd, &change)?, json, "Dependencies")
-        }
-        ChangeAction::Conflicts { change, json } => {
-            render_json_or_text(app.dcg_conflicts(cwd, &change)?, json, "Conflicts")
-        }
-        ChangeAction::Compose { changes, json } => {
+        PackAction::Inspect {
+            change_pack_id: change,
+            json,
+        } => render_json_or_text(app.dcg_inspect(cwd, &change)?, json, "ChangePack"),
+        PackAction::Depends {
+            change_pack_id: change,
+            json,
+        } => render_json_or_text(app.dcg_depends(cwd, &change)?, json, "Dependencies"),
+        PackAction::Conflicts {
+            change_pack_id: change,
+            json,
+        } => render_json_or_text(app.dcg_conflicts(cwd, &change)?, json, "Conflicts"),
+        PackAction::Compose {
+            change_pack_ids: changes,
+            json,
+        } => {
             let composition = app.dcg_compose(cwd, &changes)?;
             if !json && composition.status == draft_core::dcg::compose::CompositionStatus::Failed {
-                output::warn("these Changes do not compose; `disperse` says which are held");
+                output::warn("these ChangePacks do not compose; `disperse` says which are held");
             }
             render_json_or_text(composition, json, "Composition")
         }
-        ChangeAction::Disperse { changes, json } => {
-            render_json_or_text(app.dcg_disperse(cwd, &changes)?, json, "Dispersal")
-        }
-        ChangeAction::Impact { revision, json } => {
-            render_json_or_text(app.dcg_impact(cwd, &revision)?, json, "Impact")
-        }
-        ChangeAction::Coverage { revision, json } => {
-            render_json_or_text(app.dcg_coverage(cwd, &revision)?, json, "Proof coverage")
-        }
-        ChangeAction::Representation { action } => match action {
+        PackAction::Disperse {
+            change_pack_ids: changes,
+            json,
+        } => render_json_or_text(app.dcg_disperse(cwd, &changes)?, json, "Dispersal"),
+        PackAction::Impact {
+            revision_pack_id: revision,
+            json,
+        } => render_json_or_text(app.dcg_impact(cwd, &revision)?, json, "Impact"),
+        PackAction::Coverage {
+            revision_pack_id: revision,
+            json,
+        } => render_json_or_text(app.dcg_coverage(cwd, &revision)?, json, "Proof coverage"),
+        PackAction::Representation { action } => match action {
             RepresentationAction::List { json } => {
                 render_json_or_text(app.dcg_representations(cwd)?, json, "Representations")
             }
-            RepresentationAction::Show { revision, json } => render_json_or_text(
+            RepresentationAction::Show {
+                revision_pack_id: revision,
+                json,
+            } => render_json_or_text(
                 app.dcg_representation(cwd, &revision)?.ok_or_else(|| {
                     DraftError::new(
                         DraftErrorKind::NotFound,
@@ -3401,16 +3523,24 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 "Representation",
             ),
         },
-        ChangeAction::Receipts { change, json } => {
-            render_json_or_text(app.dcg_change_receipts(cwd, &change)?, json, "Receipts")
-        }
-        ChangeAction::Scope { change, json } => {
-            let view = app.dcg_change(cwd, &change)?;
+        PackAction::Receipts {
+            change_pack_id: change,
+            json,
+        } => render_json_or_text(
+            app.dcg_change_pack_receipts(cwd, &change)?,
+            json,
+            "Receipts",
+        ),
+        PackAction::Scope {
+            change_pack_id: change,
+            json,
+        } => {
+            let view = app.dcg_change_pack(cwd, &change)?;
             // Declared and resolved are both shown. A reader given only the
             // resolved set cannot tell whether a declaration was narrowed.
             render_json_or_text(
                 serde_json::json!({
-                    "change": view["change"],
+                    "change_pack_id": view["change_pack_id"],
                     "declared": view["definition"]["scope_declaration"],
                     "resolved": view["scope_resolution"],
                 }),
@@ -3418,20 +3548,24 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 "Scope",
             )
         }
-        ChangeAction::Revision { action } => match action {
-            RevisionAction::Seal { change, json } => {
-                render_json_or_text(app.dcg_seal(cwd, &change)?, json, "Revision sealed")
-            }
-            RevisionAction::List { change, json } => {
-                let view = app.dcg_change(cwd, &change)?;
+        PackAction::Revision { action } => match action {
+            RevisionAction::Seal {
+                change_pack_id: change,
+                json,
+            } => render_json_or_text(app.dcg_seal(cwd, &change)?, json, "Revision sealed"),
+            RevisionAction::List {
+                change_pack_id: change,
+                json,
+            } => {
+                let view = app.dcg_change_pack(cwd, &change)?;
                 render_json_or_text(view["revisions"].clone(), json, "Revisions")
             }
             RevisionAction::Show {
-                change,
-                revision,
+                change_pack_id: change,
+                revision_pack_id: revision,
                 json,
             } => {
-                let view = app.dcg_change(cwd, &change)?;
+                let view = app.dcg_change_pack(cwd, &change)?;
                 let sealed = view["revisions"]
                     .as_array()
                     .and_then(|all| {
@@ -3442,32 +3576,42 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                     .ok_or_else(|| {
                         DraftError::new(
                             DraftErrorKind::NotFound,
-                            format!("change '{change}' has no revision '{revision}'"),
+                            format!("ChangePack '{change}' has no revision '{revision}'"),
                         )
                     })?;
                 render_json_or_text(sealed, json, "Revision")
             }
         },
-        ChangeAction::Abandon { change, json } => render_json_or_text(
-            app.dcg_abandon_change(cwd, &change)?,
+        PackAction::Abandon {
+            change_pack_id: change,
             json,
-            "Change abandoned — its history is kept",
-        ),
-        ChangeAction::Reopen { change, json } => render_json_or_text(
-            app.dcg_reopen_change(cwd, &change)?,
+        } => render_json_or_text(
+            app.dcg_abandon_change_pack(cwd, &change)?,
             json,
-            "Change reopened",
+            "ChangePack abandoned — its history is kept",
         ),
-        ChangeAction::Compare { left, right, json } => render_json_or_text(
-            app.dcg_compare_changes(cwd, &left, &right)?,
+        PackAction::Reopen {
+            change_pack_id: change,
+            json,
+        } => render_json_or_text(
+            app.dcg_reopen_change_pack(cwd, &change)?,
+            json,
+            "ChangePack reopened",
+        ),
+        PackAction::Compare { left, right, json } => render_json_or_text(
+            app.dcg_compare_change_packs(cwd, &left, &right)?,
             json,
             "Interference",
         ),
-        ChangeAction::Evidence { action } => match action {
-            EvidenceAction::Run { revision, json } => {
-                render_json_or_text(app.dcg_verify(cwd, &revision)?, json, "Evidence recorded")
-            }
-            EvidenceAction::List { revision, json } => {
+        PackAction::Evidence { action } => match action {
+            EvidenceAction::Run {
+                revision_pack_id: revision,
+                json,
+            } => render_json_or_text(app.dcg_verify(cwd, &revision)?, json, "Evidence recorded"),
+            EvidenceAction::List {
+                revision_pack_id: revision,
+                json,
+            } => {
                 let evidence = app.dcg_evidence_for(cwd, &revision)?;
                 render_json_or_text(evidence, json, "Evidence")
             }
@@ -3482,8 +3626,8 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 "Evidence",
             ),
         },
-        ChangeAction::Assess {
-            revision,
+        PackAction::Assess {
+            revision_pack_id: revision,
             risk,
             rationale,
             json,
@@ -3492,8 +3636,8 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
             json,
             "Assessment recorded",
         ),
-        ChangeAction::Review {
-            revision,
+        PackAction::Review {
+            revision_pack_id: revision,
             comments,
             json,
         } => render_json_or_text(
@@ -3501,8 +3645,8 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
             json,
             "Review recorded — this is not a decision",
         ),
-        ChangeAction::Decide {
-            revision,
+        PackAction::Decide {
+            revision_pack_id: revision,
             approve,
             reject,
             gate,
@@ -3536,9 +3680,9 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 )
             }
         }
-        ChangeAction::Gates { action } => match action {
+        PackAction::Gates { action } => match action {
             GateAction::Evaluate {
-                revision,
+                revision_pack_id: revision,
                 waivers,
                 json,
             } => {
@@ -3551,8 +3695,8 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 render_json_or_text(evaluation, json, "Gate evaluated")
             }
             GateAction::List {
-                change,
-                revision,
+                change_pack_id: change,
+                revision_pack_id: revision,
                 json,
             } => render_json_or_text(
                 app.dcg_authorization(cwd, &change, &revision)?,
@@ -3560,7 +3704,7 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
                 "Authorization",
             ),
             GateAction::Waive {
-                revision,
+                revision_pack_id: revision,
                 condition,
                 reason,
                 days,
@@ -3568,7 +3712,7 @@ fn run_change(app: &App, cwd: &Path, action: ChangeAction) -> Result<(), DraftEr
             } => render_json_or_text(
                 app.dcg_waive(cwd, &revision, &condition, &reason, days)?,
                 json,
-                "Waiver granted — offer it with `draft change gates evaluate --waiver`",
+                "Waiver granted — offer it with `draft pack gates evaluate --waiver`",
             ),
         },
     }
@@ -4055,7 +4199,7 @@ fn render_status(
     }
     output::header("Workspace Status");
     output::field("Workspace", &report.workspace_id.to_string());
-    output::field("Changes", &report.changes.len().to_string());
+    output::field("ChangePacks", &report.changes.len().to_string());
     for change in report.changes {
         let aspects = change
             .aspects
@@ -4078,12 +4222,12 @@ fn render_status_report(
     }
     output::header("Workspace Status");
     output::field("Workspace", &report.workspace.workspace_id.to_string());
-    output::field("Changes", &report.workspace.changes.len().to_string());
+    output::field("ChangePacks", &report.workspace.changes.len().to_string());
     if let Some(component) = &report.component {
         output::field("Component", component);
     }
-    if let Some(change) = &report.change {
-        output::field("Change", change);
+    if let Some(change) = &report.change_pack_id {
+        output::field("ChangePack", change);
     }
     for (name, value) in report.sections {
         output::section(&name);
@@ -4309,7 +4453,7 @@ fn run_promote(
             let satisfied = view
                 .gates
                 .iter()
-                .find(|value| value.satisfied && value.evaluation.covers(&approving.revision))
+                .find(|value| value.satisfied && value.evaluation.covers(&approving.revision_pack))
                 .ok_or_else(|| {
                     DraftError::new(
                         DraftErrorKind::ReviewRequired,

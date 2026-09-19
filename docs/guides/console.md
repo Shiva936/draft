@@ -54,20 +54,20 @@ Project navigation is **Overview, Work, Resources, Baselines, Activity, Provider
 | Section | Views | Why here |
 | --- | --- | --- |
 | Overview | — | Condensed project status. It summarises the sections below; it does not reimplement them. |
-| Work | Tasks · Changes | The two things a person does _to_ a project. |
+| Work | Tasks · Packs | The two things a person does _to_ a project. The Packs view lists every ChangePack; **Work > Packs** is where review happens. |
 | Resources | Resources · Observation | An observation is evidence _about_ a Resource, so it lives inside the Resource domain. |
 | Baselines | Baselines · Publications | What the project accepts, and separately what was delivered from it. |
 | Activity | — | The append-only Activity Ledger projection. |
 | Providers | — | Bindings, semantic definitions and operational profiles. |
 | Extensions | Extensions · Tools | A tool exists only because an extension contributes it. |
 
-A Change has its own scope with fourteen views — Summary, Intent, Scope, Revisions, Impact, Representations, Evidence, Assessments, Review, Decisions, Gates, Promotion, Receipts, Recovery — one per act, because each is a separate fact. A reader who cannot tell an approval from a passing check cannot tell what authorized a promotion. A Baseline has its own scope too: Summary, State root, Evidence root, Coverage, Lineage, Composition, Recoverability, Receipts, Publications.
+A ChangePack has its own scope with fourteen views — Summary, Intent, Scope, Revisions, Impact, Representations, Evidence, Assessments, Review, Decisions, Gates, Promotion, Receipts, Recovery — one per act, because each is a separate fact. "Revisions" is the concise label: each entry there is a RevisionPack, the exact immutable revision everything else binds to. A reader who cannot tell an approval from a passing check cannot tell what authorized a promotion. A Baseline has its own scope too: Summary, State root, Evidence root, Coverage, Lineage, Composition, Recoverability, Receipts, Publications.
 
 This structure is not written in the frontends. `draftd` serves it from one definition in the Console application protocol, and the browser's copy is generated from that same definition — so the sections a frontend renders cannot drift from the sections the authority offers.
 
-The Changes view names the revision's representation alongside its evidence and assessments: how many Resources were explained and by which strategy, because "explained by the neutral rendering" and "explained by an installed extension" are different facts, and only one of them says where inside a Resource the work landed. Every route is keyed by opaque project, Change and Baseline ids.
+The Packs view names each RevisionPack's representation alongside its evidence and assessments: how many Resources were explained and by which strategy, because "explained by the neutral rendering" and "explained by an installed extension" are different facts, and only one of them says where inside a Resource the work landed. Every route is keyed by opaque project, ChangePack and Baseline ids.
 
-The top bar carries the project switcher, search, and a Create menu whose entries run real Draft flows: create task, create Change, new file, and register project. Each is disabled with its reason when there is no project context. The Inbox indicator counts unread notification records only. The sidebar collapses to an icon rail, adapts to a bottom tab bar on narrow widths, and reports live daemon reachability.
+The top bar carries the project switcher, search, and a Create menu whose entries run real Draft flows: create task, create ChangePack, new file, and register project. Each is disabled with its reason when there is no project context. The Inbox indicator counts unread notification records only. The sidebar collapses to an icon rail, adapts to a bottom tab bar on narrow widths, and reports live daemon reachability.
 
 Every figure the Console shows comes from canonical Draft state. Where Draft records no value the view renders an explicit empty state rather than a zero, and a chart is omitted entirely when there is no metric behind it. Identity is shown as initials or a neutral mark; the Console has no profile images.
 
@@ -75,7 +75,7 @@ The browser stores only theme and display preferences. Projects, task metadata, 
 
 Settings has a Global and a Project scope. Global edits only `user.name` and `user.email`, and shows the stable security actor id, public-key id, global store location, and daemon state as read-only. Profile values are non-authoritative display/contact metadata and never affect signatures, trust, authorization, attribution, receipts, event hashes, ownership, or digests. An absent name is rendered through the non-persisted `unknown` fallback. Project scope edits canonical project configuration, ignore policy, hooks, and candidates.
 
-Theme, colour accent, startup view, restored Changes, sidebar state, and starred projects are display preferences stored in this browser alone; no other setting is cached client-side.
+Theme, colour accent, startup view, restored changes, sidebar state, and starred projects are display preferences stored in this browser alone; no other setting is cached client-side.
 
 The Extensions view presents configured, trusted, and currently usable catalog state separately, along with whether each source is enabled and when it was last refreshed. Console accepts HTTPS source configuration and pasted out-of-band signed root metadata; it never accepts a source URL as trust and exposes no arbitrary filesystem browser. Expired discovery is read-only. Install, update, removal, enable/disable, update-all, authorization changes, and trust-root changes require contextual confirmation and execute through typed daemon operations. Local-directory catalogs and package paths remain explicit CLI workflows.
 
@@ -91,7 +91,7 @@ A resource's panel also names the **presentation** Draft resolved for it. Bindin
 
 Syntax highlighting follows that resolved binding: a `text_editor` presentation names a grammar in its config, and the Console loads the matching asset. The vocabularies stay on their own sides — an extension says which grammar its resources want, and the Console owns what a grammar _is_, exactly as it owns what `text_editor` is. Adding a grammar is additive Console work and changes no domain model. A binding that names a grammar this build does not have, and a resource with no resolved binding, both render as plain text. There is no filename fallback: guessing a language from a suffix is exactly the domain knowledge that belongs in an extension, and an unhighlighted resource is correct where a wrongly highlighted one is not.
 
-Opening a resource is read-only. Before saving, choose a task or Change attribution. `Ctrl/Cmd+S` persists a durable Workspace contract (schema version `1` in v0.3.4) and staged content below excluded `.draft/workspaces/`; it does not modify project state. Attribution cannot change inside an open session. Creation, relocation and recursive removal use that same staged session model and require a separate commit.
+Opening a resource is read-only. Before saving, choose a task or ChangePack attribution. `Ctrl/Cmd+S` persists a durable Workspace contract (schema version `1` in v0.3.4) and staged content below excluded `.draft/workspaces/`; it does not modify project state. Attribution cannot change inside an open session. Creation, relocation and recursive removal use that same staged session model and require a separate commit.
 
 The browser opens resources in tabs beside a collapsible tree that marks the neutral change aspects, and a panel carrying state, classes, task links, and the save, relocate, new-resource and delete actions. A grammar is fetched on demand rather than bundled into the initial payload.
 
@@ -99,7 +99,7 @@ The tree groups `file`-scheme resources hierarchically, because that adapter's l
 
 `Commit to context` is explicit. Core revalidates workspace identity, the canonical base revision, protected control-directory paths, attribution, operation id, and a monotonically fenced workspace lease immediately before applying the journaled transaction. A conflicting source revision fails closed without changing the selected file. `.draft/` is unconditionally inaccessible — that is Draft's own control plane and the one protection Draft owns. Any other directory an external tool keeps its state in is outside the observed universe only when an installed view rule says so; with nothing installed such a directory is ordinary project state, because Draft does not know what those tools are.
 
-Which actions are valid is computed by Core and is presentation, never authorization. Sealing a new revision of an active Change is an ordinary next step; nothing recorded about an earlier revision is invalidated, because Evidence, Assessments, Gates and Decisions each bind one exact revision. A completed Change is immutable — create a successor Change instead.
+Which actions are valid is computed by Core and is presentation, never authorization. Sealing a new revision of an active ChangePack is an ordinary next step; nothing recorded about an earlier revision is invalidated, because Evidence, Assessments, Gates and Decisions each bind one exact revision. A completed ChangePack is immutable — create a successor ChangePack instead.
 
 ## Providers
 

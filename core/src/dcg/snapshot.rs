@@ -576,7 +576,7 @@ impl<'a> Snapshotter<'a> {
     /// needs to bind "which observation established this" must be handed the
     /// answer here, at the only moment it is unambiguous — resolving it later
     /// from the store would mean choosing between records, and any rule for
-    /// choosing is a rule for silently changing what a Change claims.
+    /// choosing is a rule for silently changing what a ChangePack claims.
     pub(crate) fn create_snapshot(
         &self,
         actor: ActorRef,

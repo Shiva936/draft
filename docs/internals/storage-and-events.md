@@ -1,6 +1,6 @@
 # Storage And Events
 
-Draft stores private state in two hidden `.draft/` stores. The global store (`~/.draft/`) holds the stable security actor, signing keys, trust data, global configuration, adapter config, and reusable cache state. The project store (`<workspace>/.draft/`) holds Changes, Activity, receipts, transparency data, checkpoints, evidence, and indexes. Both stores are native to Draft v0.3.4 and independent of external tools.
+Draft stores private state in two hidden `.draft/` stores. The global store (`~/.draft/`) holds the stable security actor, signing keys, trust data, global configuration, adapter config, and reusable cache state. The project store (`<workspace>/.draft/`) holds ChangePacks, Activity, receipts, transparency data, checkpoints, evidence, and indexes. Both stores are native to Draft v0.3.4 and independent of external tools.
 
 ## Global Store
 
@@ -11,7 +11,7 @@ Draft stores private state in two hidden `.draft/` stores. The global store (`~/
 - `~/.draft/adapters/`: local adapter configuration.
 - `~/.draft/cache/`: rebuildable global caches.
 
-The global store never stores project Change data.
+The global store never stores project ChangePack data.
 
 ## Project Top-Level Files
 
@@ -28,12 +28,12 @@ The global store never stores project Change data.
 - `.draft/snapshots/`: workspace manifests created by checkpoints and rollback-sensitive operations.
 - `.draft/tasks/`: local task records.
 - `.draft/executions/`: canonical task execution records.
-- `.draft/change-workspaces/`: mutable staging state while deriving immutable revisions.
+- `.draft/change-pack-workspaces/`: mutable staging state while deriving immutable revisions.
 - `.draft/evidence/`: verification and run evidence.
 - `.draft/receipts/`: signed receipts; `receipts/envelopes/` holds each `rcp_` envelope create-once, bound to the digest of its own canonical bytes.
 - `.draft/transparency/`: local tamper-evident receipt/event chain.
-- `.draft/graph/changes/`: the revisioned `Change` records, each with its stable lock sidecar.
-- `.draft/definitions/`, `.draft/resolutions/`, `.draft/revisions/`: immutable `ChangeDefinition`, `ScopeResolution` and sealed `ChangeRevision` facts, each under the create-once `LogicalId → CanonicalPayloadDigest` binding.
+- `.draft/graph/change-packs/`: the revisioned `ChangePack` records, each with its stable lock sidecar.
+- `.draft/definitions/`, `.draft/resolutions/`, `.draft/packs/revision/`: immutable `ChangePackDefinition`, `ScopeResolution` and sealed `RevisionPack` facts, each under the create-once `LogicalId → CanonicalPayloadDigest` binding.
 - `.draft/representations/`: the derived explanation of each sealed revision, keyed by revision — one revision has one explanation.
 - `.draft/assessments/`, `.draft/gates/`, `.draft/reviews/`, `.draft/decisions/`, `.draft/waivers/`: the judgement chain, every fact bound to one exact revision.
 - `.draft/baselines/`, `.draft/observations/`: accepted Baselines with their three roots, and the canonical observations and runs that establish them.
@@ -41,9 +41,8 @@ The global store never stores project Change data.
 - `.draft/provider-bindings/`, `.draft/provider-definitions/`: the revisioned pointer, and the immutable definitions and profiles it points at. The definitions are retained forever, because a Baseline's provenance names one.
 - `.draft/security/{grants,revocations,states}/`, `.draft/promotions/{journal,records}/`: authority facts, and the journalled path that advances an accepted Baseline.
 - `.draft/publication/`: the whole Publication subtree — `registry/`, `publications/`, `attempts/`, `journal/`, `control/`, `outcome-heads/`, `resolutions/` and `retry-authorizations/`, each with its own stable lock sidecar. The six sidecars have distinct, non-interchangeable purposes and are never conflated.
-- `.draft/changes/`: canonical immutable Change manifests, lockfiles, and evidence summaries.
-- `.draft/imports/quarantine/`: untrusted imported `.draftpack` artifacts, including their embedded content objects (`objects/<hash>`). A quarantined artifact's whole directory moves to `.draft/changes/` when the import is accepted.
-- `.draft/exports/`: local export outputs when requested.
+- `.draft/packs/`: canonical Pack objects, and nothing else — `packs/change/<cpk_>/` holds a ChangePack's manifest, content revisions, lockfile and per-Pack files; `packs/revision/` holds the sealed, create-once RevisionPack facts. The authoritative ChangePack _record_ (identity, lifecycle, current definition) is `graph/change-packs/<cpk_>.json`, CAS-guarded.
+- `.draft/exports/`: what the filesystem Publication provider delivers — an external effect written outside the graph.
 - `.draft/impact/`: the offline index of contributed elements and their relations.
 - `.draft/recovery-anchors/`: retained material for restoring a past state, keyed by that state's digest.
 - `.draft/observation-provenance/<state digest>/<provenance digest>.json`: which implementation actually performed each observation. A directory rather than a file, because one observed state may have many immutable records — the same state observed again later, or by a semantics-equivalent build, is a different historical observation, and a receipt that relied on the first must keep pointing at the first. Naming each record by its own digest makes the store append-only and re-recording an identical assembly idempotent. None of it is an input to any state digest.
@@ -107,11 +106,11 @@ WorkspaceCreated          CheckpointCreated
 ProviderSemanticDefinitionAdded   ProviderOperationalProfileAdded
 ProviderBindingAdded      ProviderBindingRetargeted ProviderBindingUnbound  ProviderBindingRebound
 TaskCreated  TaskUpdated  TaskClosed  TaskReopened
-ChangeCreated  ChangeDefinitionAmended  ChangeCompleted  ChangeAbandoned  ChangeReopened
+ChangePackCreated  ChangePackDefinitionAmended  ChangePackCompleted  ChangePackAbandoned  ChangePackReopened
 AuthorityGranted  AuthorityRevoked  SecurityStateUpdated  PolicyUpdated
 OperationPlanned  OperationExecuted  OperationRefused  OperationReplanned
 ResourceObserved  CoverageRecorded  RelationDerived  StateBearingDeclared
-ScopeResolved  RevisionSealed
+ScopeResolved  RevisionPackSealed
 EvidenceProduced  AssessmentProduced
 ReviewSubmitted  DecisionRecorded  GateEvaluated  GateWaived
 LeaseAcquired  LeaseReleased  LeaseRefused

@@ -20,9 +20,9 @@ global + project .draft/ durable stores
 
 `sdk/dcg-contract/` is the portable canonical boundary: the identifier grammar, the Change Graph's canonical values and digests, the Publication family, and receipt payloads. It depends on **no** Draft crate at all — a verifier can check a Draft receipt or reconstruct a Baseline identity without linking Core, a service, or the CLI.
 
-`sdk/extension-contract/` and `sdk/draftpack-contract/` build on it: the declarative package format and signed catalog format, and the portable interchange archive. They let extension authors, publishers and tools build against Draft without building Draft. Libraries under `sdk/` are externally consumable and dependency-light, but that location alone does not promise permanent semver/API stability while Draft remains pre-release.
+`sdk/extension-contract/` builds on it: the declarative package format and signed catalog format. It lets extension authors, publishers and tools build against Draft without building Draft. Libraries under `sdk/` are externally consumable and dependency-light, but that location alone does not promise permanent semver/API stability while Draft remains pre-release.
 
-`core/` owns the domain model and durable stores. It implements config, observation, snapshots, tasks, executions, Changes and revisions, import and export, evidence, assessment, gates, decisions, policy, promotion, publication, signed receipts, recovery anchors, the Activity Ledger, transparency, object storage, the impact index, and indexing. Its `extension` domain owns extension semantics and authorization state; it holds no knowledge of any particular domain, language, ecosystem or toolchain, and reads contributed knowledge through a single port.
+`core/` owns the domain model and durable stores. It implements config, observation, snapshots, tasks, executions, ChangePacks and revisions, import and export, evidence, assessment, gates, decisions, policy, promotion, publication, signed receipts, recovery anchors, the Activity Ledger, transparency, object storage, the impact index, and indexing. Its `extension` domain owns extension semantics and authorization state; it holds no knowledge of any particular domain, language, ecosystem or toolchain, and reads contributed knowledge through a single port.
 
 `cli/` exposes the command-line interface. It invokes `draft-core` directly so the CLI stays usable without a daemon.
 
@@ -110,7 +110,7 @@ AUTHORITATIVE PROJECT TRUTH
     ChangeSet — proved changes, plus explicit derivation uncertainty
 
 DERIVED INTERPRETATION (never changes the above)
-    ClassificationBundle · ChangeRepresentationBundle · ImpactIndex
+    ClassificationBundle · RevisionPackRepresentationBundle · ImpactIndex
     VerificationEvidence · RiskAssessment · Presentation
 
 HUMAN ACCEPTANCE
@@ -162,7 +162,7 @@ What it does not get is a private path. Everything above it reaches it through `
 
 The same rule governs restoration. Draft owns the restore plan, its target locators, its preconditions and its authority; how an opaque anchor becomes state again belongs to the owning adapter and is reached the same way. There is one implementation of each semantic operation, and a CI gate holds it there, because the day two implementations disagree the receipt would still claim they had not.
 
-## Observation Semantics Are Pinned, And Change Only On Purpose
+## Observation Semantics Are Pinned, And ChangePack Only On Purpose
 
 What a project is allowed to see decides what a snapshot even contains. If that could change the instant a package was installed, history would silently acquire additions and removals nobody made — a dependency cache entering the universe looks exactly like somebody adding ten thousand files.
 
@@ -172,7 +172,7 @@ Work derived under a retired context becomes `ContextSuperseded`. It stays reada
 
 One case is deliberately not a transition. A package update whose effective observation semantics are identical — same schemas, same configuration, same coverage partition, same executable identity — changes only _who observed_, never _what is observable_. That is the ordinary upgrade; it produces a new observation-provenance record and nothing else. Forcing a rebaseline for it would train people to click through the very prompt that exists to make them look.
 
-## Acceptance Judges The Change; It Never Changes It
+## Acceptance Judges The ChangePack; It Never ChangePacks It
 
 `AcceptanceContext` is assembled from policy alone — protections, verification gates, risk thresholds, reviewability budgets, waiver and approval rules, gap tolerance, recovery-readiness policy. There is no parameter through which a snapshot, change set or candidate could reach it. That is what makes "tightening a policy never supersedes work" structural rather than a rule somebody has to remember: a policy edit invalidates a _readiness answer_, which is exactly what changed.
 
@@ -191,10 +191,10 @@ Readiness answers in typed states, never in sentences. The blocker list is prose
 1. A user or agent changes project state.
 2. Draft observes it through the resource adapters the active `ObservationContext` names — always including its own filesystem observer, which excludes `.draft/` unconditionally.
 3. A checkpoint records a baseline snapshot, and captures a recovery anchor for each resource under the same live fencing that produced the observation.
-4. A Change derives the authoritative `ChangeSet` between two snapshots: proved changes, plus a derivation gap wherever coverage could not establish presence or absence.
+4. A ChangePack derives the authoritative `ChangeSet` between two snapshots: proved changes, plus a derivation gap wherever coverage could not establish presence or absence.
 5. Verification and risk attach evidence and policy inputs. Both report what they could not establish rather than defaulting.
 6. A Gate evaluates every required condition over the exact revision, and an immutable Decision authorizes or refuses — against review units that are resource-level by default and finer where a comparison capability derived them.
-7. Promotion commits: it preallocates its receipt id, signer binding and Activity event ids, journals its intent, and advances the accepted Baseline through a locked compare-exchange with the Change's lock held, so `Active → Completed` is deterministic finalization rather than a second, separately-failable step.
+7. Promotion commits: it preallocates its receipt id, signer binding and Activity event ids, journals its intent, and advances the accepted Baseline through a locked compare-exchange with the ChangePack's lock held, so `Active → Completed` is deterministic finalization rather than a second, separately-failable step.
 8. Publication optionally delivers that Baseline to an external provider. It is separately identified, separately journalled, and has no authority over what the project accepts.
 9. Every important transition appends a framed, hash-chained Activity record; promotions and publication outcomes issue signed receipts entered in the transparency chain.
 
@@ -233,7 +233,7 @@ So every state-sensitive action carries the authoritative watermark its offer wa
 ReadModelWatermark {
     project_control_generation,
     activity_tail_hash,
-    store_generations: { Change, ProviderBinding, PublicationControl,
+    store_generations: { ChangePack, ProviderBinding, PublicationControl,
                          Task, Evidence, Gate, Decision },
 }
 ```
@@ -266,7 +266,7 @@ Canonical JSON records and the framed Activity Ledger are the durable source of 
 
 ## Safety Boundary
 
-`.draft/` is private Draft metadata. It is not project state and never a change candidate, through any contributed selector or view rule. Any implementation that introduces `.draft/` into status, snapshots, Changes, promotion, recovery, or external command execution is a release blocker.
+`.draft/` is private Draft metadata. It is not project state and never a change candidate, through any contributed selector or view rule. Any implementation that introduces `.draft/` into status, snapshots, ChangePacks, promotion, recovery, or external command execution is a release blocker.
 
 Contributed commands run outside the project entirely, in a per-operation runtime root under the system temporary directory. That boundary is about **authority, budget, provenance and evidence** — argv-only spawn with no shell, a cleared environment, a timeout, bounded and redacted output, and a recorded executable identity. It is deliberately **not** an OS sandbox: there is no filesystem jail, no network isolation and no namespace confinement, and nothing in Draft claims otherwise. `OperationBoundaryViolation` means Draft detected an unexpected effect inside the state it monitors; it does not prove the absence of effects elsewhere.
 

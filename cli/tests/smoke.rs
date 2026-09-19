@@ -15,7 +15,7 @@ fn draft(dir: &std::path::Path) -> Assert {
 /// A workspace whose accepted Baseline holds `app.txt`, and one edit to it.
 ///
 /// The Baseline is accepted over whatever `init` observes, so the file has to
-/// exist before it — and a Change may only be sealed when something in its
+/// exist before it — and a ChangePack may only be sealed when something in its
 /// scope actually differs from what the Baseline accepts.
 fn a_change_in_progress(dir: &std::path::Path) -> (String, String) {
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
@@ -23,7 +23,7 @@ fn a_change_in_progress(dir: &std::path::Path) -> (String, String) {
 
     let opened = draft(dir)
         .args([
-            "change",
+            "pack",
             "new",
             "edit the app",
             "--scope",
@@ -33,17 +33,17 @@ fn a_change_in_progress(dir: &std::path::Path) -> (String, String) {
         .assert()
         .success();
     let change: serde_json::Value = serde_json::from_slice(&opened.get_output().stdout).unwrap();
-    let change_id = change["id"].as_str().unwrap().to_string();
+    let change_pack_id = change["id"].as_str().unwrap().to_string();
 
     std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
     let sealed = draft(dir)
-        .args(["change", "revision", "seal", &change_id, "--json"])
+        .args(["pack", "revision", "seal", &change_pack_id, "--json"])
         .assert()
         .success();
     let revision: serde_json::Value = serde_json::from_slice(&sealed.get_output().stdout).unwrap();
     let revision_id = revision["id"].as_str().unwrap().to_string();
 
-    (change_id, revision_id)
+    (change_pack_id, revision_id)
 }
 
 /// A revision carried all the way onto the accepted Baseline.
@@ -56,7 +56,7 @@ fn a_promoted_revision(dir: &std::path::Path) -> (String, String) {
     // that could check anything and the evidence is `unavailable` — true, and
     // not a pass, so the gate would refuse. These tests are about what happens
     // *after* a gate is satisfied, so they give it something to satisfy it.
-    let (change_id, revision_id) = a_change_in_progress(dir);
+    let (change_pack_id, revision_id) = a_change_in_progress(dir);
     std::fs::write(
         dir.join(".draft/verify.toml"),
         r#"schema_version = 1
@@ -73,12 +73,12 @@ args = []
     .unwrap();
 
     draft(dir)
-        .args(["change", "evidence", "run", &revision_id])
+        .args(["pack", "evidence", "run", &revision_id])
         .assert()
         .success();
     draft(dir)
         .args([
-            "change",
+            "pack",
             "assess",
             &revision_id,
             "--risk",
@@ -89,7 +89,7 @@ args = []
         .assert()
         .success();
     let gate = draft(dir)
-        .args(["change", "gates", "evaluate", &revision_id, "--json"])
+        .args(["pack", "gates", "evaluate", &revision_id, "--json"])
         .assert()
         .success();
     let gate: serde_json::Value = serde_json::from_slice(&gate.get_output().stdout).unwrap();
@@ -97,7 +97,7 @@ args = []
 
     let decision = draft(dir)
         .args([
-            "change",
+            "pack",
             "decide",
             &revision_id,
             "--approve",
@@ -114,7 +114,7 @@ args = []
     draft(dir)
         .args([
             "promote",
-            &change_id,
+            &change_pack_id,
             &revision_id,
             "--gate",
             &gate_id,
@@ -124,7 +124,7 @@ args = []
         .assert()
         .success();
 
-    (change_id, revision_id)
+    (change_pack_id, revision_id)
 }
 
 fn same_canonical_path(left: &std::path::Path, right: &std::path::Path) -> bool {
@@ -813,21 +813,21 @@ fn close_and_gc_follow_local_maintenance_contracts() {
         .stdout(contains("Draft closed"));
     assert!(!clean.join(".draft").exists());
 
-    // An open Change is unfinished work: it stays open until a promotion
+    // An open ChangePack is unfinished work: it stays open until a promotion
     // carries one of its revisions onto the Baseline. Removing the project
     // would destroy it, so the refusal is the whole point of the command
     // having a `--force` at all.
     std::fs::write(dirty.join("app.txt"), "v1\n").unwrap();
     draft(&dirty).args(["init"]).assert().success();
     let opened = draft(&dirty)
-        .args(["change", "new", "pending", "--scope", "app.txt", "--json"])
+        .args(["pack", "new", "pending", "--scope", "app.txt", "--json"])
         .output()
         .unwrap();
     let change: serde_json::Value = serde_json::from_slice(&opened.stdout).unwrap();
-    let change_id = change["id"].as_str().unwrap().to_string();
+    let change_pack_id = change["id"].as_str().unwrap().to_string();
     std::fs::write(dirty.join("app.txt"), "v2\n").unwrap();
     draft(&dirty)
-        .args(["change", "revision", "seal", &change_id])
+        .args(["pack", "revision", "seal", &change_pack_id])
         .assert()
         .success();
 
@@ -870,7 +870,7 @@ fn activity_command_supports_pagination_and_rejects_retired_flags() {
         .stdout(
             contains("PromotionCommitted")
                 .and(contains("BaselinePromoted"))
-                .and(contains("ChangeCompleted"))
+                .and(contains("ChangePackCompleted"))
                 .and(contains("ReceiptIssued"))
                 .and(contains("PromotionFinalized")),
         );
@@ -935,7 +935,9 @@ fn public_docs_do_not_advertise_retired_command_spellings() {
         "draft events",
         "draft log",
         "draft create",
-        "draft pack",
+        "draft change",
+        "draft export",
+        "draft import",
         "draft list",
         "draft intents",
         "draft presentation",
@@ -1015,12 +1017,12 @@ fn reopening_a_change_converges_and_the_retired_vocabulary_is_gone() {
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
     draft(dir).args(["init"]).assert().success();
 
-    // A Change's identity comes from its intent and the Baseline it is worked
+    // A ChangePack's identity comes from its intent and the Baseline it is worked
     // from, so asking for the same one twice is not an error to report — it is
-    // the same Change, and a retried command converges on it.
+    // the same ChangePack, and a retried command converges on it.
     let open = || {
         let out = draft(dir)
-            .args(["change", "new", "unique", "--scope", "app.txt", "--json"])
+            .args(["pack", "new", "unique", "--scope", "app.txt", "--json"])
             .output()
             .unwrap();
         assert!(
@@ -1036,10 +1038,20 @@ fn reopening_a_change_converges_and_the_retired_vocabulary_is_gone() {
     // Draft has one way to spell each command. The retired vocabulary is
     // removed, not kept as an alias — including everything the Change Graph
     // replaced, which is the whole submit-era surface.
+    // retired-architecture-ok: the retired spellings are the subject of this test.
     for retired in [
-        vec!["pack"],
+        vec!["change"],
+        vec!["change", "new", "old-form"],
+        vec!["change", "list"],
         vec!["pack", "create", "old-form"],
-        vec!["pack", "list"],
+        // The removed `.draftpack` transfer surface, and the Pack-level
+        // spellings that were never introduced.
+        vec!["export"],
+        vec!["import", "x.draftpack"], // retired-architecture-ok: negative test
+        vec!["pack", "export"],
+        vec!["pack", "import"],
+        vec!["pack", "adopt"],
+        vec!["pack", "fork"],
         vec!["create", "old-form"],
         vec!["list"],
         vec!["verify"],
@@ -1067,14 +1079,14 @@ fn reopening_a_change_converges_and_the_retired_vocabulary_is_gone() {
     // And the commands that replaced them are real, so this test cannot pass
     // by everything having been deleted.
     for live in [
-        vec!["change", "new", "--help"],
-        vec!["change", "evidence", "run", "--help"],
-        vec!["change", "gates", "evaluate", "--help"],
-        vec!["change", "decide", "--help"],
-        // `pack --export/--import` became top-level commands, so these are the
-        // replacements rather than retired spellings.
-        vec!["export", "--help"],
-        vec!["import", "--help"],
+        vec!["pack", "new", "--help"],
+        vec!["pack", "evidence", "run", "--help"],
+        vec!["pack", "gates", "evaluate", "--help"],
+        vec!["pack", "decide", "--help"],
+        // Unrelated verbs that merely share the English words stay.
+        vec!["task", "export", "--help"],
+        vec!["task", "import", "--help"],
+        vec!["project", "adopt-copy", "--help"],
         vec!["promote", "--help"],
         vec!["baseline", "receipts", "--help"],
     ] {
@@ -1182,7 +1194,7 @@ fn storage_doctor_checks_rebuildable_state() {
     draft(dir).args(["init"]).assert().success();
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
     let out = draft(dir)
-        .args(["change", "checkpoint", "base", "--json"])
+        .args(["pack", "checkpoint", "base", "--json"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -1271,7 +1283,7 @@ fn a_tampered_activity_chain_is_detected_and_named() {
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
     draft(dir).args(["init"]).assert().success();
     draft(dir)
-        .args(["change", "checkpoint", "base"])
+        .args(["pack", "checkpoint", "base"])
         .assert()
         .success();
 
@@ -1351,10 +1363,10 @@ fn obsolete_command_level_tui_flags_are_rejected() {
     // than the command being absent — which is what it would have proved once
     // the commands it used to name were removed.
     for arguments in [
-        vec!["change", "list", "--tui"],
-        vec!["change", "new", "intent", "--tui"],
-        vec!["change", "gates", "evaluate", "rev_x", "--tui"],
-        vec!["promote", "chg_x", "rev_x", "--tui"],
+        vec!["pack", "list", "--tui"],
+        vec!["pack", "new", "intent", "--tui"],
+        vec!["pack", "gates", "evaluate", "rpk_x", "--tui"],
+        vec!["promote", "cpk_x", "rpk_x", "--tui"],
         vec!["activity", "list", "--tui"],
     ] {
         draft(dir)
@@ -1369,12 +1381,12 @@ fn obsolete_command_level_tui_flags_are_rejected() {
 fn authorization_failures_use_documented_exit_codes() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path();
-    let (change_id, revision_id) = a_change_in_progress(dir);
+    let (change_pack_id, revision_id) = a_change_in_progress(dir);
 
     // Nothing has been decided, so promotion has no authority to act on. The
     // review code, because that is what is missing — not a generic failure.
     let promote = draft(dir)
-        .args(["promote", &change_id, &revision_id])
+        .args(["promote", &change_pack_id, &revision_id])
         .output()
         .unwrap();
     assert_eq!(promote.status.code(), Some(7));
@@ -1383,7 +1395,7 @@ fn authorization_failures_use_documented_exit_codes() {
     // decision citing it cannot approve. Same code: the missing thing is still
     // the human authority a promotion needs.
     let gate = draft(dir)
-        .args(["change", "gates", "evaluate", &revision_id, "--json"])
+        .args(["pack", "gates", "evaluate", &revision_id, "--json"])
         .output()
         .unwrap();
     let gate: serde_json::Value = serde_json::from_slice(&gate.stdout).unwrap();
@@ -1399,7 +1411,7 @@ fn authorization_failures_use_documented_exit_codes() {
     );
     let approve = draft(dir)
         .args([
-            "change",
+            "pack",
             "decide",
             &revision_id,
             "--approve",
@@ -1418,7 +1430,7 @@ fn the_activity_event_that_recorded_a_checkpoint_is_a_recovery_target() {
     draft(dir).args(["init"]).assert().success();
     std::fs::write(dir.join("app.txt"), "v1\n").unwrap();
     let checkpoint = draft(dir)
-        .args(["change", "checkpoint", "base", "--json"])
+        .args(["pack", "checkpoint", "base", "--json"])
         .output()
         .unwrap();
     let checkpoint: serde_json::Value = serde_json::from_slice(&checkpoint.stdout).unwrap();
@@ -1461,21 +1473,14 @@ fn an_installed_extension_changes_both_the_outcome_and_the_recorded_configuratio
     draft(dir).args(["init"]).assert().success();
 
     let opened = draft(dir)
-        .args([
-            "change",
-            "new",
-            "sec-fix",
-            "--scope",
-            "src/auth.rs",
-            "--json",
-        ])
+        .args(["pack", "new", "sec-fix", "--scope", "src/auth.rs", "--json"])
         .output()
         .unwrap();
     let change: serde_json::Value = serde_json::from_slice(&opened.stdout).unwrap();
-    let change_id = change["id"].as_str().unwrap().to_string();
+    let change_pack_id = change["id"].as_str().unwrap().to_string();
     std::fs::write(dir.join("src/auth.rs"), "pub fn validate_token() {}\n").unwrap();
     let sealed = draft(dir)
-        .args(["change", "revision", "seal", &change_id, "--json"])
+        .args(["pack", "revision", "seal", &change_pack_id, "--json"])
         .output()
         .unwrap();
     let revision: serde_json::Value = serde_json::from_slice(&sealed.stdout).unwrap();
@@ -1484,7 +1489,7 @@ fn an_installed_extension_changes_both_the_outcome_and_the_recorded_configuratio
     // Before: nothing is installed, so nothing could be asked. `unavailable`
     // is not a pass.
     let before = draft(dir)
-        .args(["change", "evidence", "run", &revision_id, "--json"])
+        .args(["pack", "evidence", "run", &revision_id, "--json"])
         .output()
         .unwrap();
     assert!(
@@ -1500,7 +1505,7 @@ fn an_installed_extension_changes_both_the_outcome_and_the_recorded_configuratio
     // After: the contributed check ran, which is precisely what installing the
     // package buys.
     let after = draft(dir)
-        .args(["change", "evidence", "run", &revision_id, "--json"])
+        .args(["pack", "evidence", "run", &revision_id, "--json"])
         .output()
         .unwrap();
     assert!(
@@ -1520,7 +1525,7 @@ fn an_installed_extension_changes_both_the_outcome_and_the_recorded_configuratio
         before["configuration"], after["configuration"],
         "the checks that ran are part of the configuration the evidence names"
     );
-    assert_eq!(before["revision"], after["revision"]);
+    assert_eq!(before["revision_pack"], after["revision_pack"]);
 }
 
 #[test]
@@ -1575,8 +1580,10 @@ fn docs_do_not_use_retired_external_action_terms() {
         "draft submit",
         // retired-architecture-ok: naming the retired vocabulary is the point.
         "stable head",
-        "pack_id",
     ];
+    // `pack_id` is retired only as a whole word: `change_pack_id`,
+    // `revision_pack_id` and `dependency_change_pack_ids` are current names.
+    let retired_words = ["pack_id"];
 
     let mut violations = Vec::new();
     for file in files {
@@ -1589,6 +1596,11 @@ fn docs_do_not_use_retired_external_action_terms() {
                 violations.push(format!("{} contains {term}", file.display()));
             }
         }
+        for word in retired_words {
+            if contains_word(&lower, word) {
+                violations.push(format!("{} contains {word}", file.display()));
+            }
+        }
     }
 
     assert!(
@@ -1596,6 +1608,14 @@ fn docs_do_not_use_retired_external_action_terms() {
         "retired external-action terms remain:\n{}",
         violations.join("\n")
     );
+}
+
+fn contains_word(text: &str, word: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    text.match_indices(word).any(|(at, _)| {
+        !text[..at].chars().next_back().is_some_and(is_ident)
+            && !text[at + word.len()..].chars().next().is_some_and(is_ident)
+    })
 }
 
 #[test]
@@ -1677,7 +1697,7 @@ fn recovery_accepts_the_activity_event_that_recorded_a_checkpoint() {
     draft(dir).args(["init"]).assert().success();
     std::fs::write(dir.join("app.txt"), "original\n").unwrap();
     draft(dir)
-        .args(["change", "checkpoint", "base"])
+        .args(["pack", "checkpoint", "base"])
         .assert()
         .success();
 
@@ -1801,7 +1821,7 @@ fn closing_a_project_keeps_everything_it_recorded() {
         .stderr(contains("already closed"));
 }
 
-/// Interference is what two Changes actually touched, not what they may touch.
+/// Interference is what two ChangePacks actually touched, not what they may touch.
 #[test]
 fn comparing_two_changes_reports_only_what_they_share() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1820,15 +1840,15 @@ fn comparing_two_changes_reports_only_what_they_share() {
         serde_json::from_slice(&out.stdout).unwrap()
     };
     let id_of = |value: &serde_json::Value| -> String {
-        value["change"]["id"]
+        value["pack"]["id"]
             .as_str()
             .or_else(|| value["id"].as_str())
-            .expect("a Change id")
+            .expect("a ChangePack id")
             .to_string()
     };
 
     let one = id_of(&json(&[
-        "change",
+        "pack",
         "new",
         "edit the app",
         "--scope",
@@ -1836,10 +1856,10 @@ fn comparing_two_changes_reports_only_what_they_share() {
         "--json",
     ]));
     std::fs::write(dir.join("app.txt"), "v2\n").unwrap();
-    json(&["change", "revision", "seal", &one, "--json"]);
+    json(&["pack", "revision", "seal", &one, "--json"]);
 
     let two = id_of(&json(&[
-        "change",
+        "pack",
         "new",
         "edit the docs",
         "--scope",
@@ -1847,19 +1867,19 @@ fn comparing_two_changes_reports_only_what_they_share() {
         "--json",
     ]));
     std::fs::write(dir.join("docs.txt"), "d2\n").unwrap();
-    json(&["change", "revision", "seal", &two, "--json"]);
+    json(&["pack", "revision", "seal", &two, "--json"]);
 
     // Disjoint touched sets from the same Baseline: nothing to report, and
     // `composable` says so directly rather than by an empty list.
-    let report = json(&["change", "compare", &one, &two, "--json"]);
+    let report = json(&["pack", "compare", &one, &two, "--json"]);
     assert_eq!(report["shared_resources"].as_array().unwrap().len(), 0);
     assert_eq!(report["relation"], "independent");
     assert_eq!(report["composable"], true);
 
-    // A third Change over a resource the first already touched interferes,
+    // A third ChangePack over a resource the first already touched interferes,
     // and the resource is named rather than merely counted.
     let three = id_of(&json(&[
-        "change",
+        "pack",
         "new",
         "edit the app again",
         "--scope",
@@ -1867,24 +1887,24 @@ fn comparing_two_changes_reports_only_what_they_share() {
         "--json",
     ]));
     std::fs::write(dir.join("app.txt"), "v3\n").unwrap();
-    json(&["change", "revision", "seal", &three, "--json"]);
+    json(&["pack", "revision", "seal", &three, "--json"]);
 
-    let clash = json(&["change", "compare", &one, &three, "--json"]);
+    let clash = json(&["pack", "compare", &one, &three, "--json"]);
     assert_eq!(clash["relation"], "conflicting");
     assert_eq!(clash["composable"], false);
     assert_eq!(clash["shared_resources"].as_array().unwrap().len(), 1);
 
-    // A Change never interferes with itself; asking is a mistake, not a verdict.
+    // A ChangePack never interferes with itself; asking is a mistake, not a verdict.
     draft(dir)
-        .args(["change", "compare", &one, &one])
+        .args(["pack", "compare", &one, &one])
         .assert()
         .failure()
         .stderr(contains("itself"));
 
-    // And a Change that has sealed nothing has no answer to give, rather than
+    // And a ChangePack that has sealed nothing has no answer to give, rather than
     // a reassuring empty one.
     let unsealed = id_of(&json(&[
-        "change",
+        "pack",
         "new",
         "not started",
         "--scope",
@@ -1892,7 +1912,7 @@ fn comparing_two_changes_reports_only_what_they_share() {
         "--json",
     ]));
     draft(dir)
-        .args(["change", "compare", &one, &unsealed])
+        .args(["pack", "compare", &one, &unsealed])
         .assert()
         .failure()
         .stderr(contains("sealed no revision"));

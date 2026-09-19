@@ -80,7 +80,7 @@ impl PromotionJournalStore {
         Self {
             records: RevisionedRecordStore::new(directory)
                 // The promotion journal is a per-record domain store: it sits
-                // at the same rank as the Change lock it will later complete,
+                // at the same rank as the ChangePack lock it will later complete,
                 // and above the project control record it commits against.
                 .with_order(LockOrder::DomainRecordStore),
         }
@@ -274,7 +274,7 @@ impl PromotionJournalGuard<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use draft_dcg_contract::ids::{ChangeId, ChangeRevisionId, ReceiptId};
+    use draft_dcg_contract::ids::{ChangePackId, ReceiptId, RevisionPackId};
     use draft_dcg_contract::receipt::ReceiptSignerBinding;
     use draft_dcg_contract::{BaselineId, Digest};
 
@@ -286,8 +286,8 @@ mod tests {
         PromotionJournal {
             prepared_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
             promotion: promotion(),
-            revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
-            change: ChangeId::parse("chg_000000000001").unwrap(),
+            revision_pack: RevisionPackId::parse("rpk_000000000001").unwrap(),
+            change_pack: ChangePackId::parse("cpk_000000000001").unwrap(),
             baseline: BaselineId::new(Digest::of_bytes(b"baseline")),
             receipt: ReceiptId::parse("rcp_000000000001").unwrap(),
             signer: ReceiptSignerBinding::new(

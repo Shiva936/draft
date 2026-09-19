@@ -52,7 +52,7 @@ impl From<&str> for WorkspacePath {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EditAttribution {
     Task { id: String },
-    Change { id: String },
+    ChangePack { id: String },
     CandidateExecution { id: String },
     Review { id: String },
 }
@@ -61,7 +61,7 @@ impl EditAttribution {
     pub fn id(&self) -> &str {
         match self {
             Self::Task { id }
-            | Self::Change { id }
+            | Self::ChangePack { id }
             | Self::CandidateExecution { id }
             | Self::Review { id } => id,
         }
@@ -119,15 +119,13 @@ macro_rules! id_newtype {
 // definition could drift from the one that travels in canonical facts.
 // `project::mint_project_id` mints one — Core mints, the contract validates.
 id_newtype!(
-    /// Identifies a Draft change.
-    DraftChangeId, "chg_");
-id_newtype!(
     /// Identifies a Draft operation-log entry by ULID-like opaque id (the
     /// monotonic sequence number is the file name; this is a stable handle).
     OperationId, "op_");
 id_newtype!(
-    /// Identifies a Change: one unit of proposed work.
-    ChangeId, "chg_");
+    /// Identifies one Draft global user store, minted once when Draft itself
+    /// establishes the store root and never rotated (`home.json`).
+    GlobalStoreId, "gst_");
 id_newtype!(
     /// Identifies a stored project-state snapshot file.
     ///

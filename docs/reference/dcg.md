@@ -1,10 +1,20 @@
 # The Draft Change Graph
 
-Draft's canonical object is the **Draft Change Graph** (DCG). Resources and Relations form the project graph; Changes and ChangeRevisions form the work graph; Evidence, Assessments and immutable Decisions gate a journalled Promotion into an immutable Baseline; Publication to an external provider is a separate, independently identified lifecycle; and an append-only Activity Ledger records what actually happened.
+Draft's canonical object is the **Draft Change Graph** (DCG). Resources and Relations form the project graph; ChangePacks and RevisionPacks form the work graph; Evidence, Assessments and immutable Decisions gate a journalled Promotion into an immutable Baseline; Publication to an external provider is a separate, independently identified lifecycle; and an append-only Activity Ledger records what actually happened.
+
+Draft's primary work concept is a **Pack**.
+
+A **ChangePack** (`cpk_`) is a project-local governable work lineage. A **RevisionPack** (`rpk_`) is an immutable exact revision of a ChangePack.
+
+Evidence, assessments, reviews, gates and decisions bind local work to an exact RevisionPack.
+
+**Promotion is the only operation that changes accepted Draft state**, by creating a new Baseline.
+
+**Publication** is a separate, optional external effect performed from a Baseline.
 
 ```
 Resource / Relation
-  → Change → ChangeDefinition → ScopeResolution → ChangeRevision
+  → ChangePack → ChangePackDefinition → ScopeResolution → RevisionPack
   → Evidence + Assessment
   → Review + Decision + Gate
   → Promotion  → Baseline  → PromotionReceipt
@@ -20,7 +30,7 @@ Every arrow in that chain is a _separate_ fact. The separations are the point, a
 | These are different | Because |
 | --- | --- |
 | observed state / accepted state | Observing a project says what is there; only a Promotion says what the project _accepts_. |
-| Change / ChangeRevision | A Change is the work; a revision is one exact sealed state of it. |
+| ChangePack / RevisionPack | A ChangePack is the work lineage; a RevisionPack is one exact, immutable sealed state of it. |
 | Evidence / Assessment | Evidence says what was observed; an Assessment says what somebody judged it to mean. |
 | Assessment / Decision | A judgement of risk is not a decision to proceed. |
 | Decision / Promotion | Authorizing work is not accepting it; the commit is a separate durable act. |
@@ -39,7 +49,7 @@ The v1 exact references are exactly these — the audited set:
 
 | Reference | Fields | Where it appears |
 | --- | --- | --- |
-| `ObservationRef` | `{ id, digest }` | state evidence, relation provenance, Evidence and Assessment inputs, sealed revision observations, scope/impact/proof facts, DraftPack references, receipt payloads |
+| `ObservationRef` | `{ id, digest }` | state evidence, relation provenance, Evidence and Assessment inputs, sealed revision observations, scope/impact/proof facts, receipt payloads |
 | `ObservationRunRef` | `{ id, digest }` | `Observation.run`, `CoverageEvidence.observation_run` |
 | `SecurityFactRef` | `{ kind, logical_id, digest }` | every immutable authorization-bearing fact — `StateBearingDeclaration.authorizing_grant`, `GateWaiver.authority`, and the gate security context |
 | `PublicationRef` | `{ id, digest }` | `PublicationRetryAuthorization.publication`, publication registry entries |
@@ -61,13 +71,13 @@ same id + byte-identical payload            idempotent success
 same id + different payload                 integrity failure, never an overwrite
 ```
 
-This is what makes "the same revision" mean _the same bytes_ rather than the same string. An approval, a gate evaluation or a promotion that cites `rev_abc` cannot be made to describe different content by rewriting what `rev_abc` stores — the binding is checked when the fact is loaded, before anything consumes it.
+This is what makes "the same revision" mean _the same bytes_ rather than the same string. An approval, a gate evaluation or a promotion that cites `rpk_abc` cannot be made to describe different content by rewriting what `rpk_abc` stores — the binding is checked when the fact is loaded, before anything consumes it.
 
-The rule is universal. `ChangeDefinition`, `ScopeResolution`, sealed `ChangeRevision`, `Operation`, `Evidence`, `Assessment`, `ChangeRepresentation`, `Review`, `Decision`, `GateWaiver`, `GateEvaluation`, `PromotionRecord`, `Publication`, `PublicationAttempt`, `PublicationOutcome`, `PublicationResolution`, `PublicationRetryAuthorization` and every receipt envelope are stored this way.
+The rule is universal. `ChangePackDefinition`, `ScopeResolution`, sealed `RevisionPack`, `Operation`, `Evidence`, `Assessment`, `RevisionPackRepresentation`, `Review`, `Decision`, `GateWaiver`, `GateEvaluation`, `PromotionRecord`, `Publication`, `PublicationAttempt`, `PublicationOutcome`, `PublicationResolution`, `PublicationRetryAuthorization` and every receipt envelope are stored this way.
 
 ### Nothing carries across revisions
 
-Evidence and Assessments bind one exact `ChangeRevisionId` and there is deliberately no way to ask whether they also cover a later one. The tempting shortcut — the tests passed, the author edited one file, surely the result still holds — is exactly the case nobody has actually checked. An approval resting on evidence gathered before an edit is an approval of work that was never examined.
+Evidence and Assessments bind one exact `RevisionPackId` and there is deliberately no way to ask whether they also cover a later one. The tempting shortcut — the tests passed, the author edited one file, surely the result still holds — is exactly the case nobody has actually checked. An approval resting on evidence gathered before an edit is an approval of work that was never examined.
 
 ---
 
@@ -210,7 +220,7 @@ Three derived answers about a sealed revision, each deliberately weaker than it 
 
 ### Representation — what the revision did
 
-A `ChangeRepresentation` explains one Resource's transition, and a bundle of them binds one exact `ChangeRevisionId`. It is recorded when the revision is sealed, from the same observations the revision was sealed over: deriving it later would explain a workspace that has since moved.
+A `RevisionPackRepresentation` explains one Resource's transition, and a bundle of them binds one exact `RevisionPackId`. It is recorded when the revision is sealed, from the same observations the revision was sealed over: deriving it later would explain a workspace that has since moved.
 
 Each touched Resource resolves to a strategy — a contributed presentation where one claims the Resource by specificity, and otherwise the **neutral rendering**, which always exists and no extension contributes. The neutral rendering says exactly what Core can justify: which Resource changed, between which two authoritative state digests, and a `Whole` conflict claim, because Draft cannot say where inside a Resource the work landed.
 

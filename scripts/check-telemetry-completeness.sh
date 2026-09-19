@@ -51,7 +51,7 @@ if len(declared) != len(frozen):
 # than one written against a name that disappeared.
 EXPECTED = {
     "project_control_cas_conflicts", "provider_binding_cas_conflicts",
-    "change_definition_cas_conflicts", "publication_control_cas_conflicts",
+    "change_pack_definition_cas_conflicts", "publication_control_cas_conflicts",
     "publication_registry_conflicts", "publication_outcome_conflicts",
     "publication_resolution_head_conflicts", "publication_outcome_recovery_fast_forwards",
     "publication_abandoned_before_dispatch", "publication_attempt_number_gaps",
@@ -62,7 +62,7 @@ EXPECTED = {
     "task_record_cas_conflicts", "process_lock_wait_seconds", "stale_lease_fence_rejections",
     "activity_append_contention", "activity_torn_tail_truncations", "activity_hard_corruptions",
     "activity_chain_verify_failures", "mutation_journal_abandoned", "mutation_journal_recovered",
-    "promotion_recovery_finalizations", "promotion_change_completion_recoveries",
+    "promotion_recovery_finalizations", "promotion_change_pack_completion_recoveries",
     "promotion_inconsistent_states", "publication_indeterminate_total",
     "publication_no_effect_total", "publication_reconciliation_total",
     "publication_unsafe_retry_authorizations", "publication_inconsistent_states",

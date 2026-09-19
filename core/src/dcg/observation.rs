@@ -632,13 +632,13 @@ pub struct ViewRuleProvenance {
     pub source: ObservationProvider,
 }
 
-/// A Change or receipt's binding to one exact historical observation.
+/// A ChangePack or receipt's binding to one exact historical observation.
 ///
 /// Two fields rather than one, and that is the whole point. The snapshot digest
 /// says *what state*; the provenance digest says *which observation of it*. One
 /// authoritative state can be observed many times — a retry, a re-check, a
 /// semantics-equivalent build — and each observation is its own immutable
-/// record. A Change that stored only the snapshot digest and resolved "the latest
+/// record. A ChangePack that stored only the snapshot digest and resolved "the latest
 /// provenance for this state" at read time would quietly change what it claimed
 /// every time somebody looked again.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -3,7 +3,7 @@
 //! The exact-reference rule says *which* references must carry a digest. It is
 //! not the whole guarantee: a canonical parent often refers to an immutable
 //! fact by **logical id alone**, because the digest does not need to travel in
-//! that contract. `Evidence` names a `ChangeRevisionId`; a `GateEvaluation`
+//! that contract. `Evidence` names a `RevisionPackId`; a `GateEvaluation`
 //! names a `DecisionId`. Nothing in those references would notice if the bytes
 //! beneath the id were replaced.
 //!
@@ -21,10 +21,10 @@
 //!
 //! # What this makes the word "exact" mean
 //!
-//! When Draft says Evidence binds an *exact* `ChangeRevisionId`, that is
+//! When Draft says Evidence binds an *exact* `RevisionPackId`, that is
 //! mechanical rather than rhetorical: the id is backed by a create-once binding
 //! verified on every read, so "exact revision" cannot degrade into "the same
-//! opaque `rev_` string". No separate `ChangeRevisionDigest` type is needed,
+//! opaque `rpk_` string". No separate `RevisionPackDigest` type is needed,
 //! because no portable contract requires that digest to travel.
 //!
 //! # The Store invariant
@@ -336,7 +336,7 @@ mod tests {
 
     fn decision(outcome: &str) -> Decision {
         Decision {
-            revision: "rev_a1".into(),
+            revision: "rpk_a1".into(),
             outcome: outcome.into(),
         }
     }
@@ -439,7 +439,7 @@ mod tests {
         store.put("dec_a1", &decision("approved")).unwrap();
         std::fs::write(
             store.payload_path("dec_a1"),
-            br#"{"outcome":"approved","revision":"rev_a1"}"#,
+            br#"{"outcome":"approved","revision":"rpk_a1"}"#,
         )
         .unwrap();
         assert_eq!(store.get("dec_a1").unwrap(), Some(decision("approved")));

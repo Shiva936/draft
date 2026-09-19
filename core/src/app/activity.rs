@@ -363,12 +363,12 @@ mod tests {
     use serde_json::json;
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    struct Change {
+    struct ChangePack {
         generation: u64,
         lifecycle: String,
     }
 
-    impl RevisionedRecord for Change {
+    impl RevisionedRecord for ChangePack {
         fn generation(&self) -> u64 {
             self.generation
         }
@@ -376,7 +376,7 @@ mod tests {
 
     struct Harness {
         _directory: tempfile::TempDir,
-        records: RevisionedRecordStore<Change>,
+        records: RevisionedRecordStore<ChangePack>,
         journals: MutationJournalStore,
         ledger: ActivityLog,
     }
@@ -392,7 +392,7 @@ mod tests {
     }
 
     impl Harness {
-        fn stores(&self) -> AuditedStores<'_, Change> {
+        fn stores(&self) -> AuditedStores<'_, ChangePack> {
             AuditedStores {
                 records: &self.records,
                 journals: &self.journals,
@@ -401,8 +401,8 @@ mod tests {
         }
     }
 
-    fn change(generation: u64, lifecycle: &str) -> Change {
-        Change {
+    fn change(generation: u64, lifecycle: &str) -> ChangePack {
+        ChangePack {
             generation,
             lifecycle: lifecycle.to_string(),
         }
@@ -411,7 +411,7 @@ mod tests {
     fn fact(event_id: &str, kind: &str) -> AuditFactEnvelope {
         AuditFactEnvelope {
             activity_event_id: event_id.to_string(),
-            payload: json!({ "kind": kind, "change": "chg_a1" }),
+            payload: json!({ "kind": kind, "change": "cpk_a1" }),
         }
     }
 
@@ -419,12 +419,12 @@ mod tests {
         harness: &Harness,
         transaction: &str,
         expected: &ExpectedRecordState,
-        replacement: &Change,
+        replacement: &ChangePack,
         fact: AuditFactEnvelope,
     ) -> DraftResult<AuditedMutation> {
         commit_audited_mutation(
             harness.stores(),
-            "chg_a1",
+            "cpk_a1",
             transaction,
             expected,
             replacement,
@@ -440,21 +440,21 @@ mod tests {
             "txn_1",
             &ExpectedRecordState::Absent,
             &change(0, "active"),
-            fact("evt_1", "ChangeCreated"),
+            fact("evt_1", "ChangePackCreated"),
         )
         .unwrap();
 
         assert_eq!(outcome.activity_event_id, "evt_1");
         assert!(outcome.recovered_earlier_event.is_none());
         assert_eq!(
-            harness.records.read_unlocked("chg_a1").unwrap().unwrap(),
+            harness.records.read_unlocked("cpk_a1").unwrap().unwrap(),
             change(0, "active")
         );
         let records = harness.ledger.read_all().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].event_id, "evt_1");
         // Nothing is left behind to block the next mutation.
-        assert!(harness.journals.load("chg_a1").unwrap().is_none());
+        assert!(harness.journals.load("cpk_a1").unwrap().is_none());
     }
 
     #[test]
@@ -467,7 +467,7 @@ mod tests {
             "txn_1",
             &ExpectedRecordState::Absent,
             &change(0, "active"),
-            fact("evt_1", "ChangeCreated"),
+            fact("evt_1", "ChangePackCreated"),
         )
         .unwrap();
 
@@ -477,7 +477,7 @@ mod tests {
             "txn_2",
             &stale,
             &change(0, "conflicting"),
-            fact("evt_2", "ChangeAbandoned"),
+            fact("evt_2", "ChangePackAbandoned"),
         )
         .is_err());
 
@@ -493,13 +493,13 @@ mod tests {
         let harness = harness();
         harness
             .records
-            .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+            .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                 let journal = MutationJournal {
                     transaction_id: "txn_1".into(),
-                    record_key: "chg_a1".into(),
+                    record_key: "cpk_a1".into(),
                     expected: (&ExpectedRecordState::Absent).into(),
                     replacement: (&ExpectedRecordState::of(&change(0, "active"))?).into(),
-                    audit_fact: fact("evt_1", "ChangeCreated"),
+                    audit_fact: fact("evt_1", "ChangePackCreated"),
                     state: MutationJournalState::Prepared,
                 };
                 harness.journals.write(&journal)?;
@@ -510,7 +510,7 @@ mod tests {
         // Nothing has been appended yet.
         assert!(harness.ledger.read_all().unwrap().is_empty());
 
-        let recovered = recover_record(harness.stores(), "chg_a1").unwrap();
+        let recovered = recover_record(harness.stores(), "cpk_a1").unwrap();
         assert_eq!(recovered.as_deref(), Some("evt_1"));
         assert_eq!(harness.ledger.read_all().unwrap().len(), 1);
     }
@@ -522,15 +522,15 @@ mod tests {
         let harness = harness();
         let journal = MutationJournal {
             transaction_id: "txn_1".into(),
-            record_key: "chg_a1".into(),
+            record_key: "cpk_a1".into(),
             expected: (&ExpectedRecordState::Absent).into(),
             replacement: (&ExpectedRecordState::of(&change(0, "active")).unwrap()).into(),
-            audit_fact: fact("evt_1", "ChangeCreated"),
+            audit_fact: fact("evt_1", "ChangePackCreated"),
             state: MutationJournalState::Prepared,
         };
         harness.journals.write(&journal).unwrap();
 
-        let recovered = recover_record(harness.stores(), "chg_a1").unwrap();
+        let recovered = recover_record(harness.stores(), "cpk_a1").unwrap();
         assert!(recovered.is_none());
         assert!(
             harness.ledger.read_all().unwrap().is_empty(),
@@ -543,13 +543,13 @@ mod tests {
         let harness = harness();
         harness
             .records
-            .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+            .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                 let journal = MutationJournal {
                     transaction_id: "txn_1".into(),
-                    record_key: "chg_a1".into(),
+                    record_key: "cpk_a1".into(),
                     expected: (&ExpectedRecordState::Absent).into(),
                     replacement: (&ExpectedRecordState::of(&change(0, "active"))?).into(),
-                    audit_fact: fact("evt_1", "ChangeCreated"),
+                    audit_fact: fact("evt_1", "ChangePackCreated"),
                     state: MutationJournalState::Prepared,
                 };
                 harness.journals.write(&journal)?;
@@ -558,7 +558,7 @@ mod tests {
             .unwrap();
 
         for round in 0..4 {
-            let recovered = recover_record(harness.stores(), "chg_a1").unwrap();
+            let recovered = recover_record(harness.stores(), "cpk_a1").unwrap();
             if round == 0 {
                 assert_eq!(recovered.as_deref(), Some("evt_1"));
             } else {
@@ -576,13 +576,13 @@ mod tests {
         let harness = harness();
         harness
             .records
-            .with_locked_record("chg_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
+            .with_locked_record("cpk_a1", DEFAULT_LOCK_TIMEOUT, |guard| {
                 let journal = MutationJournal {
                     transaction_id: "txn_1".into(),
-                    record_key: "chg_a1".into(),
+                    record_key: "cpk_a1".into(),
                     expected: (&ExpectedRecordState::Absent).into(),
                     replacement: (&ExpectedRecordState::of(&change(0, "active"))?).into(),
-                    audit_fact: fact("evt_1", "ChangeCreated"),
+                    audit_fact: fact("evt_1", "ChangePackCreated"),
                     state: MutationJournalState::Prepared,
                 };
                 harness.journals.write(&journal)?;
@@ -596,7 +596,7 @@ mod tests {
             "txn_2",
             &expected,
             &change(1, "completed"),
-            fact("evt_2", "ChangeCompleted"),
+            fact("evt_2", "ChangePackCompleted"),
         )
         .unwrap();
 
@@ -623,7 +623,7 @@ mod tests {
             "txn_1",
             &ExpectedRecordState::Absent,
             &change(0, "active"),
-            fact("evt_1", "ChangeCreated"),
+            fact("evt_1", "ChangePackCreated"),
         )
         .unwrap();
         let expected = ExpectedRecordState::of(&change(0, "active")).unwrap();
@@ -632,7 +632,7 @@ mod tests {
             "txn_2",
             &expected,
             &change(1, "completed"),
-            fact("evt_2", "ChangeCompleted"),
+            fact("evt_2", "ChangePackCompleted"),
         )
         .unwrap();
 
@@ -652,7 +652,7 @@ mod tests {
             "txn_1",
             &ExpectedRecordState::Absent,
             &change(0, "active"),
-            fact("evt_1", "ChangeCreated"),
+            fact("evt_1", "ChangePackCreated"),
         )
         .unwrap();
         assert!(lock_order::currently_held().is_empty());

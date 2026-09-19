@@ -47,9 +47,9 @@ impl ControlMatch {
     }
 }
 
-/// How the current `Change` compares to the journal.
+/// How the current `ChangePack` compares to the journal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChangeMatch {
+pub enum ChangePackMatch {
     /// Still `Active`, as the journal expected.
     ExpectedActive,
     /// Already `Completed`, as the journal planned.
@@ -67,13 +67,13 @@ pub enum PromotionResolution {
     /// Safe precisely because the control state never moved: nothing accepted
     /// anything, so discarding the attempt discards no acceptance.
     DidNotCommit,
-    /// The promotion committed but the Change is still `Active`.
+    /// The promotion committed but the ChangePack is still `Active`.
     ///
     /// Completing it is mandatory, not optional. The project has already
-    /// accepted this work into its Baseline; leaving the Change open would
+    /// accepted this work into its Baseline; leaving the ChangePack open would
     /// let it be revised and re-promoted, accepting the same work twice.
-    CompleteChangeThenFinalize,
-    /// The promotion committed and the Change is already `Completed`.
+    CompleteChangePackThenFinalize,
+    /// The promotion committed and the ChangePack is already `Completed`.
     /// Remaining finalization is idempotent.
     ContinueFinalization,
     /// A historical fact. Current mutable state says nothing about it.
@@ -102,19 +102,19 @@ pub enum PromotionResolution {
 pub fn resolve(
     journal: PromotionJournalState,
     control: ControlMatch,
-    change: ChangeMatch,
+    change: ChangePackMatch,
 ) -> PromotionResolution {
     let resolution = classify(journal, control, change);
     // Counted at the one place that classifies. Each is its own operational
-    // fact: a finalization completing after a crash, a Change completion that
+    // fact: a finalization completing after a crash, a ChangePack completion that
     // had to be finished separately, and a pair of records that no legal
     // sequence produces — which is the only one that needs a person.
     match &resolution {
         PromotionResolution::ContinueFinalization => {
             crate::support::telemetry::Counter::PromotionRecoveryFinalizations.increment();
         }
-        PromotionResolution::CompleteChangeThenFinalize => {
-            crate::support::telemetry::Counter::PromotionChangeCompletionRecoveries.increment();
+        PromotionResolution::CompleteChangePackThenFinalize => {
+            crate::support::telemetry::Counter::PromotionChangePackCompletionRecoveries.increment();
         }
         PromotionResolution::Inconsistent { .. } => {
             crate::support::telemetry::Counter::PromotionInconsistentStates.increment();
@@ -134,9 +134,9 @@ pub fn resolve(
 pub fn classify(
     journal: PromotionJournalState,
     control: ControlMatch,
-    change: ChangeMatch,
+    change: ChangePackMatch,
 ) -> PromotionResolution {
-    use ChangeMatch as C;
+    use ChangePackMatch as C;
     use ControlMatch as K;
     use PromotionJournalState as J;
     use PromotionResolution as R;
@@ -147,16 +147,17 @@ pub fn classify(
         (J::Finalized, _, _) => R::AlreadyFinalized,
 
         // Prepared and the control state never moved: the commit did not land.
-        // The Change is not consulted — nothing could have completed it.
+        // The ChangePack is not consulted — nothing could have completed it.
         (J::Prepared, K::Expected, _) => R::DidNotCommit,
 
-        // Committed, in either journal state, is decided by the Change.
+        // Committed, in either journal state, is decided by the ChangePack.
         (J::Prepared | J::Committed, K::Planned, C::ExpectedActive) => {
-            R::CompleteChangeThenFinalize
+            R::CompleteChangePackThenFinalize
         }
         (J::Prepared | J::Committed, K::Planned, C::PlannedCompleted) => R::ContinueFinalization,
         (J::Prepared | J::Committed, K::Planned, C::Neither) => R::Inconsistent {
-            detail: "the control state committed but the Change is neither the Active state the \
+            detail:
+                "the control state committed but the ChangePack is neither the Active state the \
                      promotion expected nor the Completed state it planned",
         },
 
@@ -179,15 +180,15 @@ pub fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ChangeMatch as C;
+    use ChangePackMatch as C;
     use ControlMatch as K;
     use PromotionJournalState as J;
     use PromotionResolution as R;
 
     #[test]
     fn a_prepared_promotion_whose_control_never_moved_did_not_commit() {
-        // The Change is irrelevant here: with the control state untouched
-        // nothing was accepted, so there is nothing a Change state could mean.
+        // The ChangePack is irrelevant here: with the control state untouched
+        // nothing was accepted, so there is nothing a ChangePack state could mean.
         for change in [C::ExpectedActive, C::PlannedCompleted, C::Neither] {
             assert_eq!(resolve(J::Prepared, K::Expected, change), R::DidNotCommit);
         }
@@ -195,12 +196,12 @@ mod tests {
 
     #[test]
     fn a_committed_promotion_with_an_open_change_must_finish_completing_it() {
-        // Leaving the Change Active after its work was accepted would let it be
+        // Leaving the ChangePack Active after its work was accepted would let it be
         // revised and promoted again — accepting the same work twice.
         for journal in [J::Prepared, J::Committed] {
             assert_eq!(
                 resolve(journal, K::Planned, C::ExpectedActive),
-                R::CompleteChangeThenFinalize
+                R::CompleteChangePackThenFinalize
             );
         }
     }

@@ -97,7 +97,7 @@ pub struct ActionBinding {
     pub application_session_id: String,
     pub principal: String,
     pub workspace_id: Option<String>,
-    pub change_id: Option<String>,
+    pub change_pack_id: Option<String>,
     pub action_id: String,
     /// The entity acted on, when it is not the subject itself — an extension,
     /// a catalog source, a pending authorization, a grant.
@@ -105,7 +105,7 @@ pub struct ActionBinding {
     pub workspace_revision: Option<String>,
     pub change_revision: Option<String>,
     /// The authoritative revision this capability was issued against, for
-    /// actions whose subject is not a project or Change.
+    /// actions whose subject is not a project or ChangePack.
     pub registry_revision: Option<u64>,
     /// Digest of the input contract the client was shown. An invocation
     /// carrying arguments shaped for an older contract is rejected.
@@ -281,7 +281,7 @@ mod tests {
             application_session_id: first.id.clone(),
             principal: "local".into(),
             workspace_id: None,
-            change_id: None,
+            change_pack_id: None,
             action_id: "refresh".into(),
             target: None,
             workspace_revision: None,
@@ -308,7 +308,7 @@ mod tests {
             application_session_id: app.id.clone(),
             principal: "local".into(),
             workspace_id: None,
-            change_id: None,
+            change_pack_id: None,
             action_id: "refresh".into(),
             target: None,
             workspace_revision: None,
@@ -342,7 +342,7 @@ mod tests {
             application_session_id: app.id.clone(),
             principal: "local".into(),
             workspace_id: None,
-            change_id: None,
+            change_pack_id: None,
             action_id: "refresh".into(),
             target: None,
             workspace_revision: None,

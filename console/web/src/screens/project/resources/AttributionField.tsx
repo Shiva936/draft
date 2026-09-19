@@ -49,9 +49,9 @@ export function AttributionField({
             Task · {task.name}
           </option>
         ))}
-        {(project.data?.changes ?? []).map((change) => (
-          <option key={change.change_id} value={`change:${change.change_id}`}>
-            Change · {change.name}
+        {(project.data?.change_packs ?? []).map((change) => (
+          <option key={change.change_pack_id} value={`change_pack:${change.change_pack_id}`}>
+            ChangePack · {change.name}
           </option>
         ))}
       </select>

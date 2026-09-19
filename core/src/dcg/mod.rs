@@ -8,10 +8,10 @@
 pub mod accept;
 pub mod anchor;
 pub mod baseline;
-pub mod change;
-pub mod change_projection;
+pub mod change_pack;
+pub mod change_pack_projection;
+pub mod change_pack_store;
 pub mod change_set;
-pub mod change_store;
 pub mod compose;
 pub mod decision;
 pub mod definition;
@@ -26,17 +26,19 @@ pub mod observe;
 pub mod representation;
 pub mod resource;
 pub mod review;
-pub mod revision;
+pub mod revision_pack;
 pub mod semantics_registry;
 pub mod snapshot;
 pub mod source;
 pub mod source_view;
 pub mod state;
 
-pub use change::{Change, ChangeGuard, ChangeLifecycle, ChangeStore};
-pub use change_projection::{change_lifecycle_of, revision_state_of, ReviewProgress};
+pub use change_pack::{ChangePack, ChangePackGuard, ChangePackLifecycle, ChangePackStore};
+pub use change_pack_projection::{
+    change_pack_lifecycle_of, review_progress_state_of, ReviewProgress,
+};
 pub use compose::{CurrentProviderRoutability, HistoricalBaselineComposition, NotRoutable};
-pub use definition::{ChangeDefinition, ScopeResolution};
-pub use revision::ChangeRevision;
+pub use definition::{ChangePackDefinition, ScopeResolution};
+pub use revision_pack::RevisionPack;
 pub use semantics_registry::{RegistrationOutcome, SemanticsContractRegistry};
 pub use source_view::{CanonicalSourceView, WorkspaceRevision};

@@ -8,7 +8,7 @@
 //!  5. ProviderBindingStore           provider-bindings/<pbd_>.lock
 //!  6. PublicationJournalStore        publication/journal/<pat_>.lock
 //!  7. PublicationControlStore        publication/control/<pub_>.lock
-//!  8. Per-record domain Stores       changes/<chg_>.lock, tasks/<tsk_>.lock
+//!  8. Per-record domain Stores       changes/<cpk_>.lock, tasks/<tsk_>.lock
 //!  9. Publication registry / outcome-head / resolution-head / retry-authorization
 //! 10. Activity Ledger                events/events.lock
 //! ```
@@ -67,7 +67,7 @@ pub enum LockOrder {
     ProviderBindingStore = 5,
     PublicationJournalStore = 6,
     PublicationControlStore = 7,
-    /// Per-record domain Stores: `changes/<chg_>.lock`, `tasks/<tsk_>.lock`.
+    /// Per-record domain Stores: `changes/<cpk_>.lock`, `tasks/<tsk_>.lock`.
     DomainRecordStore = 8,
     /// Publication registry, outcome heads, resolution heads and retry
     /// authorizations. Mutually exclusive with one another.
@@ -288,7 +288,7 @@ mod tests {
     #[test]
     fn the_promotion_commit_lockset_is_permitted() {
         // TrustReadFence (1) -> ProjectControlLease (2) -> control.lock (4)
-        // -> changes/<chg_>.lock (8).
+        // -> changes/<cpk_>.lock (8).
         let _fence = enter(LockOrder::TrustReadFence).unwrap();
         let _lease = enter(LockOrder::ProjectControlLease).unwrap();
         let _control = enter(LockOrder::ProjectControlStore).unwrap();

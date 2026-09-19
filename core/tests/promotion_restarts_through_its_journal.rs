@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 
-use draft_core::promotion::journal::{ChangeMatch, PromotionJournalState};
+use draft_core::promotion::journal::{ChangePackMatch, PromotionJournalState};
 use draft_core::promotion::protocol::{
     execute, require_coverage, PromotionEffects, PromotionProgress, PromotionStores,
 };
@@ -19,7 +19,7 @@ use draft_core::promotion::record::PromotionJournal;
 use draft_core::support::error::{DraftError, DraftErrorKind, DraftResult};
 use draft_dcg_contract::coverage::{CoverageDomainRef, CoverageEvidence, CoverageStatus};
 use draft_dcg_contract::ids::{
-    ActorId, ChangeId, ChangeRevisionId, PromotionId, ProviderBindingId, ReceiptId,
+    ActorId, ChangePackId, PromotionId, ProviderBindingId, ReceiptId, RevisionPackId,
 };
 use draft_dcg_contract::receipt::ReceiptSignerBinding;
 use draft_dcg_contract::{BaselineId, Digest, ProviderSemanticDefinitionDigest};
@@ -75,8 +75,8 @@ impl PromotionEffects for Recorder {
         Ok(self.control.borrow().clone())
     }
 
-    fn change_match(&self, _journal: &PromotionJournal) -> DraftResult<ChangeMatch> {
-        Ok(ChangeMatch::ExpectedActive)
+    fn change_match(&self, _journal: &PromotionJournal) -> DraftResult<ChangePackMatch> {
+        Ok(ChangePackMatch::ExpectedActive)
     }
 
     fn commit_baseline(&self, journal: &PromotionJournal) -> DraftResult<BaselineId> {
@@ -125,8 +125,8 @@ fn intent() -> PromotionJournal {
     PromotionJournal {
         prepared_at: draft_dcg_contract::value::Timestamp::from_unix_nanos(0),
         promotion: promotion(),
-        revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
-        change: ChangeId::parse("chg_000000000001").unwrap(),
+        revision_pack: RevisionPackId::parse("rpk_000000000001").unwrap(),
+        change_pack: ChangePackId::parse("cpk_000000000001").unwrap(),
         baseline: BaselineId::new(Digest::of_bytes(b"intended")),
         receipt: ReceiptId::parse("rcp_000000000001").unwrap(),
         signer: ReceiptSignerBinding::new(
@@ -297,7 +297,7 @@ fn a_control_state_matching_neither_value_is_refused_rather_than_guessed() {
 #[test]
 fn a_second_promotion_is_barred_while_an_earlier_one_owes_its_completion() {
     // The barrier. An earlier promotion committed but never completed its
-    // Change; starting a new one over the top would let the same work be
+    // ChangePack; starting a new one over the top would let the same work be
     // accepted twice.
     let directory = tempfile::tempdir().unwrap();
     let stores = stores(&directory);
@@ -305,7 +305,7 @@ fn a_second_promotion_is_barred_while_an_earlier_one_owes_its_completion() {
     let crashed = Recorder::failing_finalize(expected_control());
     assert!(execute(&stores, &intent(), &crashed).is_err());
 
-    // A different promotion, while the first is Committed and its Change is
+    // A different promotion, while the first is Committed and its ChangePack is
     // still the state the journal expected.
     let mut second = intent();
     second.promotion = PromotionId::parse("pro_000000000002").unwrap();
@@ -315,7 +315,9 @@ fn a_second_promotion_is_barred_while_an_earlier_one_owes_its_completion() {
     let blocked = Recorder::new(Digest::of_bytes(b"control-after"));
     let error = execute(&stores, &second, &blocked).unwrap_err();
     assert_eq!(error.kind, DraftErrorKind::ConflictDetected);
-    assert!(error.message.contains("Change completion did not finish"));
+    assert!(error
+        .message
+        .contains("ChangePack completion did not finish"));
     assert_eq!(
         blocked.commits(),
         0,

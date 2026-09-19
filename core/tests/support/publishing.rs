@@ -75,7 +75,7 @@ impl PublishingProject {
 
         let change = self
             .app
-            .dcg_open_change(&self.root, "work to publish", &scope)
+            .dcg_open_change_pack(&self.root, "work to publish", &scope)
             .unwrap();
         std::fs::write(self.root.join("a.txt"), "published").unwrap();
         let revision = self.app.dcg_seal(&self.root, change.id.as_str()).unwrap();

@@ -26,8 +26,7 @@
 //! So this crate owns none of: repository state, installation, trust policy,
 //! signing policy, project trust state, authorization logic, provider
 //! execution, storage, stores, guards, journals, resolution algorithms, daemon
-//! or console behaviour, lifecycle orchestration, extension package concepts or
-//! DraftPack archive concepts.
+//! or console behaviour, lifecycle orchestration or extension package concepts.
 //!
 //! # Providers: describe a route, never execute one
 //!
@@ -82,9 +81,9 @@ pub use coverage::{CoverageDomainRef, CoverageEvidence, CoverageStatus, Observat
 pub use digest::{domain_hash, Digest};
 pub use identifier::{IdentifierClass, NamespacedId, ScopedId};
 pub use ids::{
-    ActorId, BaselineIdentifier, ChangeId, ChangeRevisionId, DecisionId, EvidenceId, ExecutionId,
-    ObservationId, ObservationRunId, ProjectId, PromotionId, ProviderBindingId,
-    PublicationAttemptId, PublicationId, ReceiptId, ResourceId, TaskId,
+    ActorId, BaselineIdentifier, ChangePackId, DecisionId, EvidenceId, ExecutionId, ObservationId,
+    ObservationRunId, ProjectId, PromotionId, ProviderBindingId, PublicationAttemptId,
+    PublicationId, ReceiptId, ResourceId, RevisionPackId, TaskId,
 };
 pub use kinds::{
     AssessmentKindId, EvidenceKindId, OperationKindId, ProviderKindId, RelationTypeId,

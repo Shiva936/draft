@@ -37,7 +37,7 @@ pub enum SubjectRef {
 #[serde(rename_all = "snake_case")]
 pub enum DerivedArtifactKind {
     ClassificationBundle,
-    ChangeRepresentationBundle,
+    RevisionPackRepresentationBundle,
     ImpactIndex,
     VerificationEvidence,
     RiskAssessment,

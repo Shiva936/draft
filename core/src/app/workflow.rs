@@ -48,16 +48,18 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use draft_dcg_contract::baseline::{BaselineId, BaselineManifest};
-use draft_dcg_contract::ids::{ChangeId, ChangeRevisionId, ProjectId, PromotionId, PublicationId};
+use draft_dcg_contract::ids::{
+    ChangePackId, ProjectId, PromotionId, PublicationId, RevisionPackId,
+};
 use draft_dcg_contract::provider::ProviderProvenanceRef;
 use draft_dcg_contract::publication::{DeliverySemantics, PublicationOutcomeKind};
 
 use crate::app::authorization::AuthorizationStores;
 use crate::app::publish::{promotion_of, route_for_baseline};
 use crate::dcg::baseline::{current_baseline, BaselineRecord, BaselineStore};
-use crate::dcg::change::{Change, ChangeLifecycle, ChangeStore};
+use crate::dcg::change_pack::{ChangePack, ChangePackLifecycle, ChangePackStore};
 use crate::dcg::decision::{Decision, DecisionOutcome};
-use crate::dcg::revision::{ChangeRevision, RevisionStore};
+use crate::dcg::revision_pack::{RevisionPack, RevisionPackStore};
 use crate::evidence::assessment::Assessment;
 use crate::evidence::Evidence;
 use crate::gate::GateEvaluation;
@@ -150,14 +152,14 @@ pub struct BaselineView {
     pub route_refusal: Option<String>,
 }
 
-/// A Change and the revisions sealed against it.
+/// A ChangePack and the revisions sealed against it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChangeView {
-    pub change: ChangeId,
-    pub lifecycle: ChangeLifecycle,
+pub struct ChangePackView {
+    pub change_pack: ChangePackId,
+    pub lifecycle: ChangePackLifecycle,
     pub current_definition: draft_dcg_contract::Digest,
     /// Newest first.
-    pub revisions: Vec<ChangeRevision>,
+    pub revisions: Vec<RevisionPack>,
 }
 
 /// One gate evaluation, with the derived answers a reader needs.
@@ -203,8 +205,8 @@ impl GateView {
 /// Everything decided about one revision, and what may follow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorizationView {
-    pub change: ChangeId,
-    pub revision: ChangeRevisionId,
+    pub change_pack: ChangePackId,
+    pub revision_pack: RevisionPackId,
     pub evidence: Vec<Evidence>,
     pub assessments: Vec<Assessment>,
     /// Who examined this revision, and what they wrote.
@@ -220,7 +222,7 @@ pub struct AuthorizationView {
     /// finding, and a reviewer reading one is being shown what changed rather
     /// than being told anything passed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub representation: Option<crate::evidence::representation::ChangeRepresentationBundle>,
+    pub representation: Option<crate::evidence::representation::RevisionPackRepresentationBundle>,
     pub gates: Vec<GateView>,
     /// The decisions on record about this exact revision.
     ///
@@ -241,7 +243,7 @@ impl AuthorizationView {
                 && self
                     .gates
                     .iter()
-                    .any(|gate| gate.satisfied && gate.evaluation.covers(&decision.revision))
+                    .any(|gate| gate.satisfied && gate.evaluation.covers(&decision.revision_pack))
         })
     }
 }
@@ -250,8 +252,8 @@ impl AuthorizationView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromotionView {
     pub promotion: PromotionId,
-    pub change: ChangeId,
-    pub revision: ChangeRevisionId,
+    pub change_pack: ChangePackId,
+    pub revision_pack: RevisionPackId,
     pub state: OperationState,
     /// The Baseline it accepted. Absent until the commit point.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -288,7 +290,7 @@ pub struct ProjectWorkflowView {
     /// The authoritative project state. There is no other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<BaselineView>,
-    pub changes: Vec<ChangeView>,
+    pub change_packs: Vec<ChangePackView>,
     pub publications: Vec<PublicationView>,
     pub actions: Vec<ActionAvailability>,
     /// The one thing a person would do next, when there is an obvious one.
@@ -330,22 +332,22 @@ pub fn baseline_view(workspace: &Workspace) -> DraftResult<Option<BaselineView>>
     }))
 }
 
-/// Every Change, with the revisions sealed against it.
-pub fn change_views(workspace: &Workspace) -> DraftResult<Vec<ChangeView>> {
-    let changes = ChangeStore::new(workspace.layout.changes_dir()).list()?;
-    let revisions = RevisionStore::new(workspace.layout.revisions_dir()).list()?;
+/// Every ChangePack, with the revisions sealed against it.
+pub fn change_pack_views(workspace: &Workspace) -> DraftResult<Vec<ChangePackView>> {
+    let changes = ChangePackStore::new(workspace.layout.change_packs_dir()).list()?;
+    let revisions = RevisionPackStore::new(workspace.layout.revision_packs_dir()).list()?;
 
     Ok(changes
         .into_iter()
-        .map(|change: Change| {
-            let mut mine: Vec<ChangeRevision> = revisions
+        .map(|change: ChangePack| {
+            let mut mine: Vec<RevisionPack> = revisions
                 .iter()
-                .filter(|revision| revision.change == change.id)
+                .filter(|revision| revision.change_pack == change.id)
                 .cloned()
                 .collect();
             mine.sort_by_key(|revision| std::cmp::Reverse(revision.sealed_at.as_unix_nanos()));
-            ChangeView {
-                change: change.id,
+            ChangePackView {
+                change_pack: change.id,
                 lifecycle: change.lifecycle,
                 current_definition: change.current_definition,
                 revisions: mine,
@@ -357,8 +359,8 @@ pub fn change_views(workspace: &Workspace) -> DraftResult<Vec<ChangeView>> {
 /// Everything decided about one revision, and what may legally follow.
 pub fn authorization_view(
     workspace: &Workspace,
-    change: &ChangeId,
-    revision: &ChangeRevisionId,
+    change: &ChangePackId,
+    revision: &RevisionPackId,
 ) -> DraftResult<AuthorizationView> {
     let stores = AuthorizationStores::for_layout(&workspace.layout);
 
@@ -399,8 +401,8 @@ pub fn authorization_view(
     let promotion = promotion_view(workspace, &promotion_id)?;
 
     let mut view = AuthorizationView {
-        change: change.clone(),
-        revision: revision.clone(),
+        change_pack: change.clone(),
+        revision_pack: revision.clone(),
         evidence,
         assessments,
         reviews,
@@ -498,22 +500,23 @@ fn promotion_availability(
         ));
     }
 
-    // The Change must still be open. A completed Change's work is already in
+    // The ChangePack must still be open. A completed ChangePack's work is already in
     // an accepted Baseline, and revising it into a second one would accept the
     // same work twice.
-    let change = ChangeStore::new(workspace.layout.changes_dir()).read_unlocked(&view.change)?;
+    let change = ChangePackStore::new(workspace.layout.change_packs_dir())
+        .read_unlocked(&view.change_pack)?;
     match change {
         Some(change) if change.lifecycle.accepts_work() => Ok(ActionAvailability::yes("promote")),
         Some(change) => Ok(ActionAvailability::no(
             "promote",
             format!(
-                "change {} is {:?}, so it accepts no further work",
+                "ChangePack {} is {:?}, so it accepts no further work",
                 change.id, change.lifecycle
             ),
         )),
         None => Ok(ActionAvailability::no(
             "promote",
-            format!("change {} does not exist", view.change),
+            format!("ChangePack {} does not exist", view.change_pack),
         )),
     }
 }
@@ -560,8 +563,8 @@ pub fn promotion_view(
 
     Ok(Some(PromotionView {
         promotion: promotion.clone(),
-        change: journal.change,
-        revision: journal.revision,
+        change_pack: journal.change_pack,
+        revision_pack: journal.revision_pack,
         state,
         baseline,
         detail,
@@ -684,7 +687,7 @@ fn latest_outcome(
 /// The project's whole workflow state.
 pub fn project_view(workspace: &Workspace) -> DraftResult<ProjectWorkflowView> {
     let baseline = baseline_view(workspace)?;
-    let changes = change_views(workspace)?;
+    let changes = change_pack_views(workspace)?;
     let publications = publication_views(workspace)?;
 
     let actions = vec![
@@ -705,7 +708,7 @@ pub fn project_view(workspace: &Workspace) -> DraftResult<ProjectWorkflowView> {
             .map(|view| view.project.clone())
             .unwrap_or_else(|| workspace.workspace_id.clone()),
         baseline,
-        changes,
+        change_packs: changes,
         publications,
         actions,
         next_action,
@@ -750,7 +753,7 @@ fn publish_availability(
 /// they did not choose.
 fn next_action(
     baseline: &Option<BaselineView>,
-    changes: &[ChangeView],
+    changes: &[ChangePackView],
     publications: &[PublicationView],
 ) -> Option<String> {
     if baseline.is_none() {
@@ -764,9 +767,9 @@ fn next_action(
     }
     let open = changes
         .iter()
-        .find(|view| view.lifecycle == ChangeLifecycle::Active)?;
+        .find(|view| view.lifecycle == ChangePackLifecycle::Active)?;
     Some(match open.revisions.first() {
         Some(revision) => format!("gate {}", revision.id),
-        None => format!("seal {}", open.change),
+        None => format!("seal {}", open.change_pack),
     })
 }

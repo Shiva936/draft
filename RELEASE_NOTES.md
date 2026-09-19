@@ -6,10 +6,10 @@ This is an intentional compatibility cut. Earlier authoritative data and wire fo
 
 The release establishes:
 
-- a compile-time-closed typed contract registry with independently evolvable policies and stable unversioned IPC, Console, extension, Change, archive, registry, Activity, receipt, operation, task, evidence, and configuration names;
+- a compile-time-closed typed contract registry with independently evolvable policies and stable unversioned IPC, Console, extension, ChangePack, archive, registry, Activity, receipt, operation, task, evidence, and configuration names;
 - `/api/v1/...` Console routes with generated response envelopes and request/SSE versions derived from their registered contract metadata;
-- the `draft-ipc` protocol and `draftpack` archive identifiers;
-- the Draft Change Graph: Resources and Relations, Changes and sealed ChangeRevisions, Evidence, Assessments, Reviews, immutable Decisions and Gates, a journalled Promotion into an immutable Baseline, and a separately identified Publication lifecycle;
+- the `draft-ipc` protocol identifiers;
+- the Draft Change Graph: Resources and Relations, ChangePacks and sealed RevisionPacks, Evidence, Assessments, Reviews, immutable Decisions and Gates, a journalled Promotion into an immutable Baseline, and a separately identified Publication lifecycle;
 - one Activity Ledger — framed, hash-chained, serialized by a correctness lock, with `events/events.log` the sole authoritative file, a closed v1 vocabulary where every event names an audit-fact owner and a journal mechanism, and exactly one converter and one appender;
 - receipts that attest a Promotion, a publication outcome or an authorized resolution of one, stored create-once under a preallocated `rcp_` id and verified at three levels reported separately;
 - ledger-scoped record hashing, so a record cannot be transplanted between one project's Activity and another's;

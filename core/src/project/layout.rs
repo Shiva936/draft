@@ -42,7 +42,7 @@ impl DraftLayout {
     /// The project's own metadata.
     ///
     /// Named for what it holds. The old `workspace.json` predates the
-    /// distinction between a *project* and a Change *workspace*, and keeping it
+    /// distinction between a *project* and a ChangePack *workspace*, and keeping it
     /// would leave the two most easily confused concepts sharing a filename.
     pub fn project_json(&self) -> PathBuf {
         self.draft_dir.join("project.json")
@@ -59,8 +59,8 @@ impl DraftLayout {
     pub fn risk_toml(&self) -> PathBuf {
         self.draft_dir.join("risk.toml")
     }
-    pub fn selected_change_file(&self) -> PathBuf {
-        self.draft_dir.join("selected-change")
+    pub fn selected_change_pack_file(&self) -> PathBuf {
+        self.draft_dir.join("selected-change-pack")
     }
     pub fn policy_toml(&self) -> PathBuf {
         self.draft_dir.join("policy.toml")
@@ -119,9 +119,9 @@ impl DraftLayout {
     pub fn index_dir(&self) -> PathBuf {
         self.draft_dir.join("index")
     }
-    /// The derived summary the last collection wrote about the Change graph.
-    pub fn change_graph_index(&self) -> PathBuf {
-        self.index_dir().join("change-graph.json")
+    /// The derived summary the last collection wrote about the ChangePack graph.
+    pub fn change_pack_graph_index(&self) -> PathBuf {
+        self.index_dir().join("change-pack-graph.json")
     }
     pub fn affected_path_index(&self) -> PathBuf {
         self.index_dir().join("affected-paths.json")
@@ -215,9 +215,9 @@ impl DraftLayout {
         self.draft_dir.join("acceptance")
     }
 
-    /// The latest acceptance evaluation for one Change.
-    pub fn acceptance_evaluation_file(&self, change_id: &str) -> PathBuf {
-        self.acceptance_dir().join(format!("{change_id}.json"))
+    /// The latest acceptance evaluation for one ChangePack.
+    pub fn acceptance_evaluation_file(&self, change_pack_id: &str) -> PathBuf {
+        self.acceptance_dir().join(format!("{change_pack_id}.json"))
     }
 
     /// Which policy artifacts an acceptance context was assembled from.
@@ -259,12 +259,13 @@ impl DraftLayout {
     pub fn snapshots_dir(&self) -> PathBuf {
         self.draft_dir.join("snapshots")
     }
-    /// Mutable workspaces used while deriving immutable Change revisions.
-    pub fn change_workspaces_dir(&self) -> PathBuf {
-        self.draft_dir.join("change-workspaces")
+    /// Mutable workspaces used while deriving immutable ChangePack revisions.
+    pub fn change_pack_workspaces_dir(&self) -> PathBuf {
+        self.draft_dir.join("change-pack-workspaces")
     }
-    pub fn change_workspace_dir(&self, change_id: impl ToString) -> PathBuf {
-        self.change_workspaces_dir().join(change_id.to_string())
+    pub fn change_pack_workspace_dir(&self, change_pack_id: impl ToString) -> PathBuf {
+        self.change_pack_workspaces_dir()
+            .join(change_pack_id.to_string())
     }
     pub fn index_file(&self) -> PathBuf {
         self.indexes_dir().join("draft.sqlite")
@@ -315,7 +316,7 @@ impl DraftLayout {
     pub fn waivers_dir(&self) -> PathBuf {
         self.draft_dir.join("waivers")
     }
-    /// Mutable Workspaces: where a Change's work happens between resolving
+    /// Mutable Workspaces: where a ChangePack's work happens between resolving
     /// its scope and sealing a revision.
     pub fn workspaces_dir(&self) -> PathBuf {
         self.draft_dir.join("workspaces")
@@ -330,29 +331,37 @@ impl DraftLayout {
         self.locks_dir().join(format!("{name}.lock"))
     }
 
-    // ---- Change content -----------------------------------------------------------
+    // ---- ChangePack content -----------------------------------------------------------
 
-    pub fn changes_content_dir(&self) -> PathBuf {
-        self.draft_dir.join("changes")
+    /// Canonical Pack objects live under `packs/`, and nothing else does.
+    pub fn packs_dir(&self) -> PathBuf {
+        self.draft_dir.join("packs")
     }
-    pub fn change_content_dir(&self, change_id: impl ToString) -> PathBuf {
-        self.changes_content_dir().join(change_id.to_string())
+    /// ChangePack-owned content: manifest, content revisions, lockfile.
+    pub fn change_packs_content_dir(&self) -> PathBuf {
+        self.packs_dir().join("change")
     }
-    pub fn change_manifest(&self, change_id: &str) -> PathBuf {
-        self.change_content_dir(change_id).join("manifest.json")
+    pub fn change_pack_content_dir(&self, change_pack_id: impl ToString) -> PathBuf {
+        self.change_packs_content_dir()
+            .join(change_pack_id.to_string())
     }
-    pub fn change_lock(&self, change_id: &str) -> PathBuf {
-        self.change_content_dir(change_id).join("change.lock.json")
+    pub fn change_pack_manifest(&self, change_pack_id: &str) -> PathBuf {
+        self.change_pack_content_dir(change_pack_id)
+            .join("manifest.json")
     }
-    /// Where authoritative Change records live.
+    pub fn change_pack_lock(&self, change_pack_id: &str) -> PathBuf {
+        self.change_pack_content_dir(change_pack_id)
+            .join("change-pack.lock.json")
+    }
+    /// Where authoritative ChangePack records live.
     ///
-    /// Separate from the Change directory on purpose: a Change outlives any one
+    /// Separate from the ChangePack directory on purpose: a ChangePack outlives any one
     /// revision of the work, so its record cannot be stored inside one.
-    pub fn changes_dir(&self) -> PathBuf {
-        self.draft_dir.join("graph/changes")
+    pub fn change_packs_dir(&self) -> PathBuf {
+        self.draft_dir.join("graph/change-packs")
     }
 
-    /// Immutable Change definitions, under the §2.45 create-once binding.
+    /// Immutable ChangePack definitions, under the §2.45 create-once binding.
     pub fn definitions_dir(&self) -> PathBuf {
         self.draft_dir.join("definitions")
     }
@@ -364,9 +373,9 @@ impl DraftLayout {
         self.draft_dir.join("resolutions")
     }
 
-    /// Sealed Change revisions.
-    pub fn revisions_dir(&self) -> PathBuf {
-        self.draft_dir.join("revisions")
+    /// Sealed RevisionPack facts.
+    pub fn revision_packs_dir(&self) -> PathBuf {
+        self.packs_dir().join("revision")
     }
 
     /// The project control record and its stable lock sidecar.
@@ -484,35 +493,38 @@ impl DraftLayout {
         self.draft_dir.join("journals")
     }
 
-    pub fn change_changes(&self, change_id: &str) -> PathBuf {
-        self.change_content_dir(change_id).join("changes.json")
+    pub fn change_pack_changes(&self, change_pack_id: &str) -> PathBuf {
+        self.change_pack_content_dir(change_pack_id)
+            .join("changes.json")
     }
-    pub fn change_risk(&self, change_id: &str) -> PathBuf {
-        self.change_content_dir(change_id).join("risk.json")
+    pub fn change_pack_risk(&self, change_pack_id: &str) -> PathBuf {
+        self.change_pack_content_dir(change_pack_id)
+            .join("risk.json")
     }
-    pub fn change_verify(&self, change_id: &str) -> PathBuf {
-        self.change_content_dir(change_id).join("verify.json")
+    pub fn change_pack_verify(&self, change_pack_id: &str) -> PathBuf {
+        self.change_pack_content_dir(change_pack_id)
+            .join("verify.json")
     }
-    pub fn change_impact(&self, change_id: &str) -> PathBuf {
-        self.change_content_dir(change_id).join("impact.json")
+    pub fn change_pack_impact(&self, change_pack_id: &str) -> PathBuf {
+        self.change_pack_content_dir(change_pack_id)
+            .join("impact.json")
     }
-    pub fn change_receipts(&self, change_id: &str) -> PathBuf {
-        self.change_content_dir(change_id).join("receipts.json")
+    pub fn change_pack_receipts(&self, change_pack_id: &str) -> PathBuf {
+        self.change_pack_content_dir(change_pack_id)
+            .join("receipts.json")
     }
 
-    // ---- Checkpoints / import / export ----------------------------------
+    /// Where filesystem Publication delivers a Baseline's
+    /// manifest. An external effect written outside the graph — Publication's,
+    /// never a Pack store.
+    pub fn exports_dir(&self) -> PathBuf {
+        self.draft_dir.join("exports")
+    }
+
+    // ---- Checkpoints ----------------------------------
 
     pub fn checkpoints_dir(&self) -> PathBuf {
         self.draft_dir.join("checkpoints")
-    }
-    pub fn imports_dir(&self) -> PathBuf {
-        self.draft_dir.join("imports")
-    }
-    pub fn quarantine_dir(&self) -> PathBuf {
-        self.imports_dir().join("quarantine")
-    }
-    pub fn exports_dir(&self) -> PathBuf {
-        self.draft_dir.join("exports")
     }
 
     // ---- Impact index ------------------------------------------------------------
@@ -554,11 +566,11 @@ impl DraftLayout {
             self.transparency_dir(),
             self.baselines_dir(),
             self.observations_dir(),
-            self.changes_content_dir(),
-            self.changes_dir(),
+            self.change_packs_content_dir(),
+            self.change_packs_dir(),
             self.definitions_dir(),
             self.scope_resolutions_dir(),
-            self.revisions_dir(),
+            self.revision_packs_dir(),
             self.representations_dir(),
             self.operations_dir(),
             self.project_control_dir(),
@@ -592,8 +604,6 @@ impl DraftLayout {
             self.workspaces_dir(),
             self.recovery_dir(),
             self.backups_dir(),
-            self.imports_dir(),
-            self.quarantine_dir(),
             self.exports_dir(),
             self.impact_dir(),
             self.cache_dir(),
@@ -626,11 +636,19 @@ mod tests {
         assert!(p.create_all().unwrap().is_ok());
         assert!(p.events_dir().is_dir());
         assert!(p.transparency_dir().is_dir());
-        assert!(p.quarantine_dir().is_dir());
+        assert!(p.change_packs_content_dir().is_dir());
+        assert!(p.revision_packs_dir().is_dir());
+        // `packs/` holds exactly the two Pack members.
+        let mut members: Vec<_> = std::fs::read_dir(p.packs_dir())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        members.sort();
+        assert_eq!(members, ["change", "revision"]);
         assert!(p.impact_dir().is_dir());
         assert_eq!(
-            p.change_manifest("chg_abc"),
-            p.draft_dir().join("changes/chg_abc/manifest.json")
+            p.change_pack_manifest("cpk_abc"),
+            p.draft_dir().join("packs/change/cpk_abc/manifest.json")
         );
         assert_eq!(p.activity_log(), p.draft_dir().join("events/events.log"));
     }

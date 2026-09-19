@@ -21,7 +21,7 @@
 //! a different grant by substituting bytes, so "who allowed this?" would have
 //! an answer that could be changed after the fact.
 
-use draft_dcg_contract::ids::{ActorId, ChangeRevisionId};
+use draft_dcg_contract::ids::{ActorId, RevisionPackId};
 use draft_dcg_contract::security::SecurityFactRef;
 use draft_dcg_contract::value::Timestamp;
 use draft_dcg_contract::Digest;
@@ -37,7 +37,7 @@ use crate::support::immutable_store::ImmutableFactStore;
 pub struct GateWaiver {
     pub id: String,
     /// The exact revision this waives a condition for.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The condition being waived.
     pub condition: String,
     /// Why the exception was granted. Required: an unexplained waiver cannot
@@ -84,13 +84,8 @@ impl GateWaiver {
     /// All three must hold. In particular the revision must match exactly: an
     /// exception accepted for the work as it stood is not an exception for
     /// whatever it became.
-    pub fn is_in_force(
-        &self,
-        revision: &ChangeRevisionId,
-        condition: &str,
-        now: Timestamp,
-    ) -> bool {
-        &self.revision == revision && self.condition == condition && self.expires_at > now
+    pub fn is_in_force(&self, revision: &RevisionPackId, condition: &str, now: Timestamp) -> bool {
+        &self.revision_pack == revision && self.condition == condition && self.expires_at > now
     }
 }
 

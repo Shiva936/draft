@@ -32,7 +32,7 @@ fn global_home() {
 /// A project whose accepted Baseline holds exactly `files`.
 ///
 /// The initial Baseline is accepted over whatever the workspace holds at
-/// `init`, and a Change may only declare Resources the Baseline already has —
+/// `init`, and a ChangePack may only declare Resources the Baseline already has —
 /// so a fixture that wants to change a file has to put it there first.
 fn workspace_of(files: &[(&str, &str)]) -> tempfile::TempDir {
     global_home();
@@ -52,9 +52,9 @@ fn workspace() -> tempfile::TempDir {
     workspace_of(&[])
 }
 
-/// Every Resource the accepted Baseline holds, as a Change scope declaration.
+/// Every Resource the accepted Baseline holds, as a ChangePack scope declaration.
 ///
-/// A Change may narrow the Baseline but never exceed it, so declaring all of
+/// A ChangePack may narrow the Baseline but never exceed it, so declaring all of
 /// it is the widest scope any of these tests could legally ask for.
 fn whole_baseline(app: &App, root: &std::path::Path) -> Vec<String> {
     app.dcg_baseline(root)
@@ -91,7 +91,7 @@ fn verification_completes_and_says_plainly_that_nothing_checked_anything() {
     std::fs::write(root.join("src/auth.rs"), "pub fn validate_token() {}\n").unwrap();
 
     let change = app
-        .dcg_open_change(root, "generic-change", &whole_baseline(&app, root))
+        .dcg_open_change_pack(root, "generic-change", &whole_baseline(&app, root))
         .unwrap();
     let revision = app.dcg_seal(root, change.id.as_str()).unwrap();
     let evidence = app
@@ -150,7 +150,7 @@ fn risk_is_unassessed_rather_than_low() {
     app.checkpoint(root, "base").unwrap();
     std::fs::write(root.join("thing.dat"), "after\n").unwrap();
     let change = app
-        .dcg_open_change(root, "risky", &whole_baseline(&app, root))
+        .dcg_open_change_pack(root, "risky", &whole_baseline(&app, root))
         .unwrap();
     let revision = app.dcg_seal(root, change.id.as_str()).unwrap();
     app.dcg_verify(root, &revision.id.to_string()).unwrap();
@@ -250,7 +250,7 @@ fn observation_is_complete_and_the_control_plane_never_enters_project_state() {
     app.checkpoint(root, "base").unwrap();
 
     let scope = whole_baseline(&app, root);
-    let change = app.dcg_open_change(root, "obs", &scope).unwrap();
+    let change = app.dcg_open_change_pack(root, "obs", &scope).unwrap();
 
     // A revision proposes a change, and this workspace holds exactly what the
     // Baseline accepts. There is nothing to seal, and Draft says so rather
@@ -297,13 +297,14 @@ fn observation_is_complete_and_the_control_plane_never_enters_project_state() {
 
     // Looking again is a new historical event, not a correction of an old one:
     // the first revision reads back exactly as it was sealed.
-    let store =
-        draft_core::dcg::revision::RevisionStore::new(root.join(".draft").join("revisions"));
+    let store = draft_core::dcg::revision_pack::RevisionPackStore::new(
+        draft_core::project::layout::DraftLayout::for_root(root).revision_packs_dir(),
+    );
     assert_eq!(store.get(&before.id).unwrap().as_ref(), Some(&before));
     assert_eq!(store.get(&after.id).unwrap().as_ref(), Some(&after));
 }
 
-/// A Change may introduce a Resource the Baseline has never held.
+/// A ChangePack may introduce a Resource the Baseline has never held.
 ///
 /// Scope resolves against the accepted Baseline *and* the project as it stands,
 /// so adding a file is as ordinary a change as editing one. Resolving against
@@ -318,7 +319,7 @@ fn a_change_can_introduce_a_resource_the_baseline_never_held() {
     // The file does not exist yet, so it has no id to look up. A locator is
     // how it gets named — and the same id comes back either way.
     let change = app
-        .dcg_open_change(root, "add a module", &["src/new.rs".to_string()])
+        .dcg_open_change_pack(root, "add a module", &["src/new.rs".to_string()])
         .unwrap();
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/new.rs"), "pub fn added() {}\n").unwrap();
@@ -338,7 +339,7 @@ fn a_change_can_introduce_a_resource_the_baseline_never_held() {
 
 /// Naming a Resource by path, by locator or by id is the same declaration.
 ///
-/// Each spelling is declared under its own intent, because a Change's identity
+/// Each spelling is declared under its own intent, because a ChangePack's identity
 /// comes from its intent and its Baseline — three changes with one intent would
 /// converge whatever the scope resolved to, and prove nothing about the
 /// spelling. What must agree is the scope each one actually resolved.
@@ -358,7 +359,7 @@ fn a_scope_entry_names_the_same_resource_by_path_or_by_id() {
         ("by locator", "file:a.txt".to_string()),
         ("by id", resource_of("a.txt").to_string()),
     ] {
-        let change = app.dcg_open_change(root, intent, &[spelling]).unwrap();
+        let change = app.dcg_open_change_pack(root, intent, &[spelling]).unwrap();
         let revision = app.dcg_seal(root, change.id.as_str()).unwrap();
         assert_eq!(
             revision.touched,
@@ -368,10 +369,10 @@ fn a_scope_entry_names_the_same_resource_by_path_or_by_id() {
         sealed.push(revision);
     }
 
-    // Three separate Changes over one state: same proposal, different reasons.
+    // Three separate ChangePacks over one state: same proposal, different reasons.
     assert_eq!(sealed[0].project_state_root, sealed[1].project_state_root);
     assert_eq!(sealed[0].project_state_root, sealed[2].project_state_root);
-    assert_ne!(sealed[0].change, sealed[1].change);
+    assert_ne!(sealed[0].change_pack, sealed[1].change_pack);
 }
 
 #[test]
@@ -449,7 +450,7 @@ fn core_protects_only_its_own_control_plane() {
     // A revision over it therefore seals, and the change is tracked normally.
     app.checkpoint(root, "base").unwrap();
     let change = app
-        .dcg_open_change(root, "rotate", &whole_baseline(&app, root))
+        .dcg_open_change_pack(root, "rotate", &whole_baseline(&app, root))
         .unwrap();
     std::fs::write(root.join(".env"), "TOKEN=rotated\n").unwrap();
     let revision = app.dcg_seal(root, change.id.as_str()).unwrap();
@@ -469,7 +470,7 @@ fn sealing_a_revision_records_the_neutral_explanation_of_it() {
     app.checkpoint(root, "base").unwrap();
     std::fs::write(root.join("src/auth.rs"), "pub fn validate_token() {}\n").unwrap();
     let change = app
-        .dcg_open_change(root, "explain-me", &whole_baseline(&app, root))
+        .dcg_open_change_pack(root, "explain-me", &whole_baseline(&app, root))
         .unwrap();
     let revision = app.dcg_seal(root, change.id.as_str()).unwrap();
 
@@ -482,7 +483,7 @@ fn sealing_a_revision_records_the_neutral_explanation_of_it() {
         .expect("sealing a revision records its explanation");
 
     // It binds this exact revision, and validates against it.
-    assert_eq!(bundle.revision, revision.id);
+    assert_eq!(bundle.revision_pack, revision.id);
     bundle
         .validate_against(&revision)
         .expect("the bundle explains the revision it names");

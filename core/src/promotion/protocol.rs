@@ -18,7 +18,7 @@
 //!         ↓
 //! journal: Committed
 //!         ↓
-//! finalize           receipt, events, Change completion
+//! finalize           receipt, events, ChangePack completion
 //!         ↓
 //! journal: Finalized
 //! ```
@@ -48,7 +48,7 @@ use draft_dcg_contract::Digest;
 use crate::promotion::barrier::{enforce, BarrierOutcome};
 use crate::promotion::coverage::shortfalls;
 use crate::promotion::journal::{
-    resolve, ChangeMatch, ControlMatch, PromotionJournalState, PromotionResolution,
+    resolve, ChangePackMatch, ControlMatch, PromotionJournalState, PromotionResolution,
 };
 use crate::promotion::record::{PromotionJournal, PromotionRecord, PromotionRecordStore};
 use crate::promotion::store::PromotionJournalStore;
@@ -63,15 +63,15 @@ pub trait PromotionEffects {
     /// The digest of the project's control state as it is now.
     fn control_digest(&self) -> DraftResult<Digest>;
 
-    /// Whether the Change is still in the state the journal expected.
-    fn change_match(&self, journal: &PromotionJournal) -> DraftResult<ChangeMatch>;
+    /// Whether the ChangePack is still in the state the journal expected.
+    fn change_match(&self, journal: &PromotionJournal) -> DraftResult<ChangePackMatch>;
 
     /// Create the Baseline. **The authority point.**
     ///
     /// Called exactly once per promotion, between `Prepared` and `Committed`.
     fn commit_baseline(&self, journal: &PromotionJournal) -> DraftResult<BaselineId>;
 
-    /// Complete the Change this promotion accepted.
+    /// Complete the ChangePack this promotion accepted.
     fn complete_change(&self, journal: &PromotionJournal) -> DraftResult<()>;
 
     /// Issue the receipt and append the preallocated events. Idempotent.
@@ -179,7 +179,7 @@ pub fn execute(
     intent.validate()?;
 
     // The barrier: an earlier promotion that committed but never completed its
-    // Change still owes that work, and starting a new one over the top would
+    // ChangePack still owes that work, and starting a new one over the top would
     // let the same work be accepted twice.
     require_barrier_clear(stores, effects)?;
 
@@ -219,10 +219,10 @@ fn resume(
                 baseline: journal.baseline.clone(),
             },
         ),
-        // Committed, Change still open: completing it is mandatory. The
-        // project already accepted this work; leaving the Change open would
+        // Committed, ChangePack still open: completing it is mandatory. The
+        // project already accepted this work; leaving the ChangePack open would
         // let it be revised and promoted again.
-        PromotionResolution::CompleteChangeThenFinalize => {
+        PromotionResolution::CompleteChangePackThenFinalize => {
             effects.complete_change(journal)?;
             finalize_from_committed(stores, journal, effects)
         }
@@ -301,8 +301,8 @@ fn finish(
     effects.finalize(journal, baseline)?;
     stores.records.put(&PromotionRecord {
         promotion: journal.promotion.clone(),
-        revision: journal.revision.clone(),
-        change: journal.change.clone(),
+        revision_pack: journal.revision_pack.clone(),
+        change_pack: journal.change_pack.clone(),
         baseline: baseline.clone(),
         receipt: journal.receipt.clone(),
     })?;

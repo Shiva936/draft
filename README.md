@@ -6,7 +6,7 @@
   - assets/draft-flow.svg
   - assets/draft-cli-demo.gif
   - assets/draft-compatability-layer.png
-  - assets/draft-noise-to-verified-Changes.svg
+  - assets/draft-noise-to-verified-packs.svg
 -->
 
 <p align="center">
@@ -48,7 +48,7 @@
 
 **Draft** gives humans control over agent-scale changes.
 
-It is a local-first change-control layer: it observes a project's state, captures what changed into reviewable **Changes** with evidence, verification results, review state, approval state, durable receipts and safe rollback targets, and holds all of it behind a human approval boundary.
+It is a local-first change-control layer: it observes a project's state, captures what changed into reviewable **Packs** with evidence, verification results, review state, approval state, durable receipts and safe rollback targets, and holds all of it behind a human approval boundary.
 
 Draft is built for the workflow where humans and agents both produce work faster than anyone can review it line by line.
 
@@ -57,7 +57,7 @@ Person / Agent
       ↓
 Draft CLI + Console
       ↓
-Changes + Evidence + Events + Receipts
+ChangePacks + Evidence + Events + Receipts
       ↓
 .draft/ local store
       ↓
@@ -86,20 +86,20 @@ Draft does **not** replace Git, editors, CI, agents, or deployment tools. It giv
 
 AI agents can generate useful changes quickly, but fast generation creates a new problem: workspace noise.
 
-Draft helps you turn that noise into reviewed, accountable, rollback-safe Changes.
+Draft helps you turn that noise into reviewed, accountable, rollback-safe ChangePacks.
 
 | Problem | What Draft Adds |
 | --- | --- |
-| AI changes are hard to trust | Changes are captured as named Changes with evidence and provenance. |
-| Review happens too late | Nothing is accepted until a person decides, over one exact revision. |
-| Workspace state gets messy | Draft separates working noise from reviewed Changes. |
+| AI changes are hard to trust | Work is captured as named ChangePacks with evidence and provenance. |
+| Review happens too late | Nothing is accepted until a person decides, over one exact RevisionPack. |
+| Workspace state gets messy | Draft separates working noise from reviewed ChangePacks. |
 | Hidden state can leak into changes | `.draft/` is hard-excluded everywhere. |
-| Rollback is unclear | Recovery targets a checkpoint, a Change, or the Activity event that recorded one. |
+| Rollback is unclear | Recovery targets a checkpoint, a ChangePack, or the Activity event that recorded one. |
 | External tools are too implicit | Hooks are explicit, local, opaque, policy-checked, and receipt-backed. |
 | Teams need auditability | Events and receipts make every meaningful action explainable. |
 
 <p align="center">
-  <img src="assets/draft-noise-to-verified-Changes.svg" alt="From workspace noise to verified Changes" width="100%" />
+  <img src="assets/draft-noise-to-verified-packs.svg" alt="From workspace noise to verified Packs" width="100%" />
 </p>
 
 ## Core Principles
@@ -114,8 +114,8 @@ Draft is designed around a few strict rules:
 - **Honest about what it does not know:** a missing capability is reported as a missing capability. It never reads as a pass, a low risk, or an absence.
 - **Append-only provenance:** meaningful actions are recorded as hash-chained events.
 - **Nothing is accepted without a decision:** a Promotion is the only operation that advances what the project accepts, and it happens only on an approving Decision citing a satisfied Gate over the exact revision.
-- **Safe recovery:** checkpoints, Changes, and the Activity events that recorded them are recovery targets, and a plan names what would be removed before anything runs.
-- **Hard `.draft/` exclusion:** Draft never includes its private state in Changes, snapshots, change candidates, recovery plans, or hook candidate checks.
+- **Safe recovery:** checkpoints, ChangePacks, and the Activity events that recorded them are recovery targets, and a plan names what would be removed before anything runs.
+- **Hard `.draft/` exclusion:** Draft never includes its private state in ChangePacks, snapshots, change candidates, recovery plans, or hook candidate checks.
 
 ## Quick Start
 
@@ -144,28 +144,38 @@ draft config set user.name "Ada" --global
 draft config set user.email "ada@example.com" --global
 ```
 
-These fields never change Draft's stable actor ID, signing keys, trust, authorization, attribution, receipts, event hashes, or workspace/Change digests. If no name is configured, Draft resolves the non-persisted fallback `unknown`.
+These fields never change Draft's stable actor ID, signing keys, trust, authorization, attribution, receipts, event hashes, or workspace/ChangePack digests. If no name is configured, Draft resolves the non-persisted fallback `unknown`.
 
 Checkpoint, change the project, seal what changed, gather evidence, decide, and promote:
 
 ```bash
-draft change checkpoint "before change"
+draft pack checkpoint "before change"
 
 # Change the project however you like — by hand, by script, or by agent.
 
 draft status
-draft change new "update app" --scope src/app.rs
-draft change revision seal <chg-id>
+draft pack new "update app" --scope src/app.rs
+draft pack revision seal <cpk-id>
 
-draft change evidence run <rev-id>
-draft change assess <rev-id> --risk low
-draft change gates evaluate <rev-id>
-draft change decide <rev-id> --approve
+draft pack evidence run <rpk-id>
+draft pack assess <rpk-id> --risk low
+draft pack gates evaluate <rpk-id>
+draft pack decide <rpk-id> --approve
 
-draft promote <chg-id> <rev-id>
+draft promote <cpk-id> <rpk-id>
 draft baseline show
 draft baseline receipts
 ```
+
+Keep Draft current, or remove it (projects are never touched):
+
+```bash
+draft update --check
+draft update
+draft uninstall --dry-run
+```
+
+`draft uninstall` does not remove Draft metadata from your projects. Your `.draft/` directories are never scanned and never deleted. See [docs/guides/installation.md](docs/guides/installation.md).
 
 Developers can also build from source:
 
@@ -178,25 +188,31 @@ cargo run -p draft-cli -- init
   <img src="assets/draft-cli-demo.gif" alt="Animated terminal demo of Draft commands" width="88%" />
 </p>
 
-## The Change Flow
+## Packs
 
-Draft’s main object is a **Change**.
+Draft's primary work concept is a **Pack**.
 
-A Change is a local, reviewable unit of change. It contains the change set, evidence, verification results, review decisions, approval state, and event references needed to understand what happened.
+A **ChangePack** (`cpk_`) is a project-local governable work lineage. A **RevisionPack** (`rpk_`) is an immutable exact revision of a ChangePack.
+
+Evidence, assessments, reviews, gates and decisions bind local work to an exact RevisionPack.
+
+**Promotion is the only operation that changes accepted Draft state**, by creating a new Baseline.
+
+**Publication** is a separate, optional external effect performed from a Baseline.
 
 Typical flow:
 
 ```text
 draft init
-draft change checkpoint "before agent run"
+draft pack checkpoint "before agent run"
 a person or agent changes the project
 draft status
-draft change new "feature name" --scope …
-draft change revision seal <chg-id>
-draft change evidence run <rev-id>
-draft change gates evaluate <rev-id>
-draft change decide <rev-id> --approve
-draft promote <chg-id> <rev-id>
+draft pack new "feature name" --scope …
+draft pack revision seal <cpk-id>
+draft pack evidence run <rpk-id>
+draft pack gates evaluate <rpk-id>
+draft pack decide <rpk-id> --approve
+draft promote <cpk-id> <rpk-id>
 draft recover run <target>   # when needed
 ```
 
@@ -209,7 +225,7 @@ draft recover run <target>   # when needed
 Draft uses stable ID prefixes:
 
 ```text
-prj_<id>  project        chg_<id>  Change         rev_<id>  ChangeRevision
+prj_<id>  project        cpk_<id>  ChangePack     rpk_<id>  RevisionPack
 chk_<id>  checkpoint     evd_<id>  Evidence       asm_<id>  Assessment
 dec_<id>  Decision       bas_<id>  Baseline       pro_<id>  Promotion
 pub_<id>  Publication    pat_<id>  attempt        rcp_<id>  receipt
@@ -220,7 +236,7 @@ Recovery accepts any of these:
 
 ```bash
 draft recover run chk_<id>       # a checkpoint
-draft recover run chg_<id>       # a Change whose staging still holds a snapshot
+draft recover run cpk_<id>       # a ChangePack whose staging still holds a snapshot
 draft recover run evt_<id>       # the Activity event that recorded a checkpoint
 ```
 
@@ -230,9 +246,10 @@ The command surface is intentionally local and workspace-oriented.
 
 ```text
 init       status     inbox      doctor     maintenance
-config     daemon     project    task       change
+config     daemon     project    task       pack
 resource   activity   recover    promote    baseline
-authority  receipt    extension  console
+authority  receipt    extension  console    update
+uninstall
 ```
 
 Draft Console requires an explicit frontend mode:
@@ -242,45 +259,45 @@ draft console web [--project <workspace-id-or-path>] [--no-preselect]
 draft console tui [--project <workspace-id-or-path>] [--no-preselect]
 ```
 
-### Change Commands
+### ChangePack Commands
 
-Open a Change — what it is for, and exactly what it may touch:
+Open a ChangePack — what it is for, and exactly what it may touch:
 
 ```bash
-draft change new <intent> --scope <res-id> [<res-id> ...]
+draft pack new <intent> --scope <res-id> [<res-id> ...]
 ```
 
-The declared scope is resolved against the accepted Baseline, which may narrow it but never widen it. Re-running with the same intent converges on the Change it already opened.
+The declared scope is resolved against the accepted Baseline, which may narrow it but never widen it. Re-running with the same intent converges on the ChangePack it already opened.
 
-Seal the project's current state as a revision:
+Seal the project's current state as a RevisionPack:
 
 ```bash
-draft change revision seal <chg-id>
+draft pack revision seal <cpk-id>
 ```
 
 The state is observed, not asserted. Sealing the same state twice is the same revision, so a re-run is not a second thing to review. Sealing also records the revision's representation — the derived explanation of what it did, bound to that exact revision and derived from the same observations.
 
-Stop work on a Change by ID or name:
+Stop work on a ChangePack by ID or name:
 
 ```bash
-draft change abandon <chg-id-or-name>
-draft change reopen <chg-id-or-name>
+draft pack abandon <cpk-id-or-name>
+draft pack reopen <cpk-id-or-name>
 ```
 
-There is deliberately no delete. Abandoning says nothing about the past: every definition, revision, decision, receipt and event stays, and the Change is still listed. It says only that no further work will be done — and `reopen` takes that back.
+There is deliberately no delete. Abandoning says nothing about the past: every definition, revision, decision, receipt and event stays, and the ChangePack is still listed. It says only that no further work will be done — and `reopen` takes that back.
 
-List generated Changes:
+List generated ChangePacks:
 
 ```bash
-draft change list
+draft pack list
 ```
 
-Ask how Changes stand to each other:
+Ask how ChangePacks stand to each other:
 
 ```bash
-draft change conflicts <chg-id>
-draft change compose <chg-id> <chg-id> [...]
-draft change disperse <chg-id> <chg-id> [...]
+draft pack conflicts <cpk-id>
+draft pack compose <cpk-id> <cpk-id> [...]
+draft pack disperse <cpk-id> <cpk-id> [...]
 ```
 
 Composition holds only when every pair is independent and every member was sealed from the same Baseline. Where a pair cannot be shown separable the answer is `conflicting` or `indeterminate`, never an optimistic `independent` — composing on a guess has a merge-shaped blast radius.
@@ -288,8 +305,8 @@ Composition holds only when every pair is independent and every member was seale
 Ask what a revision reaches and what has actually been proved about it:
 
 ```bash
-draft change impact <rev-id>
-draft change coverage <rev-id>
+draft pack impact <rpk-id>
+draft pack coverage <rpk-id>
 ```
 
 Neither infers anything. An element exists because an authorized extractor said so; a Resource is covered because evidence read an observation of that exact Resource. Same directory, imported by, adjacent in the graph and named similarly are each rejected — every one of them would produce a confident "covered" for something nothing has ever verified.
@@ -357,7 +374,7 @@ Draft stores local project state under `.draft/`:
 ├─ content-addressed objects
 ├─ snapshots and checkpoints
 ├─ tasks and runs
-├─ Changes, revisions and evidence
+├─ packs/ (ChangePacks and RevisionPacks) and evidence
 ├─ gates, decisions and waivers
 ├─ baselines and promotions
 ├─ publications
@@ -371,7 +388,7 @@ Draft stores local project state under `.draft/`:
 ```text
 status
 snapshots
-Changes
+ChangePacks
 change candidates
 recovery plans
 hook candidate checks
@@ -417,7 +434,7 @@ Draft is the local review layer that can sit in front of those tools.
 
 ## Documentation
 
-Start with [docs/README.md](docs/README.md).
+Start with [docs/README.md](docs/README.md). Runnable, CI-validated walkthroughs live in [examples/](examples/README.md); a fully commented configuration is at [examples/reference/config.toml](examples/reference/config.toml).
 
 | Topic                         | Link                                                                         |
 | ----------------------------- | ---------------------------------------------------------------------------- |
@@ -448,8 +465,8 @@ Useful local loop:
 ```bash
 cargo run -p draft-cli -- init
 cargo run -p draft-cli -- status
-cargo run -p draft-cli -- change new "test change"
-cargo run -p draft-cli -- list
+cargo run -p draft-cli -- pack new "test change" --scope <res-id>
+cargo run -p draft-cli -- pack list
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, development workflow, and release expectations.
@@ -459,10 +476,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines, development 
 Draft is pre-1.0 software. The current focus is production readiness:
 
 - CLI ergonomics;
-- verified, signed, portable Changes;
+- verified, governed Packs;
 - Draft Console flows;
 - event, receipt, and transparency integrity;
-- import/export and rollback safety;
+- recovery safety and the installation lifecycle (`draft update` / `draft uninstall`);
 - documentation alignment;
 - security, performance, and release compliance.
 

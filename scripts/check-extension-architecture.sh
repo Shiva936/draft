@@ -147,8 +147,7 @@ report "core/src/extension must depend only on contracts and support:" \
 
 # --- 3. Dependency direction ------------------------------------------------
 
-for sdk_manifest in sdk/dcg-contract/Cargo.toml sdk/extension-contract/Cargo.toml \
-  sdk/draftpack-contract/Cargo.toml; do
+for sdk_manifest in sdk/dcg-contract/Cargo.toml sdk/extension-contract/Cargo.toml; do
   if [ ! -f "$root_dir/$sdk_manifest" ]; then
     echo "$sdk_manifest is missing." >&2
     failed=1
@@ -165,7 +164,7 @@ if ! python3 "$root_dir/scripts/check-sdk-contract-dependencies.py" --self-test;
 fi
 # Every SDK contract crate is checked, not just the extension one: the layering
 # only holds if the DCG contract is verified to be a leaf at the same time.
-for sdk_crate in draft-dcg-contract draft-extension-contract draft-draftpack-contract; do
+for sdk_crate in draft-dcg-contract draft-extension-contract; do
   if ! python3 "$root_dir/scripts/check-sdk-contract-dependencies.py" \
     --manifest-path "$root_dir/Cargo.toml" --contract-name "$sdk_crate"; then
     failed=1

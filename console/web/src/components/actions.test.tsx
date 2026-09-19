@@ -25,7 +25,7 @@ declare global {
 const revisions: CanonicalRevisions = {
   registry: 7,
   workspace: null,
-  change: null,
+  change_pack: null,
   policy: null,
 };
 

@@ -271,6 +271,28 @@ jobs:
         shell: bash
         run: scripts/package-release.sh "${{ needs.version.outputs.version }}" "${{ matrix.target }}" dist
 
+      # I53: the packaged binary itself reports the release-verification key
+      # set it embeds. The sidecar sits beside the archive, never inside it.
+      - name: Packaged trust set
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          target="${{ matrix.target }}"
+          name="draft-v${version}-${target}"
+          work="$(mktemp -d)"
+          case "$target" in
+            *windows*) unzip -q "dist/$name.zip" -d "$work"; exe="$work/$name/bin/draft.exe" ;;
+            *) tar -xzf "dist/$name.tar.gz" -C "$work"; exe="$work/$name/bin/draft" ;;
+          esac
+          if [ "$target" = "aarch64-unknown-linux-musl" ]; then
+            # Run the same release build through the installed cross runner.
+            cross run --release --target "$target" -p draft-cli --bin draft -- release-trust-set --json > "dist/$name.trust-set.json"
+          else
+            "$exe" release-trust-set --json > "dist/$name.trust-set.json"
+          fi
+          cat "dist/$name.trust-set.json"
+
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
@@ -294,6 +316,20 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Checkout release tooling
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Generate release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          allow_empty=""
+          [ "${{ needs.version.outputs.dry_run }}" = "true" ] && allow_empty="--allow-empty"
+          python3 source/scripts/release-manifest.py generate \
+            --version "${{ needs.version.outputs.version }}" --dist dist $allow_empty
+
       - name: Generate SHA256SUMS
         shell: bash
         run: |
@@ -315,9 +351,93 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  sign:
+    name: Sign release manifest
+    needs: [version, checksums]
+    if: needs.version.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    # The protected release environment is the only place active private keys
+    # exist; PR, fork and untrusted workflows receive none.
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release payload
+        uses: actions/download-artifact@v4
+        with:
+          name: draft-release-v${{ needs.version.outputs.version }}
+          path: dist
+
+      - name: Channel-safe retirement gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SIGNING_KEY_IDS: ${{ vars.RELEASE_SIGNING_KEY_IDS }}
+        run: python3 scripts/release-manifest.py retirement-gate --repo "${{ github.repository }}" --active-key-ids "$RELEASE_SIGNING_KEY_IDS"
+
+      - name: Sign the exact manifest bytes with every active key
+        shell: bash
+        env:
+          RELEASE_SIGNING_KEY_IDS: ${{ vars.RELEASE_SIGNING_KEY_IDS }}
+          RELEASE_SIGNING_KEY_1: ${{ secrets.RELEASE_SIGNING_KEY_1 }}
+          RELEASE_SIGNING_KEY_2: ${{ secrets.RELEASE_SIGNING_KEY_2 }}
+          RELEASE_SIGNING_KEY_3: ${{ secrets.RELEASE_SIGNING_KEY_3 }}
+          RELEASE_SIGNING_KEY_4: ${{ secrets.RELEASE_SIGNING_KEY_4 }}
+        run: |
+          set -euo pipefail
+          keys_dir="$RUNNER_TEMP/release-keys"
+          mkdir -m 700 "$keys_dir"
+          IFS=',' read -r -a expected <<< "$RELEASE_SIGNING_KEY_IDS"
+          [ "${#expected[@]}" -ge 1 ] || { echo "no active signing key ids configured" >&2; exit 1; }
+          index=0
+          for key_id in "${expected[@]}"; do
+            index=$((index + 1))
+            var="RELEASE_SIGNING_KEY_${index}"
+            pem="${!var:-}"
+            [ -n "$pem" ] || { echo "missing secret $var for $key_id" >&2; exit 1; }
+            key="$keys_dir/$index.pem"
+            ( umask 077; printf '%s\n' "$pem" > "$key" )
+            openssl pkey -in "$key" -pubout -outform DER | tail -c 32 > "$keys_dir/$index.pub"
+            derived="rk_$(sha256sum "$keys_dir/$index.pub" | cut -c1-12)"
+            if [ "$derived" != "$key_id" ]; then
+              echo "secret $var derives $derived, expected $key_id" >&2
+              exit 1
+            fi
+            signature="$(openssl pkeyutl -sign -inkey "$key" -rawin -in dist/release-manifest.json | base64 -w0)"
+            envelope="{\"schema_version\":1,\"key_id\":\"$key_id\",\"algorithm\":\"ed25519\",\"signature\":\"$signature\"}"
+            printf '%s' "$envelope" > "dist/release-manifest.$key_id.sig"
+            [ "$index" -eq 1 ] && printf '%s' "$envelope" > dist/release-manifest.sig
+          done
+
+      - name: Verify signatures and manifest consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          keys_dir="$RUNNER_TEMP/release-keys"
+          for pub in "$keys_dir"/*.pub; do
+            index="$(basename "$pub" .pub)"
+            key_id="rk_$(sha256sum "$pub" | cut -c1-12)"
+            openssl pkey -in "$keys_dir/$index.pem" -pubout -out "$keys_dir/$index.pub.pem"
+            python3 -c "import json,base64,sys; sys.stdout.buffer.write(base64.b64decode(json.load(open('dist/release-manifest.$key_id.sig'))['signature']))" > "$keys_dir/$index.sig"
+            openssl pkeyutl -verify -pubin -inkey "$keys_dir/$index.pub.pem" -rawin -in dist/release-manifest.json -sigfile "$keys_dir/$index.sig"
+          done
+          python3 scripts/release-manifest.py check --dist dist
+
+      - name: Remove key material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/release-keys"
+
+      - name: Upload signed payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-release-signed-v${{ needs.version.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
   publish:
     name: Publish GitHub Release
-    needs: [version, checksums]
+    needs: [version, sign]
     if: needs.version.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -329,7 +449,7 @@ jobs:
       - name: Download release payload
         uses: actions/download-artifact@v4
         with:
-          name: draft-release-v${{ needs.version.outputs.version }}
+          name: draft-release-signed-v${{ needs.version.outputs.version }}
           path: dist
 
       - name: Publish release

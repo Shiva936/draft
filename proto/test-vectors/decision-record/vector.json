@@ -4,7 +4,7 @@
   "notes": "an approval cites the exact grant that permitted it; a rejection needs none",
   "payload": {
     "id": "dec_0a1b2c3d4e5f",
-    "revision": "rev_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
     "outcome": { "outcome": "approved" },
     "decided_by": "act_demo",
     "decided_at": 1752278400000000000,
@@ -18,7 +18,7 @@
   },
   "invalid_payload": {
     "id": "dec_0a1b2c3d4e5f",
-    "revision": "rev_0a1b2c3d4e5f",
+    "revision_pack": "rpk_0a1b2c3d4e5f",
     "outcome": { "outcome": "maybe" },
     "decided_by": "act_demo",
     "decided_at": 1752278400000000000

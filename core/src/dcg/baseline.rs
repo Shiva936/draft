@@ -46,7 +46,7 @@
 use serde::{Deserialize, Serialize};
 
 use draft_dcg_contract::baseline::{BaselineId, BaselineManifest};
-use draft_dcg_contract::ids::{ActorId, ChangeRevisionId, ProjectId, PromotionId};
+use draft_dcg_contract::ids::{ActorId, ProjectId, PromotionId, RevisionPackId};
 use draft_dcg_contract::roots::{
     CoverageEvidenceRoot, ProjectStateRoot, ProjectStateRootBuilder, StateEvidenceRoot,
     StateEvidenceRootBuilder,
@@ -63,14 +63,14 @@ use crate::support::immutable_store::{ImmutableFactStore, StoreOutcome};
 pub enum BaselineOrigin {
     /// The project's first Baseline, with no parent.
     Initial,
-    /// Accepted by promoting an exact Change revision.
+    /// Accepted by promoting an exact ChangePack revision.
     ///
     /// Both ids are kept: the promotion says which transaction accepted it,
     /// the revision says exactly what work was accepted. Recording only the
     /// promotion would leave "what was in it?" answerable only by inference.
     Promotion {
         promotion: PromotionId,
-        change_revision: ChangeRevisionId,
+        change_revision: RevisionPackId,
     },
 }
 
@@ -478,7 +478,7 @@ mod tests {
             &child,
             BaselineOrigin::Promotion {
                 promotion: PromotionId::parse("pro_000000000001").unwrap(),
-                change_revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+                change_revision: RevisionPackId::parse("rpk_000000000001").unwrap(),
             },
         )
         .validate_against(&child)
@@ -538,7 +538,7 @@ mod tests {
                     &second,
                     BaselineOrigin::Promotion {
                         promotion: PromotionId::parse("pro_000000000001").unwrap(),
-                        change_revision: ChangeRevisionId::parse("rev_000000000001").unwrap(),
+                        change_revision: RevisionPackId::parse("rpk_000000000001").unwrap(),
                     },
                 ),
                 &composition(),

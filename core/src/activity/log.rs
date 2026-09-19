@@ -457,8 +457,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
         log.append("evt_1", &payload("ProjectCreated")).unwrap();
-        log.append("evt_2", &payload("ChangeCreated")).unwrap();
-        log.append("evt_3", &payload("ChangeCompleted")).unwrap();
+        log.append("evt_2", &payload("ChangePackCreated")).unwrap();
+        log.append("evt_3", &payload("ChangePackCompleted"))
+            .unwrap();
 
         assert_eq!(log.verify_chain().unwrap(), 3);
         let records = log.read_all().unwrap();
@@ -473,11 +474,11 @@ mod tests {
         // preallocated id is what makes the second drain a no-op.
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        let first = log.append("evt_1", &payload("ChangeCreated")).unwrap();
+        let first = log.append("evt_1", &payload("ChangePackCreated")).unwrap();
         assert!(matches!(first, AppendOutcome::Appended(_)));
 
         for _ in 0..3 {
-            let replay = log.append("evt_1", &payload("ChangeCreated")).unwrap();
+            let replay = log.append("evt_1", &payload("ChangePackCreated")).unwrap();
             assert!(matches!(replay, AppendOutcome::AlreadyPresent(_)));
             assert_eq!(replay.record(), first.record());
         }
@@ -501,9 +502,9 @@ mod tests {
         // the ledger a summary rather than a record.
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        log.append("evt_1", &payload("ChangeCreated")).unwrap();
+        log.append("evt_1", &payload("ChangePackCreated")).unwrap();
         let error = log
-            .append("evt_1", &payload("ChangeAbandoned"))
+            .append("evt_1", &payload("ChangePackAbandoned"))
             .unwrap_err();
         assert_eq!(error.kind, DraftErrorKind::OperationLogCorrupt);
         assert_eq!(log.read_all().unwrap().len(), 1, "nothing was rewritten");
@@ -550,8 +551,9 @@ mod tests {
     fn an_unfinished_final_frame_is_recovered_and_earlier_records_survive() {
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        log.append("evt_1", &payload("ChangeCreated")).unwrap();
-        log.append("evt_2", &payload("ChangeCompleted")).unwrap();
+        log.append("evt_1", &payload("ChangePackCreated")).unwrap();
+        log.append("evt_2", &payload("ChangePackCompleted"))
+            .unwrap();
 
         // Simulate a crash mid-append.
         let mut bytes = std::fs::read(log.log_path()).unwrap();
@@ -577,8 +579,9 @@ mod tests {
         // than delete history to make the file parse.
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        log.append("evt_1", &payload("ChangeCreated")).unwrap();
-        log.append("evt_2", &payload("ChangeCompleted")).unwrap();
+        log.append("evt_1", &payload("ChangePackCreated")).unwrap();
+        log.append("evt_2", &payload("ChangePackCompleted"))
+            .unwrap();
 
         let mut bytes = std::fs::read(log.log_path()).unwrap();
         let midpoint = bytes.len() - 20;
@@ -600,10 +603,10 @@ mod tests {
         // re-framed correctly around altered contents.
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        log.append("evt_1", &payload("ChangeCreated")).unwrap();
+        log.append("evt_1", &payload("ChangePackCreated")).unwrap();
 
         let mut record = log.read_all().unwrap().remove(0);
-        record.payload = payload("ChangeAbandoned");
+        record.payload = payload("ChangePackAbandoned");
         let canonical = canonical_json(&serde_json::to_value(&record).unwrap());
         std::fs::write(log.log_path(), encode_frame(canonical.as_bytes()).unwrap()).unwrap();
 
@@ -615,7 +618,7 @@ mod tests {
     fn the_index_is_derived_and_rebuilt_from_the_log() {
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        log.append("evt_1", &payload("ChangeCreated")).unwrap();
+        log.append("evt_1", &payload("ChangePackCreated")).unwrap();
         assert!(log.index_path().exists());
 
         std::fs::remove_file(log.index_path()).unwrap();
@@ -629,7 +632,7 @@ mod tests {
     fn the_authoritative_file_is_events_log() {
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        log.append("evt_1", &payload("ChangeCreated")).unwrap();
+        log.append("evt_1", &payload("ChangePackCreated")).unwrap();
         assert!(log.log_path().ends_with("events.log"));
         // retired-architecture-ok: proving the old name is absent must name it.
         assert!(!directory.path().join("events.jsonl").exists());
@@ -639,7 +642,7 @@ mod tests {
     fn a_reader_sees_records_without_being_able_to_append() {
         let directory = tempfile::tempdir().unwrap();
         let log = log(&directory);
-        log.append("evt_1", &payload("ChangeCreated")).unwrap();
+        log.append("evt_1", &payload("ChangePackCreated")).unwrap();
         let reader: &dyn ActivityReader = &log;
         assert_eq!(reader.records().unwrap().len(), 1);
     }

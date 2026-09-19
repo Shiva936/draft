@@ -5,9 +5,9 @@
   "type": "object",
   "required": [
     "schema_version",
-    "change_id",
-    "revision_id",
-    "revision_digest",
+    "change_pack_id",
+    "content_revision_id",
+    "content_revision_digest",
     "dependency_digests",
     "selection_reason",
     "duration_ms",
@@ -23,15 +23,15 @@
     "schema_version": {
       "const": 1
     },
-    "change_id": {
+    "change_pack_id": {
       "type": "string",
-      "pattern": "^chg_[A-Za-z0-9_-]+$"
+      "pattern": "^cpk_[A-Za-z0-9_-]+$"
     },
-    "revision_id": {
+    "content_revision_id": {
       "type": "string",
-      "pattern": "^rev_[A-Za-z0-9_-]+$"
+      "pattern": "^content_[A-Za-z0-9_-]+$"
     },
-    "revision_digest": {
+    "content_revision_digest": {
       "$ref": "#/$defs/digest"
     },
     "dependency_digests": {

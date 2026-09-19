@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 
-use draft_dcg_contract::ids::ChangeId;
+use draft_dcg_contract::ids::ChangePackId;
 
 use crate::app::Workspace;
 use crate::dcg::compose::{
@@ -21,35 +21,40 @@ use crate::dcg::compose::{
     DispersedRevision, PairwiseRelation, Relationship,
 };
 use crate::evidence::representation::{
-    interference, ChangeRepresentationBundle, InterferenceRelation, RepresentationStore,
+    interference, InterferenceRelation, RepresentationStore, RevisionPackRepresentationBundle,
 };
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 
-/// The newest sealed revision of a Change, as a composition member.
-pub fn member(workspace: &Workspace, change: &ChangeId) -> DraftResult<ComposedRevision> {
-    let view = crate::app::workflow::change_views(workspace)?
+/// The newest sealed revision of a ChangePack, as a composition member.
+pub fn member(workspace: &Workspace, change: &ChangePackId) -> DraftResult<ComposedRevision> {
+    let view = crate::app::workflow::change_pack_views(workspace)?
         .into_iter()
-        .find(|view| &view.change == change)
+        .find(|view| &view.change_pack == change)
         .ok_or_else(|| {
-            DraftError::new(DraftErrorKind::NotFound, format!("no Change '{change}'"))
+            DraftError::new(
+                DraftErrorKind::NotFound,
+                format!("no ChangePack '{change}'"),
+            )
         })?;
     let revision = view.revisions.first().cloned().ok_or_else(|| {
         DraftError::new(
             DraftErrorKind::NotFound,
-            format!("Change {change} has sealed no revision, so what it touches is not yet a fact"),
+            format!(
+                "ChangePack {change} has sealed no revision, so what it touches is not yet a fact"
+            ),
         )
-        .with_suggestion("Seal a revision on every Change you want to compose.")
+        .with_suggestion("Seal a revision on every ChangePack you want to compose.")
     })?;
     Ok(ComposedRevision {
-        change: change.clone(),
-        revision: revision.id.clone(),
+        change_pack: change.clone(),
+        revision_pack: revision.id.clone(),
         base_baseline: revision.base_baseline.clone(),
         touched: revision.touched.clone(),
     })
 }
 
-/// Compose the newest sealed revisions of several Changes.
-pub fn compose(workspace: &Workspace, changes: &[ChangeId]) -> DraftResult<Composition> {
+/// Compose the newest sealed revisions of several ChangePacks.
+pub fn compose(workspace: &Workspace, changes: &[ChangePackId]) -> DraftResult<Composition> {
     let members: Vec<ComposedRevision> = changes
         .iter()
         .map(|change| member(workspace, change))
@@ -60,19 +65,19 @@ pub fn compose(workspace: &Workspace, changes: &[ChangeId]) -> DraftResult<Compo
         .ok_or_else(|| {
             DraftError::new(
                 DraftErrorKind::Validation,
-                "a composition needs at least two Changes",
+                "a composition needs at least two ChangePacks",
             )
         })?;
 
     let store = RepresentationStore::new(workspace.layout.representations_dir());
-    let bundles: Vec<Option<ChangeRepresentationBundle>> = members
+    let bundles: Vec<Option<RevisionPackRepresentationBundle>> = members
         .iter()
-        .map(|member| store.get(&member.revision))
+        .map(|member| store.get(&member.revision_pack))
         .collect::<DraftResult<_>>()?;
     let bundle_of = |member: &ComposedRevision| {
         members
             .iter()
-            .position(|candidate| candidate.revision == member.revision)
+            .position(|candidate| candidate.revision_pack == member.revision_pack)
             .and_then(|index| bundles[index].as_ref())
     };
 
@@ -84,35 +89,38 @@ pub fn compose(workspace: &Workspace, changes: &[ChangeId]) -> DraftResult<Compo
 /// Take a composition apart into revisions that can move separately.
 pub fn disperse(
     workspace: &Workspace,
-    changes: &[ChangeId],
+    changes: &[ChangePackId],
 ) -> DraftResult<Vec<DispersedRevision>> {
     Ok(disperse_composition(&compose(workspace, changes)?))
 }
 
-/// Every other Change whose newest revision interferes with this one's.
-pub fn conflicts(workspace: &Workspace, change: &ChangeId) -> DraftResult<Vec<PairwiseRelation>> {
+/// Every other ChangePack whose newest revision interferes with this one's.
+pub fn conflicts(
+    workspace: &Workspace,
+    change: &ChangePackId,
+) -> DraftResult<Vec<PairwiseRelation>> {
     let subject = member(workspace, change)?;
     let store = RepresentationStore::new(workspace.layout.representations_dir());
-    let subject_bundle = store.get(&subject.revision)?;
+    let subject_bundle = store.get(&subject.revision_pack)?;
 
     let mut found = Vec::new();
-    for view in crate::app::workflow::change_views(workspace)? {
-        if &view.change == change {
+    for view in crate::app::workflow::change_pack_views(workspace)? {
+        if &view.change_pack == change {
             continue;
         }
-        // A Change with no sealed revision has touched nothing yet, so there
+        // A ChangePack with no sealed revision has touched nothing yet, so there
         // is nothing to interfere with. Reporting it as a conflict would make
-        // every open Change look like an obstacle.
+        // every open ChangePack look like an obstacle.
         let Some(revision) = view.revisions.first() else {
             continue;
         };
         let other = ComposedRevision {
-            change: view.change.clone(),
-            revision: revision.id.clone(),
+            change_pack: view.change_pack.clone(),
+            revision_pack: revision.id.clone(),
             base_baseline: revision.base_baseline.clone(),
             touched: revision.touched.clone(),
         };
-        let other_bundle = store.get(&other.revision)?;
+        let other_bundle = store.get(&other.revision_pack)?;
         let relation = relate(
             &subject,
             subject_bundle.as_ref(),
@@ -129,17 +137,17 @@ pub fn conflicts(workspace: &Workspace, change: &ChangeId) -> DraftResult<Vec<Pa
 /// How one pair stands, using representations where both sides have them.
 pub fn relate(
     left: &ComposedRevision,
-    left_bundle: Option<&ChangeRepresentationBundle>,
+    left_bundle: Option<&RevisionPackRepresentationBundle>,
     right: &ComposedRevision,
-    right_bundle: Option<&ChangeRepresentationBundle>,
+    right_bundle: Option<&RevisionPackRepresentationBundle>,
 ) -> PairwiseRelation {
     // Different starting points first: disjoint Resource sets prove nothing
     // when the two revisions were worked from different Baselines, whatever
     // the representations say about where inside a Resource each landed.
     if left.base_baseline != right.base_baseline {
         return PairwiseRelation {
-            left: left.revision.clone(),
-            right: right.revision.clone(),
+            left: left.revision_pack.clone(),
+            right: right.revision_pack.clone(),
             relation: Relationship::Indeterminate,
             detail: "sealed from different Baselines, so disjoint Resource sets prove nothing"
                 .to_string(),
@@ -154,8 +162,8 @@ pub fn relate(
         .collect();
     if findings.is_empty() {
         return PairwiseRelation {
-            left: left.revision.clone(),
-            right: right.revision.clone(),
+            left: left.revision_pack.clone(),
+            right: right.revision_pack.clone(),
             relation: Relationship::Independent,
             detail: String::new(),
             shared_resources: shared,
@@ -179,8 +187,8 @@ pub fn relate(
         .collect::<Vec<_>>()
         .join("; ");
     PairwiseRelation {
-        left: left.revision.clone(),
-        right: right.revision.clone(),
+        left: left.revision_pack.clone(),
+        right: right.revision_pack.clone(),
         relation: if indeterminate {
             Relationship::Indeterminate
         } else {

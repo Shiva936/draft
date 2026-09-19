@@ -42,7 +42,7 @@
 //! make an unreachable external system able to invalidate accepted history.
 
 use draft_dcg_contract::baseline::BaselineId;
-use draft_dcg_contract::ids::{ChangeId, ChangeRevisionId, DecisionId, PromotionId};
+use draft_dcg_contract::ids::{ChangePackId, DecisionId, PromotionId, RevisionPackId};
 
 use draft_dcg_contract::receipt::ReceiptSignerBinding;
 use draft_dcg_contract::Digest;
@@ -50,11 +50,11 @@ use draft_dcg_contract::Digest;
 use crate::app::authorization::AuthorizationStores;
 use crate::app::baseline;
 use crate::dcg::baseline::{current_baseline, BaselineOrigin};
-use crate::dcg::change::{Change, ChangeLifecycle, ChangeStore};
+use crate::dcg::change_pack::{ChangePack, ChangePackLifecycle, ChangePackStore};
 use crate::dcg::decision::Decision;
 use crate::gate::GateEvaluation;
 use crate::project::Workspace;
-use crate::promotion::journal::{ChangeMatch, PromotionJournalState};
+use crate::promotion::journal::{ChangePackMatch, PromotionJournalState};
 use crate::promotion::protocol::{execute, PromotionEffects, PromotionProgress, PromotionStores};
 use crate::promotion::record::PromotionJournal;
 use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
@@ -62,9 +62,9 @@ use crate::support::error::{DraftError, DraftErrorKind, DraftResult};
 /// What a caller asks promotion to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromotionRequest {
-    pub change: ChangeId,
+    pub change_pack: ChangePackId,
     /// The exact revision being promoted.
-    pub revision: ChangeRevisionId,
+    pub revision_pack: RevisionPackId,
     /// The approving Decision that authorizes it.
     pub decision: DecisionId,
     /// The gate that decision was made over.
@@ -130,7 +130,7 @@ pub fn promote(
     let gate = require_satisfied_gate(&stores, request)?;
     require_same_revision(&decision, &gate, request)?;
 
-    let promotion = promotion_id_for(&request.revision, request.expected_parent.as_ref())?;
+    let promotion = promotion_id_for(&request.revision_pack, request.expected_parent.as_ref())?;
     let protocol = PromotionStores::for_layout(&workspace.layout);
 
     // A promotion already in flight is resumed from its own journal, which is
@@ -144,8 +144,8 @@ pub fn promote(
     let effects = ApplicationEffects { app, workspace };
     let intent = PromotionJournal {
         promotion: promotion.clone(),
-        revision: request.revision.clone(),
-        change: request.change.clone(),
+        revision_pack: request.revision_pack.clone(),
+        change_pack: request.change_pack.clone(),
         // Filled by the commit; the journal records what the promotion will
         // accept, and the protocol replaces it with what it did accept.
         baseline: request
@@ -164,7 +164,7 @@ pub fn promote(
         // so a planned state equal to the expected one would make "did it
         // commit?" unanswerable.
         planned_control: planned_control_digest(&promotion),
-        planned_change: planned_completion_digest(workspace, &request.change)?,
+        planned_change: planned_completion_digest(workspace, &request.change_pack)?,
         state: PromotionJournalState::Prepared,
     };
 
@@ -210,22 +210,22 @@ impl PromotionEffects for ApplicationEffects<'_> {
         ))
     }
 
-    fn change_match(&self, journal: &PromotionJournal) -> DraftResult<ChangeMatch> {
+    fn change_match(&self, journal: &PromotionJournal) -> DraftResult<ChangePackMatch> {
         // Compared by whole value against what the journal planned, never by
-        // reading the lifecycle alone: recovery has to tell a Change *this*
+        // reading the lifecycle alone: recovery has to tell a ChangePack *this*
         // promotion completed from one something else completed, and only the
         // exact planned value distinguishes them.
-        let store = change_store(&self.workspace.layout);
-        let Some(current) = store.read_unlocked(&journal.change)? else {
-            return Ok(ChangeMatch::Neither);
+        let store = change_pack_store(&self.workspace.layout);
+        let Some(current) = store.read_unlocked(&journal.change_pack)? else {
+            return Ok(ChangePackMatch::Neither);
         };
         if change_digest(&current)? == journal.planned_change {
-            return Ok(ChangeMatch::PlannedCompleted);
+            return Ok(ChangePackMatch::PlannedCompleted);
         }
-        Ok(if current.lifecycle == ChangeLifecycle::Active {
-            ChangeMatch::ExpectedActive
+        Ok(if current.lifecycle == ChangePackLifecycle::Active {
+            ChangePackMatch::ExpectedActive
         } else {
-            ChangeMatch::Neither
+            ChangePackMatch::Neither
         })
     }
 
@@ -235,7 +235,7 @@ impl PromotionEffects for ApplicationEffects<'_> {
             self.workspace,
             BaselineOrigin::Promotion {
                 promotion: journal.promotion.clone(),
-                change_revision: journal.revision.clone(),
+                change_revision: journal.revision_pack.clone(),
             },
         )?;
         Ok(accepted.record.baseline_id)
@@ -243,12 +243,12 @@ impl PromotionEffects for ApplicationEffects<'_> {
 
     fn complete_change(&self, journal: &PromotionJournal) -> DraftResult<()> {
         // Mandatory once the Baseline is accepted, not optional: leaving the
-        // Change open would let the same work be revised and promoted again,
+        // ChangePack open would let the same work be revised and promoted again,
         // accepting it twice.
         //
-        // A Change that has since been abandoned is a contradiction rather
+        // A ChangePack that has since been abandoned is a contradiction rather
         // than something to force — its work is in an accepted Baseline.
-        change_store(&self.workspace.layout).complete(&journal.change)?;
+        change_pack_store(&self.workspace.layout).complete(&journal.change_pack)?;
         Ok(())
     }
 
@@ -279,8 +279,8 @@ impl PromotionEffects for ApplicationEffects<'_> {
         let actor = journal.signer.signer_identity.to_string();
         let metadata = serde_json::json!({
             "promotion": journal.promotion.to_string(),
-            "revision": journal.revision.to_string(),
-            "change": journal.change.to_string(),
+            "revision_pack_id": journal.revision_pack.to_string(),
+            "change_pack_id": journal.change_pack.to_string(),
             "baseline": baseline.to_string(),
             "receipt": journal.receipt.to_string(),
         });
@@ -299,7 +299,7 @@ impl PromotionEffects for ApplicationEffects<'_> {
                     actor.clone(),
                     journal.prepared_at,
                 )
-                .about(journal.change.to_string())
+                .about(journal.change_pack.to_string())
                 .with(metadata.clone()),
             )?;
         }
@@ -326,7 +326,7 @@ impl PromotionEffects for ApplicationEffects<'_> {
 const FINALIZATION_EVENTS: &[crate::activity::EventKind] = &[
     crate::activity::EventKind::PromotionCommitted,
     crate::activity::EventKind::BaselinePromoted,
-    crate::activity::EventKind::ChangeCompleted,
+    crate::activity::EventKind::ChangePackCompleted,
     crate::activity::EventKind::ReceiptIssued,
     crate::activity::EventKind::PromotionFinalized,
 ];
@@ -376,35 +376,35 @@ fn planned_control_digest(promotion: &PromotionId) -> Digest {
     Digest::of_bytes(format!("planned-control|{promotion}").as_bytes())
 }
 
-/// The exact Change value this promotion's completion will produce.
+/// The exact ChangePack value this promotion's completion will produce.
 ///
-/// Computed from the Change as it stands, so recovery can compare whole
+/// Computed from the ChangePack as it stands, so recovery can compare whole
 /// values rather than inspecting a lifecycle field that says nothing about
 /// *which* promotion completed it.
-fn planned_completion_digest(workspace: &Workspace, change: &ChangeId) -> DraftResult<Digest> {
-    let store = change_store(&workspace.layout);
+fn planned_completion_digest(workspace: &Workspace, change: &ChangePackId) -> DraftResult<Digest> {
+    let store = change_pack_store(&workspace.layout);
     let current = store.read_unlocked(change)?.ok_or_else(|| {
         DraftError::new(
             DraftErrorKind::NotFound,
-            format!("change '{change}' does not exist, so nothing can be promoted from it"),
+            format!("ChangePack '{change}' does not exist, so nothing can be promoted from it"),
         )
     })?;
-    // A retried promotion re-derives the same planned value: the Change it
+    // A retried promotion re-derives the same planned value: the ChangePack it
     // already completed is what it planned to complete, so the digest has to
     // match rather than the projection refusing the transition again.
-    if current.lifecycle == ChangeLifecycle::Completed {
+    if current.lifecycle == ChangePackLifecycle::Completed {
         return change_digest(&current);
     }
-    change_digest(&current.transition(ChangeLifecycle::Completed)?)
+    change_digest(&current.transition(ChangePackLifecycle::Completed)?)
 }
 
-pub(crate) fn change_digest(change: &Change) -> DraftResult<Digest> {
+pub(crate) fn change_digest(change: &ChangePack) -> DraftResult<Digest> {
     Digest::parse(crate::support::hashing::try_canonical_hash(change)?)
         .map_err(|error| DraftError::new(DraftErrorKind::CorruptData, error.to_string()))
 }
 
-pub(crate) fn change_store(layout: &crate::project::layout::DraftLayout) -> ChangeStore {
-    ChangeStore::new(layout.changes_dir())
+pub(crate) fn change_pack_store(layout: &crate::project::layout::DraftLayout) -> ChangePackStore {
+    ChangePackStore::new(layout.change_packs_dir())
 }
 
 fn require_approving_decision(
@@ -422,13 +422,13 @@ fn require_approving_decision(
     })?;
     decision.validate()?;
 
-    if !decision.covers(&request.revision) {
+    if !decision.covers(&request.revision_pack) {
         return Err(DraftError::new(
             DraftErrorKind::StaleRevision,
             format!(
                 "decision '{}' judged revision '{}' but promotion is for '{}'; a judgement does \
                  not carry across revisions",
-                decision.id, decision.revision, request.revision
+                decision.id, decision.revision_pack, request.revision_pack
             ),
         ));
     }
@@ -437,7 +437,7 @@ fn require_approving_decision(
             DraftErrorKind::ReviewRequired,
             format!(
                 "decision '{}' does not approve revision '{}', so nothing authorizes promoting it",
-                decision.id, request.revision
+                decision.id, request.revision_pack
             ),
         ));
     }
@@ -470,7 +470,7 @@ fn require_satisfied_gate(
                 "gate '{}' is not satisfied ({}), so revision '{}' may not be promoted",
                 gate.id,
                 unsatisfied.join(", "),
-                request.revision
+                request.revision_pack
             ),
         ));
     }
@@ -487,22 +487,22 @@ fn require_same_revision(
     gate: &GateEvaluation,
     request: &PromotionRequest,
 ) -> DraftResult<()> {
-    if !gate.covers(&request.revision) {
+    if !gate.covers(&request.revision_pack) {
         return Err(DraftError::new(
             DraftErrorKind::StaleRevision,
             format!(
                 "gate '{}' evaluated revision '{}' but promotion is for '{}'",
-                gate.id, gate.revision, request.revision
+                gate.id, gate.revision_pack, request.revision_pack
             ),
         ));
     }
-    if decision.revision != gate.revision {
+    if decision.revision_pack != gate.revision_pack {
         return Err(DraftError::new(
             DraftErrorKind::StaleRevision,
             format!(
                 "decision '{}' judged '{}' while gate '{}' evaluated '{}'; an authorization \
                  assembled from facts about different revisions is not an authorization",
-                decision.id, decision.revision, gate.id, gate.revision
+                decision.id, decision.revision_pack, gate.id, gate.revision_pack
             ),
         ));
     }
@@ -538,7 +538,7 @@ fn describe(baseline: Option<&BaselineId>) -> String {
 /// Derived, so retrying an interrupted promotion recomputes the same id and
 /// converges on the record it already wrote.
 pub fn promotion_id_for(
-    revision: &ChangeRevisionId,
+    revision: &RevisionPackId,
     parent: Option<&BaselineId>,
 ) -> DraftResult<PromotionId> {
     let seed =

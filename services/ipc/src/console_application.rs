@@ -75,34 +75,72 @@ pub struct ConsoleHandshakeResponse {
 pub enum ConsoleScope {
     Global,
     Project,
-    Change,
+    ChangePack,
     /// One accepted Baseline. §8.3 gives it its own scope because its views —
     /// the three roots, lineage, composition, recoverability — are about a
     /// historical node, not about the project as it stands now.
     Baseline,
 }
 
+/// What a Console view is about.
+///
+/// A tagged union, so an impossible combination — a ChangePack without a
+/// project, a Baseline id on a ChangePack subject — cannot be represented at
+/// all rather than being rejected after the fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "scope", rename_all = "SCREAMING_SNAKE_CASE")]
 #[serde(deny_unknown_fields)]
-pub struct ConsoleSubject {
-    pub scope: ConsoleScope,
-    pub workspace_id: Option<String>,
-    pub change_id: Option<String>,
-    /// Required by, and only meaningful for, the `BASELINE` scope.
-    ///
-    /// Always serialized, like the sibling ids: a subject that sometimes
-    /// carries the field and sometimes omits it is two shapes on the wire.
-    #[serde(default)]
-    pub baseline_id: Option<String>,
+pub enum ConsoleSubject {
+    /// Empty braces rather than a unit variant: serde lets an internally
+    /// tagged unit variant ignore extra fields even under `deny_unknown_fields`.
+    Global {},
+    Project {
+        workspace_id: String,
+    },
+    ChangePack {
+        workspace_id: String,
+        change_pack_id: String,
+    },
+    Baseline {
+        workspace_id: String,
+        baseline_id: String,
+    },
 }
 
 impl ConsoleSubject {
     pub fn global() -> Self {
-        Self {
-            scope: ConsoleScope::Global,
-            workspace_id: None,
-            change_id: None,
-            baseline_id: None,
+        Self::Global {}
+    }
+
+    pub fn scope(&self) -> ConsoleScope {
+        match self {
+            Self::Global {} => ConsoleScope::Global,
+            Self::Project { .. } => ConsoleScope::Project,
+            Self::ChangePack { .. } => ConsoleScope::ChangePack,
+            Self::Baseline { .. } => ConsoleScope::Baseline,
+        }
+    }
+
+    pub fn workspace_id(&self) -> Option<&str> {
+        match self {
+            Self::Global {} => None,
+            Self::Project { workspace_id }
+            | Self::ChangePack { workspace_id, .. }
+            | Self::Baseline { workspace_id, .. } => Some(workspace_id),
+        }
+    }
+
+    pub fn change_pack_id(&self) -> Option<&str> {
+        match self {
+            Self::ChangePack { change_pack_id, .. } => Some(change_pack_id),
+            _ => None,
+        }
+    }
+
+    pub fn baseline_id(&self) -> Option<&str> {
+        match self {
+            Self::Baseline { baseline_id, .. } => Some(baseline_id),
+            _ => None,
         }
     }
 }
@@ -113,7 +151,7 @@ pub struct CanonicalRevisions {
     #[ts(type = "number")]
     pub registry: u64,
     pub workspace: Option<String>,
-    pub change: Option<String>,
+    pub change_pack: Option<String>,
     pub policy: Option<String>,
 }
 
@@ -251,9 +289,9 @@ pub struct ConsoleModelRequest {
 
 /// One entry in a scope's navigation, with the views nested under it.
 ///
-/// Nested rather than flattened because §8.3 nests: `Work (Tasks | Changes)`
+/// Nested rather than flattened because §8.3 nests: `Work (Tasks | ChangePacks)`
 /// is one section with two views, and flattening it would make Tasks and
-/// Changes look like peers of Resources and Baselines. A section with no
+/// ChangePacks look like peers of Resources and Baselines. A section with no
 /// children is a leaf and renders as one row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
@@ -298,7 +336,7 @@ impl ConsoleNavigationSection {
 /// and a second list would drift — invisibly, until a section quietly stopped
 /// existing on one of them. `draftd` serves this; nobody redefines it.
 ///
-/// Nesting is real, not cosmetic. `Work` owns Tasks and Changes because they
+/// Nesting is real, not cosmetic. `Work` owns Tasks and ChangePacks because they
 /// are the two things a person does *to* a project, while Resources and
 /// Baselines are what the project *is*; promoting Tasks to the top level
 /// alongside Baselines would flatten that distinction away.
@@ -312,7 +350,7 @@ pub fn navigation_for(scope: ConsoleScope) -> Vec<ConsoleNavigationSection> {
             ConsoleNavigationSection::leaf("Extensions"),
             ConsoleNavigationSection::leaf("Settings"),
         ],
-        // §8.3: Overview | Work (Tasks | Changes) | Resources | Baselines |
+        // §8.3: Overview | Work (Tasks | Packs) | Resources | Baselines |
         // Activity | Providers | Extensions.
         //
         // Observation lives under Resources because an observation is evidence
@@ -322,7 +360,7 @@ pub fn navigation_for(scope: ConsoleScope) -> Vec<ConsoleNavigationSection> {
         // navigation a list of screens rather than a map of the model.
         ConsoleScope::Project => vec![
             ConsoleNavigationSection::leaf("Overview"),
-            ConsoleNavigationSection::parent("Work", &["Tasks", "Changes"]),
+            ConsoleNavigationSection::parent("Work", &["Tasks", "Packs"]),
             ConsoleNavigationSection::parent("Resources", &["Resources", "Observation"]),
             ConsoleNavigationSection::parent("Baselines", &["Baselines", "Publications"]),
             ConsoleNavigationSection::leaf("Activity"),
@@ -331,14 +369,15 @@ pub fn navigation_for(scope: ConsoleScope) -> Vec<ConsoleNavigationSection> {
         ],
         // §8.3: Summary | Intent | Scope | Revisions | Impact |
         // Representations | Evidence | Assessments | Review | Decisions |
-        // Gates | Promotion | Receipts | Recovery.
+        // Gates | Promotion | Receipts | Recovery. "Revisions" is the concise nav
+        // label; each one listed there is a RevisionPack.
         //
         // Each is its own view because each is its own act. The retired
         // vocabulary — a single "Submit" step, "Approvals", "Risk",
         // "Rollback" — is exactly what the Change Graph took apart: deciding
         // authorizes, promotion accepts, publication delivers, and a reader
         // who cannot tell them apart cannot tell what happened.
-        ConsoleScope::Change => vec![
+        ConsoleScope::ChangePack => vec![
             ConsoleNavigationSection::leaf("Summary"),
             ConsoleNavigationSection::leaf("Intent"),
             ConsoleNavigationSection::leaf("Scope"),
@@ -469,6 +508,28 @@ pub struct ConsoleOperationStatus {
 mod tests {
     use super::*;
 
+    /// The subject is a tagged union: a combination that names the wrong ids
+    /// for its scope does not parse.
+    #[test]
+    fn a_console_subject_cannot_mix_scopes() {
+        let parse = |json: &str| serde_json::from_str::<ConsoleSubject>(json);
+        assert_eq!(
+            parse(r#"{"scope":"CHANGE_PACK","workspace_id":"prj_a","change_pack_id":"cpk_a"}"#)
+                .unwrap()
+                .change_pack_id(),
+            Some("cpk_a")
+        );
+        for invalid in [
+            r#"{"scope":"GLOBAL","workspace_id":"prj_a"}"#,
+            r#"{"scope":"CHANGE_PACK","workspace_id":"prj_a"}"#,
+            r#"{"scope":"CHANGE_PACK","workspace_id":"prj_a","change_pack_id":"cpk_a","baseline_id":"b"}"#,
+            r#"{"scope":"BASELINE","workspace_id":"prj_a","change_pack_id":"cpk_a"}"#,
+            r#"{"scope":"CHANGE","workspace_id":"prj_a","change_pack_id":"cpk_a"}"#,
+        ] {
+            assert!(parse(invalid).is_err(), "{invalid} parsed");
+        }
+    }
+
     #[test]
     fn protocol_version_is_independent_from_transport_schema() {
         assert_eq!(ConsoleProtocolVersion::default().major, 1);
@@ -501,7 +562,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            labels(ConsoleScope::Change),
+            labels(ConsoleScope::ChangePack),
             [
                 "Summary",
                 "Intent",
@@ -543,7 +604,7 @@ mod tests {
                 .map(|section| section.children.clone())
                 .unwrap_or_default()
         };
-        assert_eq!(children("Work"), ["Tasks", "Changes"]);
+        assert_eq!(children("Work"), ["Tasks", "Packs"]);
         assert_eq!(children("Resources"), ["Resources", "Observation"]);
         assert_eq!(children("Baselines"), ["Baselines", "Publications"]);
         assert_eq!(children("Extensions"), ["Extensions", "Tools"]);
@@ -561,7 +622,7 @@ mod tests {
             "{:?}{:?}{:?}{:?}",
             navigation_for(ConsoleScope::Global),
             project,
-            navigation_for(ConsoleScope::Change),
+            navigation_for(ConsoleScope::ChangePack),
             navigation_for(ConsoleScope::Baseline),
         );
         for retired in [
@@ -570,7 +631,7 @@ mod tests {
             "Risk",
             "Rollback",
             "Verify",
-            "Pack",
+            "Changes",
             "Graph",
         ] {
             assert!(

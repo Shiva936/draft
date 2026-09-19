@@ -6,6 +6,15 @@ All notable public changes to Draft are tracked here.
 
 Draft v0.3.4 is the frozen pre-release contract cleanup. The displayed product, Cargo, npm, and CLI version remains `0.3.4`; each independently persisted or transmitted contract owns its schema policy and supports numeric `schema_version: 1` in this release.
 
+### Breaking rename to Packs, and a pre-release compatibility cut
+
+v0.3.4 was never tag-released, so this is a clean cut rather than a migration: there is none, no alias, and no compatibility reader. Earlier `.draft/` trees and wire formats are rejected.
+
+- **The work object is a Pack.** `Change` (`chg_`) is now **ChangePack** (`cpk_`), a project-local governable work lineage; `ChangeRevision` (`rev_`) is now **RevisionPack** (`rpk_`), an immutable exact revision of it. The derivation seeds are unchanged; only the family prefixes moved. `draft change …` is `draft pack …`, with the same 46 command paths. Durable names say which member they own: governance facts bind `revision_pack`, owning fields are `change_pack`, cross-layer ids are `change_pack_id` / `revision_pack_id`, IPC methods are `dcg.change_pack.*` / `dcg.revision_pack.seal`, the Console scope is `CHANGE_PACK` with a tagged `ConsoleSubject`, Activity records `ChangePackCreated` … `RevisionPackSealed`, and storage reclaims `.draft/packs/` for `packs/change/` and `packs/revision/`.
+- **Content revisions and review progress are not RevisionPacks** and say so: `ChangePackContentRevisionRecord` (`content_revision_id`, initially `content_initial`) and the descriptive `ReviewProgressState` in `review-progress.json`.
+- **The portable `.draftpack` transfer surface is removed** — `draft export`, `draft import`, the archive, its contract crate, its import quarantine and its fuzz target. Cross-project Pack transfer is deferred; nothing in this release reserves a name or format for it.
+- **`draft update` and `draft uninstall`** manage the local installation: a dedicated installation root with a receipt, signed release manifests, transactional two-binary replacement, a resumable uninstall, and a `--purge` that deletes the global store only once its new `home.json` ownership marker proves it is Draft's.
+
 ### The Console renders the model's architecture, not its own
 
 The browser and the terminal frontend used to keep their own navigation, and what they showed had drifted from what the ontology says. A single "Graph" screen held the accepted Baseline, the authorization chain and Publication at once; the daemon still served a Change scope named after retired acts — Verify, Risk, Approvals, Submit, Rollback — that nothing had offered for two releases.
